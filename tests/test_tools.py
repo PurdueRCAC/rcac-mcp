@@ -18,6 +18,62 @@ from conftest import requires_submodule
 
 
 # ---------------------------------------------------------------------------
+# Query normalization
+# ---------------------------------------------------------------------------
+
+class TestNormalizeQuery:
+
+    def test_plain_terms_become_or_prefix(self) -> None:
+        from rcac_mcp.tools.docs import _normalize_query
+        result = _normalize_query('ssh key config setup')
+        assert result == 'ssh* OR key* OR config* OR setup*'
+
+    def test_stopwords_stripped(self) -> None:
+        from rcac_mcp.tools.docs import _normalize_query
+        result = _normalize_query('how do I configure the ssh keys')
+        assert 'how' not in result.lower().split()
+        assert 'the' not in result.lower().split()
+        assert 'ssh*' in result
+        assert 'keys*' in result
+        assert 'configure*' in result
+
+    def test_explicit_or_passthrough(self) -> None:
+        from rcac_mcp.tools.docs import _normalize_query
+        query = 'conda OR anaconda'
+        assert _normalize_query(query) == query
+
+    def test_quoted_phrase_passthrough(self) -> None:
+        from rcac_mcp.tools.docs import _normalize_query
+        query = '"job array"'
+        assert _normalize_query(query) == query
+
+    def test_prefix_wildcard_passthrough(self) -> None:
+        from rcac_mcp.tools.docs import _normalize_query
+        query = 'contai*'
+        assert _normalize_query(query) == query
+
+    def test_and_passthrough(self) -> None:
+        from rcac_mcp.tools.docs import _normalize_query
+        query = 'scratch AND purge'
+        assert _normalize_query(query) == query
+
+    def test_single_term(self) -> None:
+        from rcac_mcp.tools.docs import _normalize_query
+        assert _normalize_query('conda') == 'conda*'
+
+    def test_all_stopwords_returns_original(self) -> None:
+        from rcac_mcp.tools.docs import _normalize_query
+        query = 'how do I'
+        assert _normalize_query(query) == query
+
+    def test_single_char_terms_dropped(self) -> None:
+        from rcac_mcp.tools.docs import _normalize_query
+        result = _normalize_query('R conda environment')
+        assert 'R*' not in result
+        assert 'conda*' in result
+
+
+# ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
 

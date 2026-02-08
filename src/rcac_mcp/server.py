@@ -115,9 +115,11 @@ Slurm Cluster Status:
 
 Documentation Search:
 - doc_search: Search RCAC documentation (user guides, software catalog,
-  datasets, blog posts, workshops). Supports FTS5 query syntax with
-  optional category filter. Use this to find relevant policies, guides,
-  and best practices before answering questions.
+  datasets, blog posts, workshops). Keep queries to 2-3 key terms, not
+  full sentences. Use OR for synonyms ("conda OR anaconda"), quoted
+  phrases for exact concepts ('"job array"'), and prefix wildcards
+  for variants ("contai*"). Natural-language queries are auto-normalized
+  but targeted queries produce better results.
 - doc_load: Load the full content of a documentation page by its path
   (as shown in doc_search results). Use after identifying a relevant
   document to read it in full.

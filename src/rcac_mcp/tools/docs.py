@@ -10,10 +10,11 @@ authoritative documentation before advising users.
 
 # Type annotations
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, Set
 
 # Standard libs
 import os
+import re
 
 # Internal libs
 from rcac_mcp.tools import mcp_tool
@@ -21,6 +22,46 @@ from rcac_mcp.docs.database import DocsDatabase, DEFAULT_DB_PATH
 
 # Public interface
 __all__: list[str] = []
+
+
+# FTS5 operators that indicate the caller is already using query syntax
+_FTS5_OPERATORS = re.compile(r'\bOR\b|\bAND\b|\bNOT\b|\bNEAR\b|["*]')
+
+# Common English stopwords that add noise to search queries
+_STOPWORDS: Set[str] = {
+    'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+    'of', 'with', 'by', 'from', 'is', 'it', 'as', 'be', 'was', 'are',
+    'been', 'do', 'does', 'did', 'has', 'have', 'had', 'this', 'that',
+    'these', 'those', 'i', 'my', 'me', 'we', 'our', 'you', 'your',
+    'how', 'what', 'when', 'where', 'which', 'who', 'can', 'will',
+    'about', 'into', 'than', 'then', 'some', 'just', 'also',
+}
+
+
+def _normalize_query(query: str) -> str:
+    """Normalize a natural-language query into forgiving FTS5 syntax.
+
+    If the query already contains FTS5 operators (OR, AND, NOT, NEAR,
+    quoted phrases, or prefix wildcards), it is returned as-is.
+
+    Otherwise, stopwords are stripped and the remaining terms are joined
+    with OR and given prefix wildcards so that a query like
+    "ssh key config setup" becomes ``ssh* OR key* OR config* OR setup*``.
+    This avoids the implicit-AND behavior that causes overly specific
+    queries to return zero results.
+    """
+    if _FTS5_OPERATORS.search(query):
+        return query
+
+    terms = [
+        t for t in query.split()
+        if t.lower() not in _STOPWORDS and len(t) > 1
+    ]
+
+    if not terms:
+        return query
+
+    return ' OR '.join(f'{t}*' for t in terms)
 
 
 def _get_db_path() -> str:
@@ -52,11 +93,17 @@ def doc_search(query: str, category: Optional[str] = None) -> str:
     with BM25 ranking. Use this tool to find relevant documentation before
     advising users on storage, jobs, software, or any RCAC-specific topic.
 
-    Supports FTS5 query syntax:
-    - Implicit AND: "scratch purge" matches sections containing both words
-    - Explicit OR: "conda OR anaconda" matches either
-    - Phrases: '"job submission"' matches the exact phrase
-    - Prefix: "contai*" matches container, containers, etc.
+    Search strategy — keep queries short and focused:
+    - Use 2-3 key terms, not full sentences: "scratch purge" not
+      "how does the scratch purge policy work on the cluster"
+    - Use OR for synonyms or related terms: "conda OR anaconda"
+    - Use quoted phrases for exact concepts: '"job array"'
+    - Use prefix matching for word variants: "contai*" matches
+      container, containers, containerize, etc.
+
+    Plain natural-language queries are automatically normalized (stopwords
+    removed, terms joined with OR and prefix-matched) so they still work,
+    but targeted queries will produce better-ranked results.
 
     Args:
         query: The search query string (FTS5 syntax supported).
@@ -71,15 +118,16 @@ def doc_search(query: str, category: Optional[str] = None) -> str:
         by relevance (BM25). Returns up to 20 results.
 
     Examples:
-        doc_search("scratch purge policy")
-        doc_search("conda environment", category="software")
+        doc_search("scratch purge")
+        doc_search("conda OR anaconda", category="software")
         doc_search("GPU job submission", category="userguides")
     """
     if not _db_available():
         return _NO_DB_MESSAGE
 
+    normalized = _normalize_query(query)
     with DocsDatabase(_get_db_path(), read_only=True) as db:
-        results = db.search(query, category=category, limit=20)
+        results = db.search(normalized, category=category, limit=20)
 
     if not results:
         msg = f'No documentation found matching: {query}'
