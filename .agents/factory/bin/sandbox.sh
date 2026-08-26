@@ -28,7 +28,15 @@
 # Usage:
 #   .agents/factory/bin/sandbox.sh uv run rcac-mcp --help
 #   .agents/factory/bin/sandbox.sh sh -c "uv run rcac-mcp -e local --generate-token"
-#   .agents/factory/bin/sandbox.sh uv run pytest -v -m integration
+#
+# CWD IS THE SANDBOX, NOT THE REPO. That is protection 2 working as intended, but it breaks any
+# tool that discovers the project by walking up from the working directory. `uv run` is handled
+# (UV_PROJECT below), but pytest is not: run from here it sets rootdir to the throwaway dir, never
+# loads pyproject.toml, and so silently loses --strict-markers and every registered marker. For a
+# test drive, step back into the repo explicitly — you keep the HOME, auth, and fail-closed-SSH
+# guarantees and give up only cwd containment, which pytest's own tmp_path fixture replaces:
+#
+#   .agents/factory/bin/sandbox.sh sh -c 'cd "$CLUSTER_MCP_REPO" && uv run pytest -v -m integration'
 #
 # The sandbox directory is created under $TMPDIR and removed on exit (any path).
 set -eu
@@ -58,9 +66,11 @@ export HOME XDG_CONFIG_HOME XDG_CACHE_HOME XDG_DATA_HOME UV_PROJECT UV_CACHE_DIR
 unset RCAC_SSH_HOST RCAC_USER_MAP JWT_SECRET \
       OIDC_CONFIG_URL OIDC_CLIENT_ID OIDC_CLIENT_SECRET MCP_BASE_URL
 
-# A marker a test or tool can assert on to prove it is running contained.
+# A marker a test or tool can assert on to prove it is running contained, and the way back to the
+# repo for a command that must be run from it (see the pytest note in the usage header).
 CLUSTER_MCP_SANDBOX="$sandbox"
-export CLUSTER_MCP_SANDBOX
+CLUSTER_MCP_REPO="$root"
+export CLUSTER_MCP_SANDBOX CLUSTER_MCP_REPO
 
 # Run inside the sandbox so relative writes (e.g. `sh -c "… > out.txt"`) stay
 # contained instead of escaping into the working tree, where cm-build's

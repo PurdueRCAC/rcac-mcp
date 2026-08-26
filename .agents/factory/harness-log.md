@@ -47,3 +47,43 @@ Read `origin`/`severity`/`category` from the finding in `META.md`; this ledger r
      the upstream ledger's F13 entry was filed about. Seeded as `factory-onboarding-page` in
      `ROADMAP.md` instead. `cm-harness` Step 6's staleness check on it is therefore **conditional on
      the file existing**.
+
+## 2026-08-26 — (bootstrap): Correct seven defects found by an adversarial audit of the port
+`decision=applied commit=— target=.agents/ AGENTS.md ROADMAP.md issues/`
+- **Rationale:** Not `META.md` findings either — the port was audited before landing on `main` by five
+  independent reviewers (cross-references, skill consistency, invariant truth, roadmap accuracy,
+  runnability), each finding then refuted by a separate agent. 15 candidates, 7 survived. Recorded so a
+  later run does not "helpfully" restore any of it. Every fix was re-verified by execution.
+  1. **`sandbox.sh` broke pytest** (the worst of them). `cd "$sandbox"` is correct for write
+     containment but pointed pytest's rootdir at the throwaway dir, so `pyproject.toml` never loaded and
+     the documented `sandbox.sh uv run pytest -m integration` example collected **zero** tests while
+     exiting 0 — a verify gate that is green over nothing. Added a `CLUSTER_MCP_REPO` export and
+     changed every example to `sh -c 'cd "$CLUSTER_MCP_REPO" && uv run pytest …'`, which keeps the
+     HOME/auth/fail-closed-SSH guarantees and gives up only cwd containment (pytest's `tmp_path`
+     replaces it). Propagated to AGENTS.md, invariants.md §10, templates/TECH.md, templates/REVIEW.md,
+     cm-build Step 4 and cm-harness Step 6.
+  2. **`-m unit` / `-m integration` select nothing.** The markers are registered but no test carries
+     one, so every marker-only gate reports "no tests ran" and exits 0. Caveated at each point of use
+     rather than silently tagging 81 docs tests that are about to be deleted.
+  3. **invariants.md §4 forbade what the code does.** "Never make `local` the default for a network
+     transport" contradicted rung 4 — a bare `-t http` *does* resolve to `local`, as `APP_HELP` and
+     `SECURITY.md` both say. Left as a prohibition it would have made `cm-review` auto-CRITICAL correct,
+     pre-existing behavior. Restated descriptively: this is the posture; never *widen* it.
+  4. **The `auth-modes-annotation-typo` seed told the wrong story**, and its acceptance criteria were
+     vacuous because of it. `typing.get_type_hints` does **not** raise on the malformed annotation, and
+     PEP 563 is **not** what saves it: evaluated eagerly on 3.14 it still silently yields
+     `Final[slice(...)]`. R2 as originally drafted ("assert `get_type_hints` succeeds") passes on the
+     unfixed code. Rewrote the mechanism and re-drafted R1/R2 to assert the resolved annotation's
+     *shape*, with a requirement to see the test red first. Same correction applied to the ROADMAP entry.
+  5. **`cm-release` ran four commands its `allowed-tools` did not cover** — `git config` (on every
+     load, feeding the signed-tag STOP), `git ls-files`, `git ls-remote`, `sandbox.sh`. Added all four;
+     added only the *read* forms of `git config` to `settings.json`, not `git config *`, so the
+     project-wide auto-allow cannot write config.
+  6. **AGENTS.md claimed "no container build".** `Dockerfile` + `compose.yml` + `nginx-dev.conf` are
+     tracked and documented in the README, and `compose.yml` pins the server's argv — so a CLI flag
+     change is a change to those files. Corrected to "no *published* container image" and folded them
+     into the same-commit surface.
+  7. **`cm-harness` Step 6's sandbox check was incomplete** — three checks for what are now five
+     guarantees, so an edit dropping auth-blanking or the new `CLUSTER_MCP_REPO` export would pass.
+     Expanded to five, including a fail-closed check with `RCAC_SSH_HOST` deliberately set in the
+     parent environment.

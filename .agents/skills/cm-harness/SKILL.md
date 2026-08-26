@@ -154,13 +154,21 @@ Match each applied fix to its check and run it **before** finalizing:
 - edited `bin/next_phase.py`/`set_phase.py`/`_fsm.py` → `uv run python
   .agents/factory/bin/next_phase.py spec/{any-slug}/TECH.md` must still exit 0. With no spec yet,
   validate against a scratch copy of `.agents/factory/templates/TECH.md` instead.
-- edited `bin/sandbox.sh` → re-prove **all three** of its guarantees, because each is load-bearing and
-  a plausible edit can silently drop one:
-  `.agents/factory/bin/sandbox.sh sh -c 'test "$HOME" = "$CLUSTER_MCP_SANDBOX" && echo HOME-ok'`;
-  `.agents/factory/bin/sandbox.sh uv run rcac-mcp` must exit non-zero complaining that an SSH host is
-  required (fail-closed); and the printed `$CLUSTER_MCP_SANDBOX` must not exist after the run
-  (cleanup). A sandbox that no longer fails closed is worse than none, because every verify command in
-  the factory trusts it.
+- edited `bin/sandbox.sh` → re-prove **every** guarantee, because each is load-bearing and a plausible
+  edit silently drops one. A sandbox that no longer fails closed is worse than none, since every
+  verify command in the factory trusts it. Run all five:
+  1. throwaway HOME —
+     `sandbox.sh sh -c 'test "$HOME" = "$CLUSTER_MCP_SANDBOX" && echo HOME-ok'`
+  2. **fail-closed SSH** (the one that matters most) —
+     `sandbox.sh uv run rcac-mcp` must exit non-zero complaining an SSH host is required, *and* it
+     must still do so when the parent environment sets one:
+     `RCAC_SSH_HOST=example.invalid sandbox.sh uv run rcac-mcp`
+  3. blanked auth env —
+     `JWT_SECRET=x sandbox.sh sh -c 'test -z "${JWT_SECRET:-}" && echo AUTH-blank-ok'`
+  4. the way back to the repo, which test drives depend on —
+     `sandbox.sh sh -c 'cd "$CLUSTER_MCP_REPO" && uv run pytest -q'` must collect the real suite, not
+     zero tests
+  5. cleanup — the printed `$CLUSTER_MCP_SANDBOX` must not exist after the run.
 - edited a template with YAML frontmatter (`TECH.md`) → validate with `next_phase.py`; `META.md`
   template → re-run `meta_status.py` (0 findings).
 - edited a `SKILL.md`/doc → re-read it for internal consistency (step numbering, allowed-tools vs the

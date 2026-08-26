@@ -76,12 +76,20 @@ uv run rcac-mcp --help                   # the CLI
 uv run rcac-mcp -e local                 # run locally (development only)
 
 uv run pytest -v                         # full suite
-uv run pytest -v -m unit                 # marker: unit | integration (strict-markers)
 uv run pytest -v -k "pattern"            # by name
+uv run pytest -v -m unit                 # marker: unit | integration (--strict-markers)
+                                         #   NOTE: selects NOTHING today — the markers are
+                                         #   registered but no test carries one yet. See the
+                                         #   restore-test-coverage seed in ROADMAP.md.
 
 # Drive the CLI safely: throwaway HOME, blank auth env, unreachable cluster.
 .agents/factory/bin/sandbox.sh uv run rcac-mcp --help
 .agents/factory/bin/sandbox.sh sh -c "uv run rcac-mcp -e local --generate-token"
+
+# A test drive must step back into the repo: the sandbox cd's out of it, and pytest would
+# otherwise set rootdir to the throwaway dir and never load pyproject.toml (losing
+# --strict-markers and every registered marker). HOME/auth/SSH isolation is unaffected.
+.agents/factory/bin/sandbox.sh sh -c 'cd "$CLUSTER_MCP_REPO" && uv run pytest -v -m integration'
 ```
 
 **Supported Python is 3.14+** (`requires-python = ">=3.14"`). Do not reintroduce compatibility shims
@@ -319,8 +327,11 @@ import has no effect.
 ## Testing
 
 - `uv run pytest`. Only **`@mark.unit`** and **`@mark.integration`** are real markers under
-  `--strict-markers` — tag every new test.
-- Integration tests drive the installed CLI and must run under `.agents/factory/bin/sandbox.sh`.
+  `--strict-markers` — tag every new test. **No existing test carries one**, so `-m unit` and
+  `-m integration` currently deselect all 81 and report "no tests ran"; the rule is forward-looking
+  until the `restore-test-coverage` cycle lands.
+- Integration tests drive the installed CLI and must run under `.agents/factory/bin/sandbox.sh`,
+  stepping back into the repo first (`cd "$CLUSTER_MCP_REPO"`) so pytest finds `pyproject.toml`.
 - `tests/conftest.py` currently provides only docs-index fixtures, and **every test in the suite
   today is a docs test** — removing the docs subsystem removes the whole suite. Rebuilding coverage
   for the executor/middleware/tool core is a tracked seed, not an optional nicety.
@@ -339,9 +350,13 @@ import has no effect.
 - **The sdist must not ship `.agents/`, `spec/`, `issues/`, `.security/`, or `tests/fixtures/`.**
   `[tool.hatch.build.targets.sdist]` excludes them and `/cm-release`'s gate re-checks the tarball — a
   `.security/` path in a published artifact would publish an inventory of unremediated weaknesses.
-- There is **no CI, no publish workflow, and no container build** yet, and the project is not on
-  PyPI — users install from `git+https://github.com/purduercac/rcac-mcp`. `/cm-release` cuts a tag
-  and a GitHub release and says so plainly. Wiring CI is a tracked seed.
+- There is **no CI, no publish workflow, and no published container image**, and the project is not
+  on PyPI — users install from `git+https://github.com/purduercac/rcac-mcp`. `/cm-release` cuts a
+  tag and a GitHub release and says so plainly. Wiring CI is a tracked seed.
+- A **container build does exist locally**: `Dockerfile` + `compose.yml` (+ `nginx-dev.conf` for the
+  TLS dev proxy), documented in `README.md` § *Docker Compose with TLS*. `compose.yml` pins the
+  server's argv (`-t http -H 0.0.0.0 -p 8000 -a jwt`), so a change to a CLI flag name or default is
+  a change to those files too — same same-commit rule as `SERVER_INSTRUCTIONS` and the README.
 
 ## High-risk files & footguns (quick reference)
 

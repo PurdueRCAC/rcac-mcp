@@ -71,6 +71,12 @@ Parse `$ARGUMENTS` case-insensitively; if ambiguous, STOP and ask.
   the registry, an expected error message and exit status, a file written inside the sandbox); a run
   that "completed" but produced the wrong behavior is a FAIL. A red gate is a STOP condition — do not
   mark the phase done or advance state.
+  **Two ways a gate goes green over nothing, both live in this repo today.** A `pytest` run *inside*
+  the sandbox must `cd "$CLUSTER_MCP_REPO"` first, or it roots itself in the throwaway dir, never
+  loads `pyproject.toml`, and collects zero tests. And **no test carries `@mark.unit` or
+  `@mark.integration` yet**, so `pytest -m integration` reports "no tests ran" and exits 0. If a
+  verify command's output does not name a nonzero count of things that actually ran, it did not
+  verify anything.
 - **Amend `TECH.md` freely; GOAL is locked.** When reality diverges from the plan (a phase is wrong,
   needs splitting, or a new phase is required), rewrite `TECH.md` — regenerate frontmatter with
   `set_phase.py`, edit phase bodies as needed — and **note the amendment in the commit body**. But if

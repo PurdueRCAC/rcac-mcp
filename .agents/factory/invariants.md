@@ -81,8 +81,12 @@ what, where. The current order is:
 4. `auth == 'none'` → `local`;
 5. otherwise → `delegate`.
 
-- **`local` mode executes as the server process owner with no authentication.** It is development-only
-  and `SECURITY.md` says so; never make it the default for a network transport.
+- **`local` mode executes as the server process owner with no authentication**, and — read rung 4
+  carefully — it **is** what a bare `rcac-mcp -t http` or `-t sse` resolves to today, because
+  `DEFAULT_AUTH` is `'none'` and rung 3 only preempts when an SSH host is configured. That is the
+  documented out-of-the-box posture (`APP_HELP`: "default for http with auth=none"; `SECURITY.md`
+  § *Mode 2*), not a defect to report. The invariant is: **never widen it.** Do not make `local`
+  reachable when authentication *is* configured, and do not add a rung that reaches it earlier.
 - **`delegate` mode requires authentication.** `AuthExecutorMiddleware` is only installed for
   `exec_mode == 'delegate'`; the other modes install `SharedExecutorMiddleware`. Never wire delegate
   behavior into the shared path.
@@ -165,11 +169,14 @@ what, where. The current order is:
   new CLI flag is an `interface.add_argument` on `MCPServerApp` plus its entry in `APP_USAGE` /
   `APP_HELP`, in the same commit.
 - **Tests: only `@mark.unit` and `@mark.integration` are real markers** under `--strict-markers`. Tag
-  every new test. Integration tests drive the installed CLI and must run under
-  `.agents/factory/bin/sandbox.sh`.
+  every new test. **No existing test carries a marker**, so `-m unit`/`-m integration` deselect
+  everything today — do not write a `verify:` gate whose only assertion is a marker selection, or it
+  passes green over zero tests. (Tracked: the `restore-test-coverage` seed.)
 - **A CLI drive never touches the developer's real home, config, or a real cluster.** Wrap it in
   `.agents/factory/bin/sandbox.sh`, which unsets `RCAC_SSH_HOST` so the default stdio→ssh path fails
-  closed instead of connecting to production.
+  closed instead of connecting to production. The sandbox `cd`s out of the repo, so a **pytest** drive
+  must step back in — `sandbox.sh sh -c 'cd "$CLUSTER_MCP_REPO" && uv run pytest …'` — or pytest roots
+  itself in the throwaway dir, never reads `pyproject.toml`, and silently loses `--strict-markers`.
 - **Comments are declarative statements of the invariant or the *why*** — capitalized sentences, not
   lowercase fragments, and **never** a feature-scoped spec id (`R#`, `P#`): those restart per feature
   and collide across branches. Referencing stable things (a real symbol, a documented invariant, an

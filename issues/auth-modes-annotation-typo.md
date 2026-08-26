@@ -19,21 +19,31 @@ Note the `:` before the final `]`. Inside a subscript that is a **slice expressi
 annotation is `Final[slice(Dict[str, Callable[[], AuthProvider]], None)]` rather than the intended
 `Final[Dict[str, Callable[[], AuthProvider]]]`.
 
-It parses, and it never raises, purely because `from __future__ import annotations` (line 8) makes
-module-level variable annotations strings that are never evaluated. Verified:
+It parses, it never raises, and — this is the part that matters — **evaluating it does not raise
+either.** It silently resolves to a `Final` parameterized by a `slice` object:
 
 ```
-$ uv run python -c "import ast; ast.parse(open('src/rcac_mcp/auth.py').read()); print('parses OK')"
-parses OK
-$ uv run python -c "import rcac_mcp.auth as a; print(a.__annotations__['AUTH_MODES'])"
-Final[Dict[str, Callable[[], AuthProvider]]:]
+$ uv run python -c "import typing, rcac_mcp.auth as a; \
+    h = typing.get_type_hints(a)['AUTH_MODES']; print(h); \
+    print('arg[0] is a slice:', isinstance(typing.get_args(h)[0], slice))"
+typing.Final[slice(typing.Dict[str, typing.Callable[[], ...AuthProvider]], None, None)]
+arg[0] is a slice: True
 ```
 
-So the stored annotation is literally that string. Anything that evaluates it fails: `typing.get_type_hints`,
-a runtime-validating framework introspecting the module, a documentation generator, a type checker
-run for the first time — or a future Python that changes how deferred annotations are materialized.
-That it is latent rather than live is luck, and the module it is latent in is the one that decides
-whether a request is authenticated at all.
+Two intuitions to discard, both verified false on Python 3.14.2 — the only version this project
+supports:
+
+- **`typing.get_type_hints` does not fail on it.** It succeeds and hands back the nonsense type.
+- **`from __future__ import annotations` (line 8) is not what saves it.** The same expression
+  evaluated eagerly, with no deferral at all, also yields `Final[slice(...)]` without complaint —
+  `typing` no longer rejects a non-type argument here.
+
+That makes this worse than a latent error, not better. A loud failure would be caught by the first
+tool that introspected the module; a silent one means every consumer of the annotation — a type
+checker, a doc generator, a runtime validator — sees a `slice` where a mapping type should be, and
+the module it happens in is the one that decides whether a request is authenticated at all. It also
+means **any check that merely asserts evaluation succeeds passes on the broken code**, which is the
+trap the acceptance criteria below have to avoid.
 
 There is also a stray trailing blank line at the end of the file (line 70).
 
@@ -54,10 +64,15 @@ no CI to run one in.
 
 ## Sketch of the acceptance criteria
 
-- **R1** — The `AUTH_MODES` annotation SHALL be a valid type expression, and
-  `typing.get_type_hints(rcac_mcp.auth)` SHALL succeed.
-- **R2** — A test SHALL assert `get_type_hints` succeeds on the auth module, so the class of error
-  cannot silently return.
+**Do not write a criterion that only asserts evaluation succeeds — it already does.** The criterion
+has to assert the *shape* of the resolved annotation, or it goes green on the unfixed code.
+
+- **R1** — The `AUTH_MODES` annotation SHALL be a valid type expression: WHEN
+  `typing.get_type_hints(rcac_mcp.auth)['AUTH_MODES']` is resolved, its argument SHALL be the mapping
+  type and SHALL NOT be a `slice`.
+- **R2** — A test SHALL assert exactly that, and SHALL be demonstrated to FAIL against the unfixed
+  annotation before the fix lands — a criterion for a silent defect is worthless until it has been
+  seen red.
 
 ## Notes
 

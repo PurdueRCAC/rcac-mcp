@@ -27,6 +27,8 @@
       "Bash(git ls-files *)",
       "Bash(git ls-tree *)",
       "Bash(git ls-remote *)",
+      "Bash(git config --get *)",
+      "Bash(git config user.signingkey)",
       "Bash(git fetch *)",
       "Bash(git tag -l *)",
       "Bash(git tag -v *)",

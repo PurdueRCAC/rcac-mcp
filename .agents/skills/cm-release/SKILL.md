@@ -10,7 +10,7 @@ description: >-
   Rehearses the whole thing in an isolated git worktree first. Operational, NOT a lifecycle step.
 disable-model-invocation: true
 argument-hint: "<release|pre-release> <version> [--skip-dry-run] [--publish-pypi] | status"
-allowed-tools: Read, Edit, Grep, Glob, AskUserQuestion, Bash(uv run *), Bash(uv sync *), Bash(uv lock *), Bash(uv build *), Bash(uvx twine *), Bash(git status *), Bash(git branch *), Bash(git rev-parse *), Bash(git log *), Bash(git show *), Bash(git diff *), Bash(git fetch *), Bash(git pull *), Bash(git switch *), Bash(git add *), Bash(git commit *), Bash(git push *), Bash(git tag *), Bash(git worktree *), Bash(gh release *), Bash(gh run *), Bash(gh repo *), Bash(tar *), Bash(curl *), Bash(mktemp *), Bash(head *), Bash(tail *), Bash(ls *)
+allowed-tools: Read, Edit, Grep, Glob, AskUserQuestion, Bash(uv run *), Bash(uv sync *), Bash(uv lock *), Bash(uv build *), Bash(uvx twine *), Bash(.agents/factory/bin/sandbox.sh *), Bash(git status *), Bash(git branch *), Bash(git rev-parse *), Bash(git log *), Bash(git show *), Bash(git diff *), Bash(git fetch *), Bash(git pull *), Bash(git switch *), Bash(git add *), Bash(git commit *), Bash(git push *), Bash(git tag *), Bash(git worktree *), Bash(git config *), Bash(git ls-files *), Bash(git ls-remote *), Bash(gh release *), Bash(gh run *), Bash(gh repo *), Bash(tar *), Bash(curl *), Bash(mktemp *), Bash(head *), Bash(tail *), Bash(ls *)
 ---
 
 # cm-release — cut a version (release / pre-release), human-gated

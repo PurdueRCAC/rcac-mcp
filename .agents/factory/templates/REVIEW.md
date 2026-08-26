@@ -14,8 +14,11 @@
 Commands actually executed and their outcomes (the spine of the review). Every CLI drive goes
 through the sandbox — never a real cluster, never the developer's home:
 
-- `uv run pytest -v -m unit` → <result>
+- `uv run pytest -v` → <result — note that `-m unit`/`-m integration` select nothing until the
+  restore-test-coverage cycle tags the suite, so a marker-only selector proves nothing>
 - `.agents/factory/bin/sandbox.sh sh -c "uv run rcac-mcp -e local --help"` → <observed behavior>
+- `.agents/factory/bin/sandbox.sh sh -c 'cd "$CLUSTER_MCP_REPO" && uv run pytest -q'` → <result, if
+  a test drive needed the sandbox's HOME/auth/SSH isolation>
 - <other CLI drives, import checks, or targeted tests>
 
 ## Requirement → evidence matrix

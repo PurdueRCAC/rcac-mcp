@@ -26,7 +26,7 @@ phases:
     parallel: false
     hammerable: true
     hill: uphill
-    verify: ".agents/factory/bin/sandbox.sh sh -c \"uv run rcac-mcp -e local --help && uv run pytest -v -m integration -k cli\""
+    verify: ".agents/factory/bin/sandbox.sh sh -c 'uv run rcac-mcp -e local --help && cd \"$CLUSTER_MCP_REPO\" && uv run pytest -q -k cli'"
 review:
   last_reviewed_commit: ""
   verdict: none
@@ -66,8 +66,11 @@ checklists below are the work. `cm-build` executes the next actionable phase, ru
   --record-attempt` on every red verify gate; `next_phase.py` warns at ≥3 — the circuit breaker
   runs on this file, not on session memory.
 - `verify`: the exact command that proves the phase (prefer driving the real CLI, not just tests —
-  wrap CLI drives in `.agents/factory/bin/sandbox.sh sh -c "…"` so they get a throwaway `HOME`, a
-  blank auth environment, and no reachable cluster).
+  wrap CLI drives in `.agents/factory/bin/sandbox.sh sh -c '…'` so they get a throwaway `HOME`, a
+  blank auth environment, and no reachable cluster). **Two traps.** A `pytest` inside the sandbox
+  must `cd "$CLUSTER_MCP_REPO"` first, or it roots itself in the throwaway dir and never loads
+  `pyproject.toml`. And **no test carries `@mark.unit`/`@mark.integration` yet**, so a gate whose
+  only selector is `-m …` reports "no tests ran" and exits 0 — green over nothing.
 - `review.cycle`: completed review passes, auto-incremented by every `set_phase.py --verdict …`;
   REVIEW.md's "Cycle {n}" mirrors it and the ≤3-cycle bound is graded against it.
 
@@ -100,7 +103,7 @@ checklists below are the work. `cm-build` executes the next actionable phase, ru
 **Goal:** <…>.
 
 - [ ] <concrete step>
-- **Verify:** `.agents/factory/bin/sandbox.sh sh -c "uv run rcac-mcp -e local --help && uv run pytest -v -m integration -k cli"`.
+- **Verify:** `.agents/factory/bin/sandbox.sh sh -c 'uv run rcac-mcp -e local --help && cd "$CLUSTER_MCP_REPO" && uv run pytest -q -k cli'`.
 - **Touches:** `src/rcac_mcp/…`.
 
 ---

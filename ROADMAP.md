@@ -125,10 +125,12 @@ from Python; factor shared logic into an undecorated helper), but the resource i
 ## A type annotation that is accidentally a slice
 
 `auth.py:65` reads `Final[Dict[str, Callable[[], AuthProvider]]:]` — the trailing `:` inside the
-subscript makes it a slice expression. It parses, and it never evaluates, purely because
-`from __future__ import annotations` defers annotation evaluation. Any change that forces evaluation
-— `typing.get_type_hints`, a runtime-validating framework, a future Python that re-evaluates module
-annotations — turns it into an error in the auth module.
+subscript makes it a slice expression. The interesting part is what does *not* happen: evaluating it
+raises nothing. `typing.get_type_hints` succeeds and silently returns
+`Final[slice(Dict[...], None, None)]`, and deferred annotations are not what saves it — the same
+expression evaluated eagerly on Python 3.14 yields the same nonsense without complaint. A silent
+wrong type in the module that decides whether a request is authenticated is worse than a loud one,
+and it means any check that merely asserts evaluation succeeds passes on the broken code.
 
 *Horizon: now · Depends on: — · Refs: —*
 **Seed:** [`issues/auth-modes-annotation-typo.md`](issues/auth-modes-annotation-typo.md) · *status: unshaped*
