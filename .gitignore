@@ -28,6 +28,14 @@ certs/
 .env
 *.local
 
+# Software factory: the hidden security lane and scratch space.
+# .security/ holds unremediated findings and their ordered remediation index
+# (.agents/factory/methodology.md). A public roadmap of live vulnerabilities in a
+# multi-user command-execution service is an attacker's work plan; the fixes ship
+# publicly, the standing inventory does not. Never commit anything under it.
+.security/
+.local/
+
 # Testing
 .pytest_cache/
 .coverage

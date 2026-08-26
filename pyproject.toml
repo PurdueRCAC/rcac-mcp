@@ -23,8 +23,35 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/rcac_mcp"]
 
+[tool.hatch.build.targets.sdist]
+# The software factory, the design records, the backlog, and the hidden security lane are
+# repository furniture, not distribution content. `.security/` is the one that matters: shipping
+# it would publish an inventory of unremediated weaknesses. /cm-release re-checks the built
+# tarball because this list only covers the directories that exist today.
+exclude = [
+    "/.agents",
+    "/.claude",
+    "/.security",
+    "/.local",
+    "/spec",
+    "/issues",
+    "/tests/fixtures",
+    "/certs",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+    # Required by the factory FSM scripts (.agents/factory/bin/_fsm.py), which parse the YAML
+    # frontmatter of spec/{slug}/TECH.md. Pinned here as well as in the runtime dependencies so
+    # that removing a runtime feature which happens to use YAML cannot break the harness.
+    "pyyaml>=6.0",
+]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers"
+markers = [
+    "unit: fast and isolated; no subprocess, no network, no real cluster",
+    "integration: drives the installed CLI; run it under .agents/factory/bin/sandbox.sh",
 ]
