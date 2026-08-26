@@ -1,190 +1,226 @@
----
-feature: rcac-docs-search-index
-plan_id: bb88ff3d-7742-44f5-bfbb-6cece6050034
-status: complete
-branch: wip
-docs_repo: ../RCAC-Docs
-current_phase: 6
-last_updated: "2026-02-08"
-decisions:
-  architecture: local-to-mcp-process
-  cli_approach: flags-on-existing-app
-  db_default_path: "~/.config/rcac-mcp/docs.db"
-  db_env_override: RCAC_DOCS_DB
-  docs_path_target: repo-root  # not docs/ subdirectory
-  snippet_resolution: full  # resolve --8<-- and Jinja2 at index time
-  skip_dirs:
-    - snippets
-    - assets
-    - stylesheets
-  skip_empty_files: true
-  index_app_catalog: true
-  blog_full_content: true
-  jinja2_undefined: silent  # unresolvable vars left as-is
-dependencies_added:
-  - pyyaml
-  - jinja2
----
+# ROADMAP
 
-# ROADMAP: RCAC Documentation Search Index
+The ordered index of work that is **not yet in flight**. One entry per `issues/{slug}.md` seed; the
+seed holds the evidence and the draft criteria, this file holds the order and the reasoning about
+order. Nothing here is a contract — `/cm-feature` promotes a seed into a `spec/{slug}/GOAL.md`, and
+that promotion is where appetite, non-goals and the R-IDs get negotiated with a human.
 
-## Overview
+Three Parts, and they are sequenced for a reason. **Part I** is the arc this project is actually on:
+becoming a general `cluster-mcp` rather than a Purdue-specific `rcac-mcp`. **Part II** is correctness
+debt — four defects found while porting the software factory, each verified by execution, none of
+them shipped by a cycle that knew about them. **Part III** is the project infrastructure the factory
+assumes exists and which mostly does not yet.
 
-Add FTS5-powered SQLite documentation search to the RCAC MCP server so agents
-can consult our 432+ markdown documentation files (user guides, software catalog,
-datasets, blog posts, workshops) before advising users. This prevents suboptimal
-or policy-violating suggestions by grounding agent responses in authoritative
-RCAC documentation.
-
-The implementation plan is tracked in `<plan: bb88ff3d-7742-44f5-bfbb-6cece6050034>`.
-
-## Key Architecture Decisions
-
-- **Local to MCP process**: Doc search runs against a local SQLite database, no
-  SSH needed. Works in all execution modes (stdio, http, local).
-- **CLI build step**: `rcac-mcp --index-docs --docs-path PATH` builds/updates
-  the database. Incremental via SHA-256 content hashing.
-- **XDG default path**: `~/.config/rcac-mcp/docs.db` with `RCAC_DOCS_DB` env
-  var override.
-- **Full snippet/template resolution**: `--8<--` pymdownx snippets are inlined,
-  Jinja2 `{{ vars }}` and `{{ macro(args) }}` are rendered using frontmatter,
-  `mkdocs.yml` extra vars, and `main.py` macros from the docs repo.
-- **`--docs-path` points at repo root**: Needs access to `main.py`, `mkdocs.yml`,
-  and `docs/` together.
-
-## File Layout
-
-```
-src/rcac_mcp/
-  docs/
-    __init__.py         # Package init, public API
-    schema.sql          # DDL: documents, chunks, chunks_fts, triggers, indexes
-    database.py         # SQLite connection management, search/load/upsert queries
-    indexer.py          # Markdown walking, frontmatter parsing, snippet resolution,
-                        #   Jinja2 rendering, H2 chunking, incremental indexing
-  tools/
-    docs.py             # doc_search and doc_load MCP tools
-```
-
-## Relevant Source Files (rcac-mcp)
-
-- `src/rcac_mcp/__init__.py` — CLI app (MCPServerApp), add --index-docs flags here
-- `src/rcac_mcp/server.py` — SERVER_INSTRUCTIONS, create_mcp_server()
-- `src/rcac_mcp/tools/__init__.py` — TOOL_REGISTRY, @mcp_tool decorator, tool imports
-- `src/rcac_mcp/tools/rcac.py` — Example tool pattern to follow
-- `src/rcac_mcp/resources.py` — RESOURCE_REGISTRY pattern (for reference)
-- `src/rcac_mcp/context.py` — ContextVar pattern (for reference)
-- `pyproject.toml` — Dependencies
-
-## Relevant Source Files (RCAC-Docs)
-
-- `main.py` — Jinja2 macro functions (login_snippet, ssh_keys_snippet, etc.)
-- `mkdocs.yml` — `extra:` vars (org), `nav:` structure, plugin config
-- `docs/` — All markdown content
-- `docs/snippets/` — Include fragments (skip from indexing, resolve into parents)
-- `docs/software/apps_md/` — 270 auto-generated per-app docs
-
-## Document Structure Notes
-
-- Frontmatter fields: `tags`, `authors`, `date` (blog), `title`, `slug`,
-  `categories` (blog), `resource`/`cluster`/`host` (template vars), `hide`,
-  `search` (boost), `draft`
-- Snippet syntax: `--8<-- "docs/snippets/file.md"` (whole file),
-  `--8<-- "docs/snippets/file.md:section"` (named section),
-  fenced multi-file blocks
-- Macro syntax: `{{ variable }}`, `{{ function(args) }}`, `{% set %}`, `{% raw %}`
-- Blog truncation: `<!-- more -->` marker (include full content, ignore marker)
+Read `AGENTS.md` § *Direction* before starting anything in Part I; it states the destination that
+these entries are steps toward. `.agents/factory/methodology.md` explains the lifecycle that
+consumes these seeds.
 
 ---
 
-## Implementation Phases
+# Part I — Becoming cluster-mcp
 
-### Phase 1: Schema and Database Layer
-- [x] Create `src/rcac_mcp/docs/__init__.py` with public API exports
-- [x] Create `src/rcac_mcp/docs/schema.sql` with full DDL (documents, chunks, chunks_fts, triggers, index)
-- [x] Create `src/rcac_mcp/docs/database.py` with DocsDatabase class:
-  - [x] `__init__(db_path, read_only=False)` — open/create connection
-  - [x] `create_schema()` — execute schema.sql
-  - [x] `upsert_document(path, title, category, content, source_hash)` — insert/update doc + chunks
-  - [x] `remove_document(path)` — delete doc and cascading chunks
-  - [x] `get_source_hash(path)` — for incremental checks
-  - [x] `search(query, category=None, limit=20)` — FTS5 BM25-ranked search with snippet()
-  - [x] `load_document(path)` — return full document content
-  - [x] `stats()` — document/chunk counts
-  - [x] `close()` — cleanup
-- [x] Add `pyyaml` and `jinja2` to pyproject.toml dependencies
-- [x] Verify schema works: quick smoke test creating an in-memory DB
+Six cycles that take this from *the Purdue RCAC MCP server* to *an MCP server for HPC clusters, with
+Purdue as one supported site*. They are ordered so each one shrinks or clarifies the tree the next
+one has to touch: remove what left, rename what stays, then make what stays optional.
 
-### Phase 2: Markdown Parser and Indexer
-- [x] Create `src/rcac_mcp/docs/indexer.py` with DocsIndexer class:
-  - [x] `__init__(docs_repo_root)` — validate repo structure (main.py, mkdocs.yml, docs/)
-  - [x] `_load_mkdocs_extra()` — parse mkdocs.yml, extract `extra:` vars
-  - [x] `_load_macros()` — dynamically load main.py macro functions via define_env pattern
-  - [x] `_resolve_snippets(content, base_path)` — expand all --8<-- directives
-  - [x] `_render_jinja2(content, frontmatter)` — render templates with full context
-  - [x] `_parse_frontmatter(raw)` — split YAML frontmatter from body, return (metadata, body)
-  - [x] `_extract_title(metadata, body)` — from frontmatter title, first # heading, or filename
-  - [x] `_derive_category(rel_path)` — from top-level directory path
-  - [x] `_chunk_by_h2(content)` — split on ## boundaries, return list of (heading, content) tuples
-  - [x] `_should_skip(rel_path)` — skip snippets/, assets/, stylesheets/, empty files
-  - [x] `build(db_path)` — main entry point: walk, parse, resolve, chunk, upsert, prune stale docs
-- [x] Test snippet resolution against real RCAC-Docs files (running_jobs_python.md, etc.)
-- [x] Test Jinja2 rendering against docs with {{ resource }}, {{ cluster }}, macro calls
+## The documentation subsystem belongs to rcac-docs-mcp now
 
-### Phase 3: MCP Tools
-- [x] Create `src/rcac_mcp/tools/docs.py`:
-  - [x] `doc_search(query, category=None)` — FTS5 search, return formatted ranked results
-  - [x] `doc_load(path)` — return full document markdown by relative path
-  - [x] Handle missing docs.db gracefully (return helpful message)
-  - [x] Module-level DB path resolution (RCAC_DOCS_DB env var → ~/.config/rcac-mcp/docs.db)
-- [x] Register docs tool module in `src/rcac_mcp/tools/__init__.py`
-- [x] Verify tools appear in TOOL_REGISTRY when imported
+Agentic documentation retrieval was extracted into a separate `rcac-docs-mcp` service, hosted at
+`docs.rcac.purdue.edu/mcp`, with an AskRCAC tool arriving on `docs.rcac.purdue.edu` shortly. Knowledge
+work evolves there now and is no longer this repository's responsibility. What remains here is a
+whole FTS5 indexing subsystem — `src/rcac_mcp/docs/` (945 lines), `tools/docs.py`, three CLI flags, a
+git submodule, and prominent guidance in `SERVER_INSTRUCTIONS` telling every connecting agent to
+consult a tool this server should no longer own.
 
-### Phase 4: CLI Integration
-- [x] Add `--index-docs` flag to MCPServerApp
-- [x] Add `--docs-path` argument to MCPServerApp
-- [x] Add `--docs-output` argument with default `~/.config/rcac-mcp/docs.db`
-- [x] Implement index-docs flow in MCPServerApp.run(): detect flag, run indexer, print summary, exit
-- [x] Create ~/.config/rcac-mcp/ directory if it doesn't exist
-- [x] Test: `rcac-mcp --index-docs --docs-path ../RCAC-Docs`
+This goes first. Everything else in Part I touches a smaller tree once it is gone, and the rename in
+particular is meaningfully cheaper.
 
-### Phase 5: Server Instructions and Agent Guidance
-- [x] Update SERVER_INSTRUCTIONS in server.py with doc search tool descriptions
-- [x] Add agent guidance: "Before advising on storage, jobs, or software, use doc_search"
-- [x] Update APP_HELP with --index-docs documentation
-- [x] Review INSTRUCTIONS.md for consistency with new capabilities
+*Horizon: now · Depends on: — · Refs: forces `restore-test-coverage`*
+**Seed:** [`issues/strip-docs-subsystem.md`](issues/strip-docs-subsystem.md) · *status: unshaped*
 
-### Phase 6: Validation and Polish
-- [x] Run full index build against RCAC-Docs repo, verify document/chunk counts
-- [x] Test doc_search with representative queries (scratch purge, conda vs anaconda, GPU jobs, etc.)
-- [x] Test doc_load with various document paths
-- [x] Test incremental update (re-run indexer, verify skipped unchanged files)
-- [x] Test stale document removal (delete a doc, re-run indexer)
-- [x] Verify server starts cleanly with and without docs.db present
-- [x] Run any existing tests (pytest), ensure nothing is broken
-- [x] Final review of all new code for consistency with project patterns
-- [x] Add RCAC-Docs as git submodule at tests/fixtures/RCAC-Docs
-- [x] Comprehensive test suite: 72 tests (database, indexer, tools, CLI)
+## Nothing here should assume Purdue
+
+The rename from `rcac-mcp` to `cluster-mcp` is mechanical in places (package, console script,
+`pyproject.toml`, the `rcac://` resource URIs, the `RCAC_*` environment variables) and a judgement
+call in others: `tools/rcac.py` genuinely *is* Purdue-specific and should keep a site-flavoured name,
+while `SERVER_INSTRUCTIONS` is currently a Purdue document that needs splitting into a generic core
+and a site overlay.
+
+The environment-variable rename is the sharp edge — `RCAC_SSH_HOST` appears in every user's MCP
+client config, and `.agents/factory/bin/sandbox.sh` unsets it by name to fail closed. A deprecation
+window, not a hard break.
+
+*Horizon: near-term · Depends on: the docs strip (smaller surface to rename) · Refs: —*
+**Seed:** [`issues/rename-to-cluster-mcp.md`](issues/rename-to-cluster-mcp.md) · *status: unshaped*
+
+## Capabilities you don't have shouldn't be tools you see
+
+Today every tool registers unconditionally: a site without Slurm still advertises `sbatch`, `squeue`
+and `sacct` to every connecting model, which is an invitation to hallucinate a workflow that cannot
+run. The intended shape is packaging extras — `cluster-mcp[slurm]` — backed by a registration
+mechanism that can omit a tool group cleanly rather than importing it and hoping.
+
+This is the load-bearing cycle of Part I: it establishes the mechanism that `lmod`, the site extras,
+and every future capability plug into. It also collides directly with an existing invariant —
+registration is currently an import-time side effect driven by a hardcoded list at the bottom of
+`tools/__init__.py` (`AGENTS.md` § *Tools*) — so the design has to replace that contract, not work
+around it.
+
+*Horizon: near-term · Depends on: the rename (the extras are named `cluster-mcp[…]`) · Refs: prerequisite for both extras entries below*
+**Seed:** [`issues/capability-extras.md`](issues/capability-extras.md) · *status: unshaped*
+
+## Module systems are the other half of "can I run this"
+
+Every tool here is about jobs; none is about software. On an LMOD cluster an agent cannot discover
+what is installed, what versions exist, or what a module load would do to the environment — so it
+guesses, and `INSTRUCTIONS.md` has to compensate with prose. `module avail`, `module spider`,
+`module list` and `module show` are the missing capability group, and they are the second consumer
+of the extras mechanism, which is what proves the mechanism generalizes past one instance.
+
+*Horizon: near-term · Depends on: capability-extras (strictly) · Refs: —*
+**Seed:** [`issues/lmod-tool-group.md`](issues/lmod-tool-group.md) · *status: unshaped*
+
+## A site extra is shorthand plus a point of view
+
+`cluster-mcp[rcac]` should mean "the right capability extras for Purdue, plus Purdue's own tools and
+context" — one install target a user can name without knowing that Gautschi runs Slurm and LMOD. That
+makes it both a dependency alias and the home for `tools/rcac.py` and the Purdue half of
+`SERVER_INSTRUCTIONS`. Getting the boundary right here is what makes `cluster-mcp[alcf]`,
+`[ncsa]` and `[tacc]` a matter of contribution rather than redesign, so this cycle should produce a
+documented pattern, not just a Purdue special case.
+
+*Horizon: mid-term · Depends on: capability-extras (strictly) · Refs: sets the pattern other centers copy*
+**Seed:** [`issues/site-extras.md`](issues/site-extras.md) · *status: unshaped*
+
+## Not every cluster has a Lustre scratch and a myquota
+
+`storage_paths()` parses the output of `myquota`, and scratch discovery shells out to `findscratch` —
+both Purdue commands, and neither degrades on a cluster that lacks them. The `rcac://storage` resource
+is built on the same assumption. Generalizing means a discovery protocol with a site-provided
+implementation and an honest "unknown" rather than a parse failure.
+
+*Horizon: mid-term · Depends on: site-extras (the site hook is where a discovery impl lands) · Refs: also fixes the `rcac://storage` resource's second problem*
+**Seed:** [`issues/generalize-storage-discovery.md`](issues/generalize-storage-discovery.md) · *status: unshaped*
 
 ---
 
-## Bootstrap Prompt
+# Part II — Correctness debt found while porting the factory
 
-Use the following prompt to resume work on this feature in a new session:
+Four defects, all found and **verified by execution** while writing `AGENTS.md` and
+`.agents/factory/invariants.md` on 2026-08-26 — the invariant-writing pass was itself the review that
+nobody had run. None was introduced by that pass; all four are pre-existing on `main`. They are small
+and independent, which makes them good first cycles for a factory that has never been driven here.
 
-````
-We are implementing a documentation search index feature for the rcac-mcp
-project. The implementation plan is at <plan: bb88ff3d-7742-44f5-bfbb-6cece6050034>
-and the project roadmap is at ROADMAP.md in the project root.
+## The rcac://storage resource cannot execute at all
 
-Please:
-1. Read the plan and ROADMAP.md to re-establish full context.
-2. Check the YAML frontmatter `current_phase` to find where we left off.
-3. Review the checkbox state in the current phase to find the next incomplete task.
-4. Implement the sub-tasks for that step.
-5. Review your work — verify the code compiles/runs and follows project patterns.
-6. Update ROADMAP.md — check off completed items, bump `current_phase` and
-   `last_updated` in frontmatter if the phase is done.
-7. Commit with `WIP: <descriptive message>` and push to the `wip` branch.
-8. Check back in with me to see if we want to proceed to next phase or stop.
-````
+`resources.py:151` calls `storage_paths()`, but `@mcp_tool` replaced that function with a
+`fastmcp.tools.tool.FunctionTool`, which is not callable — the resource raises
+`TypeError: 'FunctionTool' object is not callable` on every read. Reproduced directly. The generic
+lesson is already recorded as an invariant (`AGENTS.md` § *Tools*: a decorated tool cannot be called
+from Python; factor shared logic into an undecorated helper), but the resource itself is still broken.
+
+*Horizon: now · Depends on: — · Refs: the same helper split that `generalize-storage-discovery` needs*
+**Seed:** [`issues/storage-paths-resource-typeerror.md`](issues/storage-paths-resource-typeerror.md) · *status: unshaped*
+
+## A type annotation that is accidentally a slice
+
+`auth.py:65` reads `Final[Dict[str, Callable[[], AuthProvider]]:]` — the trailing `:` inside the
+subscript makes it a slice expression. It parses, and it never evaluates, purely because
+`from __future__ import annotations` defers annotation evaluation. Any change that forces evaluation
+— `typing.get_type_hints`, a runtime-validating framework, a future Python that re-evaluates module
+annotations — turns it into an error in the auth module.
+
+*Horizon: now · Depends on: — · Refs: —*
+**Seed:** [`issues/auth-modes-annotation-typo.md`](issues/auth-modes-annotation-typo.md) · *status: unshaped*
+
+## One user's cluster context is served to every other user
+
+`_cluster_context_cache` (`resources.py:23`) is a process-global dict keyed by `executor.hostname`.
+For `DelegatingExecutor` that key is `socket.gethostname()` — identical for every authenticated
+user — so in delegate mode the first reader's `/etc/agents.d` content is returned to everyone after,
+and the cache is never invalidated. Today the content is world-readable administrative markdown, so
+the impact is bounded; the *mechanism* is a cross-user cache in the one mode that exists to keep
+users apart, and it is the shape of the bug rather than today's payload that matters.
+
+*Horizon: now · Depends on: — · Refs: `AGENTS.md` § *Resources* documents the defect as a known one*
+**Seed:** [`issues/context-cache-cross-user.md`](issues/context-cache-cross-user.md) · *status: unshaped*
+
+## run() has two different contracts depending on the backend
+
+`LocalShellExecutor` and `DelegatingExecutor` catch `subprocess.TimeoutExpired` and return a
+`CommandResult` with `exit_code=-1`; `SSHExecutor` passes `timeout` to Fabric and catches nothing, so
+Invoke's `CommandTimedOut` propagates to the caller. A tool that handles a timed-out command works in
+`local` mode and raises in `ssh` mode — the default mode. The `-1` sentinel is separately overloaded
+with a real SIGHUP death.
+
+*Horizon: near-term · Depends on: — · Refs: touches the `Executor` protocol contract, so all three backends move together*
+**Seed:** [`issues/executor-timeout-asymmetry.md`](issues/executor-timeout-asymmetry.md) · *status: unshaped*
+
+---
+
+# Part III — The infrastructure the factory assumes
+
+Three gaps between what `.agents/` expects and what this repository has. None is a product feature;
+all three change how much a green gate is worth.
+
+## Every test in the suite is a docs test
+
+All 81 tests cover the documentation index — `test_database.py` (22), `test_indexer.py` (35),
+`test_tools.py` (19), `test_cli.py` (5). `strip-docs-subsystem` therefore takes the entire suite with
+it, and the coupled core it leaves behind — the `ContextVar` isolation contract, the identity-claim
+precedence, the user-map enforcement, the `sudo` argv, the exec-mode ladder — has **never had a
+test**. Those are exactly the paths `invariants.md` marks highest-blast-radius, and a `verify:` gate
+over an empty suite is theatre.
+
+*Horizon: now, immediately after the docs strip · Depends on: strip-docs-subsystem · Refs: gates the credibility of every later cycle's verify command*
+**Seed:** [`issues/restore-test-coverage.md`](issues/restore-test-coverage.md) · *status: unshaped*
+
+## Nothing runs on push
+
+There is no `.github/` at all: no test workflow, no publish workflow, no container build. `/cm-release`
+says so out loud and its local gate is currently the only thing between a bad build and a permanent
+tag. A minimal CI — pytest on the supported Python, plus the sdist-hygiene assertion so `.agents/`
+and `.security/` can never reach a published artifact — is the cheap half.
+
+*Horizon: near-term · Depends on: restore-test-coverage (CI over a docs-only suite tests the wrong thing) · Refs: `/cm-release` Step 4 duplicates the gate locally until this exists*
+**Seed:** [`issues/ci-workflow.md`](issues/ci-workflow.md) · *status: unshaped*
+
+## The factory has no front door
+
+The upstream HyperShell harness ships `factory/getting-started.html`, a 60KB self-contained
+introduction to agents, harnesses, Shape Up and this factory, written for practitioners *and*
+institutional leadership. It was deliberately not copied during the port — duplicating near-identical
+prose across two repositories invites exactly the silent drift the upstream ledger already filed a
+finding about. But this repository now has eight skills and no on-ramp, and `/cm-harness` Step 6
+carries a staleness check that is conditional on a file that does not exist.
+
+*Horizon: later · Depends on: — · Refs: `.agents/factory/harness-log.md` bootstrap entry, divergence 4*
+**Seed:** [`issues/factory-onboarding-page.md`](issues/factory-onboarding-page.md) · *status: unshaped*
+
+---
+
+# Settled questions
+
+Deferrals closed **without** shipping — `declined` (considered and not taken on as debt) and
+`accepted-behaviour` (reported as a defect, judged intended). They keep their `issues/` files because
+nothing else in the repository records that the question was asked. Shipped work leaves no entry
+here: `spec/{slug}/` holds that account and the code itself refutes a re-filing.
+
+*(None yet.)*
+
+---
+
+# A note on security work
+
+This server executes arbitrary shell commands, and in `delegate` mode it does so **as other people**,
+from a privileged process, on shared research infrastructure. Deferrals that describe an
+*unremediated* weakness — a live path to running a command as the wrong user, on the wrong host, or
+without the intended authentication — do **not** appear in this file. They go to `.security/issues/`
+and `.security/ROADMAP.md`, which are gitignored: a public, ordered index of live vulnerabilities is
+an attacker's work plan. The *fixes* land as ordinary public commits and PRs when they ship.
+
+`context-cache-cross-user` above is in the public lane deliberately, and the judgement is worth
+recording: the cached content is world-readable administrative markdown that every user could read
+anyway, so there is no exploitable disclosure to conceal — only a caching bug whose *shape* is
+cross-user. Had it cached anything user-private, it would have gone to the hidden lane instead. When
+in doubt, use `.security/` and ask.
