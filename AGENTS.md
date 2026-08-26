@@ -343,10 +343,10 @@ import has no effect.
 ## Packaging
 
 - `hatchling`; the wheel ships only `src/rcac_mcp`.
-- **`uv.lock` is gitignored here** (unlike most applications). Nothing in the released record pins
-  transitive versions, and `/cm-release` stages it only if it is tracked. Worth revisiting — a server
-  installed straight from `git+https://…` has no lockfile at all — but changing it is a deliberate
-  project decision, not a drive-by.
+- **`uv.lock` is tracked.** This server is installed straight from `git+https://…`, so the lock is the
+  only thing pinning the transitive tree a user actually receives. A change to `[project.dependencies]`
+  or `[dependency-groups]` runs `uv lock` and commits the result **in the same commit**; `/cm-release`
+  stages it alongside the version bump. `uv lock --check` exits nonzero when the two have drifted.
 - **The sdist must not ship `.agents/`, `spec/`, `issues/`, `.security/`, or `tests/fixtures/`.**
   `[tool.hatch.build.targets.sdist]` excludes them and `/cm-release`'s gate re-checks the tarball — a
   `.security/` path in a published artifact would publish an inventory of unremediated weaknesses.

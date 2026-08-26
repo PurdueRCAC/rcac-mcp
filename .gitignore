@@ -15,7 +15,10 @@ venv/
 ENV/
 
 # UV
-uv.lock
+# uv.lock is deliberately TRACKED. This is an application installed straight from
+# git+https://…, so the lock is the only thing pinning the transitive tree a user
+# actually gets; untracked, every install resolves fresh against PyPI. Regenerate with
+# `uv lock` and commit it alongside the pyproject.toml change that caused it.
 
 # IDE
 .idea/

@@ -130,14 +130,15 @@ harmless.)
 ### Step 3 — Bump the single version source
 1. Edit the `version = "…"` line in `pyproject.toml` → X.Y.Z (the ONLY source).
 2. `uv lock` (updates the `rcac-mcp` entry in `uv.lock`).
-3. Commit `[release] Bump version to X.Y.Z`, staging **exactly** `pyproject.toml` — **and `uv.lock`
-   only if it is tracked.** It is currently in `.gitignore`, so `git add uv.lock` fails and the
-   version in the lock is not part of the released record. Check with `git ls-files --error-unmatch
-   uv.lock` rather than assuming either way; if the repo later starts tracking it, this step picks it
-   up with no edit. If anything *else* wants staging, something is wrong — STOP and look.
+3. Commit `[release] Bump version to X.Y.Z`, staging **exactly** two files: `pyproject.toml` and
+   `uv.lock`. Both are tracked, and the lock is what pins the transitive tree for anyone installing
+   from `git+https://…`, so a bump that leaves it stale ships a version string the lock disagrees
+   with. If anything *else* wants staging, something is wrong — STOP and look.
 
 ### Step 4 — Gate (non-negotiable)
 Run all of:
+- `uv lock --check` — the lock is tracked and must already agree with the bumped `pyproject.toml`;
+  a nonzero exit here means Step 3 forgot `uv lock`
 - `uv run pytest -q`
 - `uv build --no-sources`
 - `uvx twine check --strict dist/*`

@@ -48,6 +48,9 @@ explicitly, not inherit from a workflow that grew.
 - **R2** — The same workflow SHALL build the sdist and FAIL if the tarball contains any of `.agents/`,
   `.security/`, `spec/`, `issues/`, or `tests/fixtures/`.
 - **R3** — The workflow SHALL run `uvx twine check --strict` on the built artifacts.
+- **R3a** — The workflow SHALL run `uv lock --check` and fail if `uv.lock` has drifted from
+  `pyproject.toml`. The lock is tracked and is what pins the transitive tree for anyone installing
+  from `git+https://…`, so a stale one is a silently wrong install, not a formatting nit.
 - **R4** — The workflow SHALL NOT publish to any package index, push a container, or require any
   repository secret.
 - **R5** — `AGENTS.md` § *Packaging* SHALL be updated — it currently states there is no CI — and
