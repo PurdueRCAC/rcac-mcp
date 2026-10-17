@@ -157,6 +157,23 @@ Plan-stage rulings by the foreman, after the adversarial design review, 2026-10-
   Accepted: a one-word pointer repair in the same commit, not a rewording of that seed
   (2026-10-17). No workflow-lint seed this cycle (2026-10-17).
 
+Moved-base clarification, 2026-10-17, confirmed by the foreman (judge for this effort) when the
+cycle was rebased from `3d010ec` onto `develop` at `fb2d4dd`:
+
+- **Q:** `stack-upgrade` landed first (`acbdfd7`, retired at `3dd963d`) and put a dependency audit
+  in the release recipe's `gate`; `fb2d4dd` then made the profile's `verify` and the recipe's
+  `gate` run the suite in both protocol eras. What does CI mirror now? — **A:** The lists as they
+  stand at landing, both additions included. R2's `verify` is the profile's `verify` as landed, so
+  the gate job runs `uv run pytest -q` and then `CLUSTER_MCP_TEST_ERA=modern uv run pytest -q`;
+  and R8's "mirrors its `gate`" takes in `uv run python bin/audit_lock.py`, which needs the network
+  the runner has and fails closed without it. The non-goal "A dependency or advisory audit step.
+  Owned by the `stack-upgrade` seed (its R5); it lands with the dependency upgrade, against this
+  workflow", and the Related materials line that `issues/stack-upgrade.md` "adds the
+  dependency-audit step to this workflow", are no longer true as worded: `stack-upgrade` landed
+  before any workflow existed, and its audit lives in the recipe's `gate` (`bin/audit_lock.py`), not
+  in a workflow. Read the non-goal as: this cycle designs no audit of its own; CI runs the recipe's
+  audit step, verbatim, only because CI mirrors the gate. R-IDs are unchanged (2026-10-17).
+
 ## Related materials
 
 - Seed: [`issues/ci-workflow.md`](../../issues/ci-workflow.md) (promoted 2026-10-16, `status:

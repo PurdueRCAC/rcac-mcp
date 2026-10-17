@@ -15,6 +15,10 @@ asserted). Nothing else of the caller's leaks in: no `VIRTUAL_ENV`, `UV_*`, `PYT
 from the snapshot, never from the caller's tree. The first failing step stops the job, as on
 GitHub.
 
+The audit step (`bin/audit_lock.py`) asks the advisory service for real, so a replay needs the
+network, as the runner has. Offline it is red at that step (the script exits 2, "advisory source
+unreachable"), never skipped.
+
 What it cannot reproduce: the OS (macOS here, Ubuntu on the runner) and bash itself (macOS ships
 bash 3.2; the runner has 5.x). A replay is local evidence that the steps, plants and guards behave;
 the only Linux evidence is the green run on GitHub.

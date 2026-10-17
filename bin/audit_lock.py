@@ -17,9 +17,9 @@ The uv it runs is the one that launched it (`UV`, which `uv run` sets), else the
 `PATH`. `main()` reads `UV_OFFLINE` once, by uv's own boolean rules, and that one decision is the
 only one: it puts `--offline` on uv's argv and marks the verdict offline. The variable itself is not
 passed on, and `command` takes the decision rather than the environment, so nothing reads it twice.
-The release recipe's `gate` (AGENTS.md § Factory) runs this file. No CI workflow exists yet; the
-one the `ci-workflow` seed adds is to mirror that gate by running this same file, so the two cannot
-drift. It takes no options: there is no waiver for an advisory.
+The release recipe's `gate` (AGENTS.md § Factory) runs this file, and so does CI's `gate` job
+(`.github/workflows/ci.yml`), which mirrors that gate, so the two cannot drift. It takes no
+options: there is no waiver for an advisory.
 
 Exit status: 0 only when uv reports no known vulnerability and no adverse status **and** audited
 exactly as many packages as the lock pins from a registry; 1 when a locked package carries an

@@ -39,7 +39,10 @@ jobs:
       - run: uv sync --locked
       - run: uv lock --check
       - run: uv run pytest -q
+      - run: CLUSTER_MCP_TEST_ERA=modern uv run pytest -q
       - run: bin/sandbox.sh uv run rcac-mcp --help
+      # Needs the network: uv audit asks the advisory service, and fails closed when it cannot.
+      - run: uv run python bin/audit_lock.py
       - run: uv build -o dist/
       - run: uvx twine check --strict dist/*
       - run: uv run python bin/sdist_hygiene.py dist/

@@ -85,11 +85,15 @@ See [`research/prototypes/ci.yml`](research/prototypes/ci.yml). Its shape:
      `version: '0.12.17'`, `python-version: '3.14'` (exports `UV_PYTHON`), `enable-cache: false`
      (nothing written to the Actions cache). Both pins follow the cooldown rule, the newest
      release at least 14 days old (research/01).
-  3. Seven `run:` steps, one command each, verbatim: `uv sync --locked`, `uv lock --check`,
-     `uv run pytest -q`, `bin/sandbox.sh uv run rcac-mcp --help`, `uv build -o dist/`,
-     `uvx twine check --strict dist/*`, `uv run python bin/sdist_hygiene.py dist/`. That is
-     `setup`, then `verify` split at `&&`, then the recipe's `gate` steps `verify` lacks, in that
-     order. A non-zero exit fails its step and the job (R2). An empty `dist/` makes `twine` and the
+  3. Nine `run:` steps, one command each, verbatim: `uv sync --locked`, `uv lock --check`,
+     `uv run pytest -q`, `CLUSTER_MCP_TEST_ERA=modern uv run pytest -q`,
+     `bin/sandbox.sh uv run rcac-mcp --help`, `uv run python bin/audit_lock.py`,
+     `uv build -o dist/`, `uvx twine check --strict dist/*`,
+     `uv run python bin/sdist_hygiene.py dist/`. That is `setup`, then `verify` split at `&&`, then
+     the recipe's `gate` steps `verify` lacks, in that order. *Amended 2026-10-17 at the rebase
+     onto `develop` `fb2d4dd`: seven steps became nine when `stack-upgrade` added the audit to the
+     recipe's `gate` and `fb2d4dd` added the modern-era run to `verify` and the `gate` (GOAL,
+     moved-base clarification). The audit step needs the network; the runner has it.* A non-zero exit fails its step and the job (R2). An empty `dist/` makes `twine` and the
      hygiene step fail (R3: "no sdist was built").
 - No `${{ }}` expression anywhere, no step `name:`, and no `env`, `if`, `continue-on-error`,
   `concurrency`, artifact upload, or cache step. Concurrency
@@ -244,7 +248,7 @@ for real. P5 then deletes the remote branch. `verify/evidence.py` (written at P3
 `gh run view --json` for each recorded run:
 - **Green:** `completed`/`success`, event `push`, branch `ci/ci-workflow`, the recorded `headSha`,
   `attempt == 1` (or every re-run recorded in EVIDENCE.md with its reason), and every one of the
-  seven `Run <cmd>` steps `success`. `git diff --name-only X HEAD` is limited to
+  nine `Run <cmd>` steps `success`. `git diff --name-only X HEAD` is limited to
   `spec/ci-workflow/`.
 - **Red:** `failure`; the first failed step is the hygiene step and all earlier ones succeeded;
   `--log-failed` contains `.agents/planted.md`. `gh api repos/purduercac/rcac-mcp/commits/<plant>`
@@ -261,7 +265,7 @@ for real. P5 then deletes the remote branch. `verify/evidence.py` (written at P3
 | R-ID | Design element(s) that satisfy it |
 |------|-----------------------------------|
 | R1   | §2.2 `push: ['**']` + `pull_request: [develop, main]`, no `pull_request_target`; static `workflow` triggers check + plants; P4 green push run |
-| R2   | §2.2 one job, setup-uv `python-version: '3.14'`, seven verbatim steps under `bash -eo pipefail`; static step-list = AGENTS.md lists; replay green and red-at-pytest; P4 run with every step `success` |
+| R2   | §2.2 one job, setup-uv `python-version: '3.14'`, nine verbatim steps under `bash -eo pipefail` (seven before the 2026-10-17 rebase); static step-list = AGENTS.md lists; replay green and red-at-pytest; P4 run with every step `success` |
 | R3   | §2.1 `bin/sdist_hygiene.py` run by recipe and CI (same command); static `hygiene`; unit tests + hygiene_mutants; replay red naming `.security/planted.md` / `.agents/planted.md`; P5 red on GitHub |
 | R4   | §2.2 workflow-level `contents: read`, no job permissions, no secrets, `persist-credentials: false`, `enable-cache: false`, allowlisted actions, ban list; static checks + plants |
 | R5   | §2.2 both `uses:` at 40-hex SHAs with version comments (research/01); static pin check + plants; zizmor `unpinned-uses` |

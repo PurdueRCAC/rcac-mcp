@@ -6,7 +6,7 @@ appetite: small
 status: in_progress
 branch: ci/ci-workflow
 base: develop
-current_phase: P4
+current_phase: P2
 last_updated: '2026-10-17'
 phases:
 - id: P1
@@ -21,7 +21,7 @@ phases:
   verify: sh spec/ci-workflow/verify/gate.sh P1
 - id: P2
   name: The gate and mutants workflows, with AGENTS.md naming them, in one commit
-  status: done
+  status: in_progress
   satisfies:
   - R1
   - R2
@@ -36,11 +36,12 @@ phases:
   parallel: false
   hammerable: false
   hill: uphill
+  attempts: 1
   verify: sh spec/ci-workflow/verify/gate.sh P2
 - id: P3
   name: Local evidence - zero-finding lint, and the gate red at the right step for
     each plant
-  status: done
+  status: in_progress
   satisfies:
   - R9
   depends_on:
@@ -178,11 +179,27 @@ PLAN §2.2–§2.5.
 - **Verify:** `sh spec/ci-workflow/verify/gate.sh P2`. It runs P1's checks, then
   `static.py hygiene workflow agents controls` (31 plants rejected and the clean tree accepted),
   then actionlint + shellcheck and `zizmor` online (pin checks included) with zero findings. Then it replays the gate
-  job on the snapshot (7/7 green, `rcac_mcp` imported from the snapshot), replays the mutants job
+  job on the snapshot (9/9 green, `rcac_mcp` imported from the snapshot; the audit step reaches
+  the advisory service for real), replays the mutants job
   (green, every case killed), and replays the mutants job with `empty-cases` (red, "no mutation
   cases found").
 - **Touches:** `.github/workflows/ci.yml`, `.github/workflows/mutants.yml`, `AGENTS.md`,
   `issues/rename-to-cluster-mcp.md`.
+- **Amendment (2026-10-17, rebase onto `develop` `fb2d4dd`):** `develop` gained
+  `uv run python bin/audit_lock.py` in the recipe's `gate` (`stack-upgrade`) and
+  `CLUSTER_MCP_TEST_ERA=modern uv run pytest -q` in `verify` and the `gate` (`fb2d4dd`). Reopened:
+  `ci.yml`'s gate job takes both in the order `static.py`'s expected-step list gives (nine steps);
+  `AGENTS.md` § Packaging, § Testing, the repository map and the recipe's `audit` caveat say CI
+  runs them; `bin/audit_lock.py`'s docstring drops its "No CI workflow exists yet". GOAL carries
+  the moved-base clarification; PLAN §2.2 the new step list. Gate unchanged.
+- **Blocked (2026-10-17):** the gate's replay is red at step 3/9, `uv run pytest -q`: under uv
+  0.12.17, CI's pin, `tests/test_audit.py::test_audit_fails_closed_offline` fails in both eras
+  (441 passed, 1 failed). uv 0.12.x refuses an offline audit with its generic "Network connectivity
+  is disabled, but the requested data wasn't found in the cache" (still exit 2, fails closed), and
+  `bin/audit_lock.py` and the test expect uv 0.13's "requires network access and cannot be
+  performed in offline mode". 0.12.19, the newest 0.12, prints the same; 0.13.0 (2026-10-09) is
+  inside the 14-day cooldown until 2026-10-23. Every other step passes under 0.12.17 (online audit:
+  no advisories in 94 packages). Awaiting the foreman's ruling: the pin, or a fix on `develop`.
 
 ## Phase P3 — Local evidence
 **Satisfies:** R9 (a) and (d) · **Depends on:** P2
@@ -199,6 +216,9 @@ re-checked live by the gate. **R9 is graded by the orchestrator** (its evidence 
 - **Verify:** `sh spec/ci-workflow/verify/gate.sh P3`. It runs P2's checks, then the three red
   replays (each red at its step and naming its text), then `evidence.py local`.
 - **Touches:** `spec/ci-workflow/EVIDENCE.md`, `spec/ci-workflow/verify/evidence.py`.
+- **Amendment (2026-10-17, rebase onto `develop` `fb2d4dd`):** reopened to re-record the lint and
+  the local reds against the nine-step gate job; the hygiene reds now fail at step 9/9. Gate
+  unchanged.
 
 ## Phase P4 — Outward: a green gate run on the cycle branch head
 **Satisfies:** R9 (b); observes R1 and R2 on GitHub · **Depends on:** P3
@@ -219,7 +239,7 @@ green, and its id is recorded.
       `completed`/`success`, event `push`, branch `ci/ci-workflow`, path
       `.github/workflows/ci.yml`, `headSha` equal to the recorded commit, `attempt` 1 (or each
       re-run listed in `EVIDENCE.md` with its reason), and a job `gate` whose steps include `Run <cmd>` with `success` for
-      each of the seven commands. It also requires the recorded commit to be an ancestor of HEAD,
+      each of the nine commands. It also requires the recorded commit to be an ancestor of HEAD,
       with `git diff --name-only <commit> HEAD` touching only `spec/ci-workflow/`.
 - [ ] Record `## Green run` in `EVIDENCE.md`: run id, attempt, URL, commit (X below), branch, date.
 - [ ] Write `verify/evidence.py`'s `landing` mode: the profile ci row's read for HEAD

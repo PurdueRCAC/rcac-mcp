@@ -145,7 +145,7 @@ Top-level package `src/rcac_mcp/`:
 
 Five repo-level paths sit outside the package: **`bin/sandbox.sh`** — the throwaway-environment
 helper every CLI drive runs under (§ Factory → Throwaway environment); **`bin/audit_lock.py`** — the
-release gate's dependency audit (§ Factory → Release recipe);
+release gate's dependency audit, which CI also runs (§ Factory → Release recipe);
 **`bin/sdist_hygiene.py`** — the one definition of what a built sdist must not ship, run by the
 release recipe's `gate` and by CI (§ Packaging); **`.github/workflows/`** — `ci.yml`, the gate on
 every push and pull request, and `mutants.yml`, the mutation runner on demand (§ Conventions binds
@@ -412,8 +412,8 @@ import has no effect.
   `CLUSTER_MCP_ERA_LOG` set to a file, every in-process connect in the selected era appends
   `era=… version=… first=…` (the first request the server's `MethodLog` saw on that connection),
   which a gate reads to prove a pass ran in its era; a connect in an era chosen with `era=` is not
-  logged, since it does not exercise the selector. The profile's `verify` and the release
-  recipe's `gate` run the suite in both eras (`uv run pytest -q`, then
+  logged, since it does not exercise the selector. The profile's `verify`, the release recipe's
+  `gate` and CI, which mirrors both, run the suite in both eras (`uv run pytest -q`, then
   `CLUSTER_MCP_TEST_ERA=modern uv run pytest -q`), so neither era's contracts go unchecked between
   cycles; the mutation runner's children inherit both variables.
 - The harness keeps two rules:
@@ -496,15 +496,17 @@ import has no effect.
 - **The release gate audits the lock.** `bin/audit_lock.py` (stdlib; `uv audit` over the tree
   `uv.lock` resolves) fails the release recipe's `gate` when any locked package carries a known
   advisory, and when the advisory source cannot be reached (§ Factory → Release recipe, its `audit`
-  caveat). It needs the network, so the profile's `verify` does not run it.
+  caveat). It needs the network, so the profile's `verify` does not run it; CI, which mirrors the
+  gate, does (§ Conventions).
 - **The sdist must not ship `bin/`, `spec/`, `issues/`, `.security/`, or `tests/fixtures/`.**
   `[tool.hatch.build.targets.sdist]` excludes them, and `bin/sdist_hygiene.py`, which the release
   recipe's `gate` and CI both run, re-checks the built tarball — a `.security/` path in a published artifact would publish an inventory of unremediated
   weaknesses.
 - **CI runs the gate on every push and pull request.** `.github/workflows/ci.yml` runs the profile's
-  `setup` and `verify` and the release recipe's build checks for each push to any branch and each
-  pull request into `develop` or `main` (§ Conventions binds the step lists). There is **no publish
-  workflow and no published container image**, and the project is not on PyPI — users install from
+  `setup` and `verify` (the suite in both protocol eras) and the release recipe's dependency audit
+  and build checks for each push to any branch and each pull request into `develop` or `main`
+  (§ Conventions binds the step lists). There is **no publish workflow and no published container
+  image**, and the project is not on PyPI — users install from
   `git+https://github.com/purduercac/rcac-mcp`. The release recipe cuts a tag and a GitHub release
   and says so plainly.
 - A **container build does exist locally**: `Dockerfile` + `compose.yml` (+ `nginx-dev.conf` for the
@@ -641,7 +643,8 @@ release:
       network and fails closed without it: an unreachable advisory source, an audit that cannot run,
       or a summary covering fewer packages than the lock pins is red. There is no waiver: an
       advisory with no fixed release holds the release until a seed takes it up. The profile's
-      verify never runs it: phase gates stay offline-capable and deterministic.
+      verify never runs it: phase gates stay offline-capable and deterministic. CI runs it, as part
+      of its mirror of this gate (ci-mirror-no-index), on a runner with network.
     lock: >-
       uv.lock is tracked and pins the transitive tree a git+https install receives; a bump that
       leaves it stale ships a version the lock disagrees with. If anything besides pyproject.toml
