@@ -6,7 +6,7 @@ appetite: small
 status: in_progress
 branch: ci/ci-workflow
 base: develop
-current_phase: P3
+current_phase: P4
 last_updated: '2026-10-17'
 phases:
 - id: P1
@@ -40,7 +40,7 @@ phases:
 - id: P3
   name: Local evidence - zero-finding lint, and the gate red at the right step for
     each plant
-  status: pending
+  status: done
   satisfies:
   - R9
   depends_on:
@@ -189,12 +189,12 @@ PLAN §2.2–§2.5.
 **Goal:** `spec/ci-workflow/EVIDENCE.md` records the zero-finding lint and the local reds, each
 re-checked live by the gate. **R9 is graded by the orchestrator** (its evidence is under `spec/`).
 
-- [ ] Write `verify/evidence.py` with mode `local`. `EVIDENCE.md` must have `## Lint` naming
+- [x] Write `verify/evidence.py` with mode `local`. `EVIDENCE.md` must have `## Lint` naming
       `actionlint 1.7.12`, `shellcheck 0.11.0` and `zizmor 1.31.1` with their zero-finding output,
       and `## Local reds` holding the three red replay lines (`.security/planted.md`,
       `.agents/planted.md`, `planted red`) and the ten `killed` lines from `hygiene_mutants.py`.
       The prose is a record only: the gate re-runs every one of these checks itself.
-- [ ] Create `spec/ci-workflow/EVIDENCE.md`: paste the linters' versions and outputs, and the
+- [x] Create `spec/ci-workflow/EVIDENCE.md`: paste the linters' versions and outputs, and the
       replay and hygiene-mutants output from this run, dated.
 - **Verify:** `sh spec/ci-workflow/verify/gate.sh P3`. It runs P2's checks, then the three red
   replays (each red at its step and naming its text), then `evidence.py local`.
