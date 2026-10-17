@@ -6,12 +6,12 @@ appetite: small
 status: in_progress
 branch: ci/ci-workflow
 base: develop
-current_phase: P1
+current_phase: P2
 last_updated: '2026-10-17'
 phases:
 - id: P1
   name: One sdist-hygiene definition, run by the release recipe and tested for holes
-  status: pending
+  status: done
   satisfies:
   - R3
   depends_on: []
@@ -38,7 +38,8 @@ phases:
   hill: uphill
   verify: sh spec/ci-workflow/verify/gate.sh P2
 - id: P3
-  name: Local evidence - zero-finding lint, and the gate red at the right step for each plant
+  name: Local evidence - zero-finding lint, and the gate red at the right step for
+    each plant
   status: pending
   satisfies:
   - R9
@@ -60,7 +61,8 @@ phases:
   hill: uphill
   verify: sh spec/ci-workflow/verify/gate.sh P4
 - id: P5
-  name: 'Outward: a red gate run on a throwaway branch, the branch removed, and the deferral ledger'
+  name: 'Outward: a red gate run on a throwaway branch, the branch removed, and the
+    deferral ledger'
   status: pending
   satisfies:
   - R9
@@ -131,24 +133,24 @@ commit.
 **Goal:** the recipe's inline hygiene check becomes `bin/sdist_hygiene.py`, which the recipe runs
 and a unit-test module pins, shown non-hollow by planted mutants. Design: PLAN §2.1.
 
-- [ ] Add `bin/sdist_hygiene.py` from `research/prototypes/sdist_hygiene.py` (SPDX header, module
+- [x] Add `bin/sdist_hygiene.py` from `research/prototypes/sdist_hygiene.py` (SPDX header, module
       docstring as drafted).
-- [ ] Add `tests/test_sdist_hygiene.py` from `research/prototypes/sdist_hygiene_tests.py`
+- [x] Add `tests/test_sdist_hygiene.py` from `research/prototypes/sdist_hygiene_tests.py`
       (`@mark.unit` on every test). It loads the script by path with
       `importlib.util.spec_from_file_location`, builds tarballs in `tmp_path` with `tarfile`, and
       calls the functions and `main` in-process (`capsys` for stderr). Keep exactly the ids in
       `verify/ids.txt`, and parametrise `test_each_furniture_entry_is_named` over the tuple
       written in the test, **never** the script's `FURNITURE` (PLAN §2.1: that shape is hollow).
-- [ ] `AGENTS.md` § Factory → Release recipe: replace the inline `python3 -c` step (and its
+- [x] `AGENTS.md` § Factory → Release recipe: replace the inline `python3 -c` step (and its
       folded block) with `- uv run python bin/sdist_hygiene.py dist/`, under the comment in PLAN
       §2.5. In caveat `security-in-sdist`, "The hygiene check lists what the sdist does contain."
       becomes "The hygiene check names each offending path."
-- [ ] `AGENTS.md` § Packaging, sdist bullet: "`[tool.hatch.build.targets.sdist]` excludes them,
+- [x] `AGENTS.md` § Packaging, sdist bullet: "`[tool.hatch.build.targets.sdist]` excludes them,
       and `bin/sdist_hygiene.py`, which the release recipe's `gate` runs, re-checks the built
       tarball —". CI is added to this sentence in P2.
-- [ ] `AGENTS.md` § Testing: add the `tests/test_sdist_hygiene.py` entry (what it pins, in the
+- [x] `AGENTS.md` § Testing: add the `tests/test_sdist_hygiene.py` entry (what it pins, in the
       style of its siblings). Repository map: add `bin/sdist_hygiene.py` beside `bin/sandbox.sh`.
-- [ ] Run the profile's `verify`, then the gate.
+- [x] Run the profile's `verify`, then the gate.
 - **Verify:** `sh spec/ci-workflow/verify/gate.sh P1`. It runs `static.py hygiene`; the module
   under JUnit with all 19 `ids.txt` ids passed and nothing else red; and `hygiene_mutants.py`,
   all ten plants killed by their named ids with a `<failure>`.

@@ -143,9 +143,11 @@ Top-level package `src/rcac_mcp/`:
 | `tools/slurm.py` | Slurm tools: `sbatch`, `squeue`, `scancel`, `sacct`, `sinfo`, `scontrol_show_*`, plus RCAC's `slist`/`sfeatures`. |
 | `tools/rcac.py` | Purdue-specific: `myquota`, `storage_paths`, `jobinfo`/`jobcmd`/`jobenv`/`jobscript`, `showpartitions`, `average_wait`. |
 
-Three repo-level paths sit outside the package: **`bin/sandbox.sh`** — the throwaway-environment
+Four repo-level paths sit outside the package: **`bin/sandbox.sh`** — the throwaway-environment
 helper every CLI drive runs under (§ Factory → Throwaway environment); **`bin/audit_lock.py`** — the
-release gate's dependency audit (§ Factory → Release recipe); and **`spec/{slug}/`** — the
+release gate's dependency audit (§ Factory → Release recipe); **`bin/sdist_hygiene.py`** — the one
+definition of what a built sdist must not ship, run by the release recipe's `gate` (§ Packaging);
+and **`spec/{slug}/`** — the
 committed, dated per-feature design records (`GOAL.md`/`PLAN.md`/`TECH.md`/`REVIEW.md`) the
 factory produces and **retains on merge**. `AGENTS.md` remains ground truth; `spec/{slug}/` is a
 point-in-time record of intent. The factory's method and skills live in the operator's KB; see
@@ -356,6 +358,13 @@ import has no effect.
     connection, the positive control that shows the canary sees this uv's requests. The networked
     proofs belong to the release gate, not the suite.
   - `tests/test_mutations.py` (`unit`): the fast half of the mutation runner (below).
+  - `tests/test_sdist_hygiene.py` (`unit`): `member_violations`, `sdist_violations` and `main` of
+    `bin/sdist_hygiene.py`, loaded by path and fed tarballs built in `tmp_path`. Each furniture
+    entry is named, lookalikes (`binary.txt`, `specs/`, `tests/fixturesX/`) pass, a member outside
+    the root named after the tarball or with `..` is named, and a missing or unreadable sdist
+    fails. The furniture cases run over a tuple written in the test, never the script's own
+    `FURNITURE`, and `test_furniture_matches_the_recorded_set` pins the two together, so dropping
+    an entry is red.
 - **The rails, in `tests/conftest.py`**, beside the collection hook (which they never feed: no
   fixture adds a marker):
   - **The unit guard** makes `unit` mean something: for a `unit` test, `HOME` and `XDG_*` point
@@ -483,8 +492,8 @@ import has no effect.
   advisory, and when the advisory source cannot be reached (§ Factory → Release recipe, its `audit`
   caveat). It needs the network, so the profile's `verify` does not run it.
 - **The sdist must not ship `bin/`, `spec/`, `issues/`, `.security/`, or `tests/fixtures/`.**
-  `[tool.hatch.build.targets.sdist]` excludes them and the release recipe's `gate` re-checks the
-  tarball — a `.security/` path in a published artifact would publish an inventory of unremediated
+  `[tool.hatch.build.targets.sdist]` excludes them, and `bin/sdist_hygiene.py`, which the release
+  recipe's `gate` runs, re-checks the built tarball — a `.security/` path in a published artifact would publish an inventory of unremediated
   weaknesses.
 - There is **no CI, no publish workflow, and no published container image**, and the project is not
   on PyPI — users install from `git+https://github.com/purduercac/rcac-mcp`. The release recipe cuts
@@ -572,14 +581,8 @@ release:
     - uv build -o dist/
     - uvx twine check --strict dist/*
     # Sdist hygiene: fails on any repository furniture in a built sdist, or when there is no sdist.
-    - >-
-      python3 -c 'import glob, sys, tarfile;
-      bad = (".security", "spec", "issues", "tests/fixtures", "bin", ".agents");
-      ts = glob.glob("dist/*.tar.gz");
-      rel = [(t, (m.split("/", 1) + [""])[1]) for t in ts for m in tarfile.open(t).getnames()];
-      hits = [t + ": " + r for t, r in rel for d in bad if r == d or r.startswith(d + "/")];
-      [print(h, file=sys.stderr) for h in hits];
-      sys.exit(1 if hits or not ts else 0)'
+    # bin/sdist_hygiene.py is the one definition of the furniture set; nothing restates it.
+    - uv run python bin/sdist_hygiene.py dist/
   tag:
     message: "rcac-mcp {v}"
     signed: true
@@ -620,7 +623,7 @@ release:
       so uv build -o dist/ is equivalent; add --no-sources if a source override is ever added.
     security-in-sdist: >-
       A .security/ path in the sdist is a hard stop. Tell Geoffrey plainly: it would publish an
-      inventory of unremediated weaknesses. The hygiene check lists what the sdist does contain.
+      inventory of unremediated weaknesses. The hygiene check names each offending path.
     audit: >-
       bin/audit_lock.py runs uv audit over the tree uv.lock resolves (frozen, --no-config, --project
       naming this checkout, every UV_* outside a short allowlist dropped) and exits non-zero naming
