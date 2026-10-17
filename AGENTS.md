@@ -143,11 +143,13 @@ Top-level package `src/rcac_mcp/`:
 | `tools/slurm.py` | Slurm tools: `sbatch`, `squeue`, `scancel`, `sacct`, `sinfo`, `scontrol_show_*`, plus RCAC's `slist`/`sfeatures`. |
 | `tools/rcac.py` | Purdue-specific: `myquota`, `storage_paths`, `jobinfo`/`jobcmd`/`jobenv`/`jobscript`, `showpartitions`, `average_wait`. |
 
-Four repo-level paths sit outside the package: **`bin/sandbox.sh`** — the throwaway-environment
+Five repo-level paths sit outside the package: **`bin/sandbox.sh`** — the throwaway-environment
 helper every CLI drive runs under (§ Factory → Throwaway environment); **`bin/audit_lock.py`** — the
-release gate's dependency audit (§ Factory → Release recipe); **`bin/sdist_hygiene.py`** — the one
-definition of what a built sdist must not ship, run by the release recipe's `gate` (§ Packaging);
-and **`spec/{slug}/`** — the
+release gate's dependency audit (§ Factory → Release recipe);
+**`bin/sdist_hygiene.py`** — the one definition of what a built sdist must not ship, run by the
+release recipe's `gate` and by CI (§ Packaging); **`.github/workflows/`** — `ci.yml`, the gate on
+every push and pull request, and `mutants.yml`, the mutation runner on demand (§ Conventions binds
+`ci.yml` to the gate's step lists); and **`spec/{slug}/`** — the
 committed, dated per-feature design records (`GOAL.md`/`PLAN.md`/`TECH.md`/`REVIEW.md`) the
 factory produces and **retains on merge**. `AGENTS.md` remains ground truth; `spec/{slug}/` is a
 point-in-time record of intent. The factory's method and skills live in the operator's KB; see
@@ -441,7 +443,11 @@ import has no effect.
   targets. A reworded violation message also reads as a wrong reason until the case's `why` follows
   it. A red `test_mutation_anchor_applies[<case>]` in the suite means a change moved the code that
   case edits: re-plant the case against the new code in the same commit and re-run it. A retarget
-  or removal records its reason in the commit body.
+  or removal records its reason in the commit body. `.github/workflows/mutants.yml` runs every case
+  in `mutants.CASES` on demand (`workflow_dispatch`) and fails when a case survives or none are
+  found. It gates nothing: it never runs on push or pull request, and publish does not read it.
+  GitHub offers a manual run only for a workflow on the default branch, so it becomes dispatchable
+  at the release that first carries it to `main`.
 - **Recorded limitations.** The **issuer/audience swap** is undetectable while `ISSUER ==
   AUDIENCE` (both `rcac-mcp` in `token.py`): no token can tell a verifier that swapped the two from
   a correct one, so no test pins it. If the constants ever differ, add the case. File I/O is not
@@ -493,11 +499,14 @@ import has no effect.
   caveat). It needs the network, so the profile's `verify` does not run it.
 - **The sdist must not ship `bin/`, `spec/`, `issues/`, `.security/`, or `tests/fixtures/`.**
   `[tool.hatch.build.targets.sdist]` excludes them, and `bin/sdist_hygiene.py`, which the release
-  recipe's `gate` runs, re-checks the built tarball — a `.security/` path in a published artifact would publish an inventory of unremediated
+  recipe's `gate` and CI both run, re-checks the built tarball — a `.security/` path in a published artifact would publish an inventory of unremediated
   weaknesses.
-- There is **no CI, no publish workflow, and no published container image**, and the project is not
-  on PyPI — users install from `git+https://github.com/purduercac/rcac-mcp`. The release recipe cuts
-  a tag and a GitHub release and says so plainly. Wiring CI is a tracked seed.
+- **CI runs the gate on every push and pull request.** `.github/workflows/ci.yml` runs the profile's
+  `setup` and `verify` and the release recipe's build checks for each push to any branch and each
+  pull request into `develop` or `main` (§ Conventions binds the step lists). There is **no publish
+  workflow and no published container image**, and the project is not on PyPI — users install from
+  `git+https://github.com/purduercac/rcac-mcp`. The release recipe cuts a tag and a GitHub release
+  and says so plainly.
 - A **container build does exist locally**: `Dockerfile` + `compose.yml` (+ `nginx-dev.conf` for the
   TLS dev proxy), documented in `README.md` § *Docker Compose with TLS*. `compose.yml` pins the
   server's argv (`-t http -H 0.0.0.0 -p 8000 -a jwt`), so a change to a CLI flag name or default is
@@ -546,7 +555,7 @@ This repo is built by the spec-driven factory: GOAL → PLAN/TECH → build → 
 | commit categories | `[feature]` `[fix]` `[docs]` `[refactor]` `[test]` `[ci]` `[release]` `[harness]`: lowercase, an open set (coin one when it fits). Branch commits take the GOAL's `kind` verbatim; landing subjects use these categories |
 | branch commits | `[{kind}] Build {slug} P<n>`; no `Co-Authored-By:` trailer (existing repo convention) |
 | landing | `squash-local`: squash onto `origin/develop` in the cycle worktree as one `[category] What changed` commit, then push `develop` |
-| ci | none yet (the `ci-workflow` seed adds it) |
+| ci | `.github/workflows/ci.yml`, job `gate`: the one check publish reads. Before a `squash-local` landing, list the push runs of the cycle branch's head commit with `gh run list --workflow ci.yml --commit "$(git rev-parse HEAD)" -e push --json databaseId,attempt,status,conclusion`: at least one run must be listed, and every listed run, in its latest attempt, must be `completed` with conclusion `success`. A red, cancelled, missing or unfinished run is not green. Pull-request runs and `.github/workflows/mutants.yml` are never read |
 | setup | `uv sync --locked`: dependency refresh, run before any verify |
 | verify | `uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run pytest -q && bin/sandbox.sh uv run rcac-mcp --help`: the full gate. Phases narrow it; publish and release run all of it. It runs the suite in both protocol eras: the handshake era first, then revision 2026-07-28 (§ Testing) |
 | throwaway environment | `bin/sandbox.sh <cmd…>` (contract below) |
@@ -606,12 +615,13 @@ release:
     main-fast-forward: >-
       merge_into main is a fast-forward to the released develop commit, never a merge commit; main
       never takes a commit that is not on develop. If main cannot fast-forward, STOP.
-    no-ci-no-index: >-
-      There is no CI, no publish workflow, no published container image, and no PyPI project. A
-      release is a signed tag plus a GitHub release, and users install from
-      git+https://github.com/purduercac/rcac-mcp@{v}. The push fires no CI; say so rather than
-      waiting for a run. Until ci-workflow lands, this gate is the only thing between a bad build
-      and a permanent tag.
+    ci-mirror-no-index: >-
+      CI (`.github/workflows/ci.yml`) mirrors this gate on every push and on pull requests into
+      develop and main. The recipe keeps its own copy because a release can be cut before CI has
+      run on that commit: run the gate here, and never wait on CI in its place. Pushing develop and
+      main starts CI runs; the tag push starts none. There is no publish workflow, no published
+      container image, and no PyPI project. A release is a signed tag plus a GitHub release, and
+      users install from `git+https://github.com/purduercac/rcac-mcp@{v}`.
     pypi: >-
       A PyPI upload (uvx twine upload dist/*) is out of scope unless Geoffrey opts in for that
       release; a version string on a package index can never be reused.
@@ -959,12 +969,19 @@ What each mode means:
 
 - **Version is single-sourced from `pyproject.toml`**, the release recipe's `version.source` —
   `rcac_mcp.__version__` reads it via `importlib.metadata.version('rcac-mcp')`. Never hardcode a
-  version anywhere else. There is no CI yet; the workflow the `ci-workflow` seed adds is to
-  mirror the release recipe's `gate`.
+  version anywhere else.
 - **Supported Python is 3.14+** (`requires-python = ">=3.14"`). Do not add compatibility shims for
   older interpreters.
 - A change to `[project.dependencies]` or `[dependency-groups]` and its `uv lock` land in the same
   commit, and a CLI flag name or default moves `compose.yml` with it: § Packaging.
+- **CI mirrors the gate.** `.github/workflows/ci.yml`'s `gate` job runs the profile's `setup`, then
+  each command of its `verify`, then each release-recipe `gate` step that `verify` lacks: one step
+  per command, verbatim, in that order. A change to any of the three lists changes the workflow in
+  the same commit, and the reverse. The sdist furniture set lives only in `bin/sdist_hygiene.py`,
+  which the recipe and CI both run. The workflow's `python-version` is the floor of
+  `requires-python` and moves with it. Every `uses:` in `.github/workflows/` names a full commit
+  SHA, the version in a trailing comment; the token stays `permissions: contents: read`, and no
+  workflow reads a secret or writes outside its runner.
 - **Put logic where it belongs:** command execution behind the `Executor` protocol; identity →
   executor in middleware; per-request state in a `ContextVar`. **Reuse `cmdkit.app.exit_status`
   constants for return codes** — do not invent integer literals. A new CLI flag is an

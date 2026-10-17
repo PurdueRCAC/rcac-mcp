@@ -6,7 +6,7 @@ appetite: small
 status: in_progress
 branch: ci/ci-workflow
 base: develop
-current_phase: P2
+current_phase: P3
 last_updated: '2026-10-17'
 phases:
 - id: P1
@@ -21,7 +21,7 @@ phases:
   verify: sh spec/ci-workflow/verify/gate.sh P1
 - id: P2
   name: The gate and mutants workflows, with AGENTS.md naming them, in one commit
-  status: pending
+  status: done
   satisfies:
   - R1
   - R2
@@ -162,19 +162,19 @@ and a unit-test module pins, shown non-hollow by planted mutants. Design: PLAN �
 names them, in the same commit (§ Conventions; GOAL "same commit as the workflow"). Design:
 PLAN §2.2–§2.5.
 
-- [ ] Add `.github/workflows/ci.yml` and `.github/workflows/mutants.yml` from
+- [x] Add `.github/workflows/ci.yml` and `.github/workflows/mutants.yml` from
       `research/prototypes/` (pins after the review's cooldown ruling: checkout v7.0.1, setup-uv
       v10.2.0, uv 0.12.17), unchanged otherwise. If an action pin changes,
       `static.py`'s `PINS` and `research/01-facts.md` change with it, read again with `gh api` as
       recorded there.
-- [ ] `AGENTS.md`, exactly as PLAN §2.5: the profile `ci` row; the § Packaging CI bullet and the
+- [x] `AGENTS.md`, exactly as PLAN §2.5: the profile `ci` row; the § Packaging CI bullet and the
       sdist bullet's "and CI"; the caveat renamed to `ci-mirror-no-index` with its new text; the
       § Conventions "CI mirrors the gate" bullet, with the old sentence removed from the version
       bullet; § Testing's `mutants.yml` sentence; and the repository map's `.github/workflows/`.
-- [ ] `issues/rename-to-cluster-mcp.md`: "`no-ci-no-index` caveat" → "`ci-mirror-no-index`
+- [x] `issues/rename-to-cluster-mcp.md`: "`no-ci-no-index` caveat" → "`ci-mirror-no-index`
       caveat" (PLAN D2). No other seed is edited (GOAL non-goal).
-- [ ] `grep -rn 'no-ci-no-index' . --include='*.md'` outside `spec/` prints nothing.
-- [ ] Run the profile's `verify`, then the gate.
+- [x] `grep -rn 'no-ci-no-index' . --include='*.md'` outside `spec/` prints nothing.
+- [x] Run the profile's `verify`, then the gate.
 - **Verify:** `sh spec/ci-workflow/verify/gate.sh P2`. It runs P1's checks, then
   `static.py hygiene workflow agents controls` (31 plants rejected and the clean tree accepted),
   then actionlint + shellcheck and `zizmor` online (pin checks included) with zero findings. Then it replays the gate

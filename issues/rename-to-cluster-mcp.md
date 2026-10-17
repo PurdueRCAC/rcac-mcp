@@ -77,7 +77,7 @@ as site-specific rather than being renamed into false generality.
 - The GitHub repository rename (`purduercac/rcac-mcp` → …) is a separate, human decision with its own
   redirect behaviour; the promotion conversation should decide whether it is in scope. `AGENTS.md`
   § Factory → Release recipe hardcodes the repo URL (`post_verify`'s install probe, the
-  `no-ci-no-index` caveat).
+  `ci-mirror-no-index` caveat).
 - `SPDX-FileCopyrightText: 2025 Purdue University` headers are on every source file. Whether a
   generalized project keeps that attribution is a licensing question for the maintainer, not a
   mechanical substitution.

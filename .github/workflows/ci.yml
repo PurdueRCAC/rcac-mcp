@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: 2026 Purdue University
+# SPDX-License-Identifier: MIT
+#
+# The gate, on GitHub. Each run step is a command from the factory profile's `setup` and `verify`
+# or the release recipe's `gate` (AGENTS.md § Factory), in that order; § Conventions binds the
+# three lists. The `gate` job is the check publish reads before a squash-local landing.
+#
+# Least privilege: a read-only token, no secrets, no caches, no uploads, and every action pinned
+# to a full commit SHA (the trailing comment carries the readable version).
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  gate:
+    name: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: '0.12.17'
+          python-version: '3.14'
+          enable-cache: false
+      - run: uv sync --locked
+      - run: uv lock --check
+      - run: uv run pytest -q
+      - run: bin/sandbox.sh uv run rcac-mcp --help
+      - run: uv build -o dist/
+      - run: uvx twine check --strict dist/*
+      - run: uv run python bin/sdist_hygiene.py dist/
