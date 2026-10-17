@@ -56,7 +56,7 @@ of mirroring that gate, rather than `stack-upgrade` adding a step to a workflow 
 ([`spec/restore-test-coverage/`](spec/restore-test-coverage/)), so the suite is the real gate.*
 
 *Horizon: now · Depends on: restore-test-coverage (cleared: landed on `develop` 2026-10-16) · Refs: the release recipe's `gate` duplicates it locally until this exists*
-**Seed:** [`issues/ci-workflow.md`](issues/ci-workflow.md) · *status: unshaped*
+**Seed:** [`issues/ci-workflow.md`](issues/ci-workflow.md) · *status: adopted:ci-workflow*
 
 ## Every tool passes exactly what it was given
 

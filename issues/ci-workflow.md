@@ -1,5 +1,5 @@
 ---
-status: unshaped
+status: adopted:ci-workflow
 kind: ci
 appetite: small
 lane: public
