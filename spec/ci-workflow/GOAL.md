@@ -133,6 +133,30 @@ Shaping decisions taken on the foreman's guidance, 2026-10-16, for confirmation 
 - **Q:** Is the seed's draft lock check (`R3a`) in scope? — **A:** Yes, as part of R2: `uv lock
   --check` is already in the profile's `verify` (2026-10-16).
 
+Plan-stage rulings by the foreman, after the adversarial design review, 2026-10-17:
+
+- **Q:** Does R3 allow a shared check stricter than the recipe's old inline one? — **A:** Yes.
+  `bin/sdist_hygiene.py` also rejects members outside the sdist root, `..` and `./`-prefixed
+  members, and unreadable tarballs. The recipe and CI run the same file, so they still reject the
+  same set (2026-10-17).
+- **Q:** R9(b) says "the cycle branch head commit", but recording the run is itself a commit. —
+  **A:** The recorded green run may be on commit X, provided only `spec/ci-workflow/` changes after
+  X. Landing still needs a green run on the actual head, read with the profile `ci` row's command
+  after publish's push (2026-10-17).
+- **Q:** What if GitHub runs nothing for a commit? — **A:** GitHub skips the push run when the
+  pushed head commit's message carries `[skip ci]` (or a sibling), and skips pull-request runs on
+  a conflicted PR. Both fail safe under R7: a missing run is not green (2026-10-17).
+- **Q:** R6's dispatch before the next release? — **A:** GitHub offers `workflow_dispatch` only
+  for a workflow on the default branch, so `mutants.yml` is dispatchable from the release that
+  carries it to `main`. This is a recorded limitation, shown by local replay of the job until then
+  (2026-10-17).
+- **Q:** Which action and uv versions does R5 pin? — **A:** The newest release at least 14 days
+  old (a supply-chain cooldown): `actions/checkout` v7.0.1, `astral-sh/setup-uv` v10.2.0, uv
+  0.12.17 (2026-10-17).
+- **Q:** Renaming the `no-ci-no-index` caveat touches `issues/rename-to-cluster-mcp.md`. — **A:**
+  Accepted: a one-word pointer repair in the same commit, not a rewording of that seed
+  (2026-10-17). No workflow-lint seed this cycle (2026-10-17).
+
 ## Related materials
 
 - Seed: [`issues/ci-workflow.md`](../../issues/ci-workflow.md) (promoted 2026-10-16, `status:

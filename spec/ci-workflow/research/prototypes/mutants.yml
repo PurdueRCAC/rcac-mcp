@@ -1,0 +1,44 @@
+# SPDX-FileCopyrightText: 2026 Purdue University
+# SPDX-License-Identifier: MIT
+#
+# The mutation runner (AGENTS.md § Testing), on demand only. It gates nothing: it never runs on
+# push or pull request, and publish does not read it. GitHub offers a manual run only for a
+# workflow file that exists on the default branch, so this one becomes dispatchable at the
+# release that first carries it to main.
+name: Mutants
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  mutants:
+    name: mutants
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: '0.12.17'
+          python-version: '3.14'
+          enable-cache: false
+      - run: uv sync --locked
+      # Every case the file defines at this commit. An empty list would run only the runner's own
+      # controls and pass, so it fails here instead; the count check catches a lost report line.
+      - run: |
+          ids=$(uv run python -c "import sys; sys.path.insert(0, 'tests'); import mutants; print(*(c.id for c in mutants.CASES))")
+          test -n "$ids" || { echo 'no mutation cases found in tests/mutants.py' >&2; exit 1; }
+          read -ra cases <<< "$ids"
+          uv run python tests/mutants.py --self-check "${cases[@]}" | tee mutants-report.txt
+          killed=$(grep -c '^killed ' mutants-report.txt)
+          echo "killed ${killed} of ${#cases[@]} cases"
+          test "$killed" -eq "${#cases[@]}"
