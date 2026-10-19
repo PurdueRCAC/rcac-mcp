@@ -7,7 +7,7 @@ status: in_review
 branch: fix/safe-execution
 base: develop
 current_phase: done
-last_updated: '2026-10-18'
+last_updated: '2026-10-19'
 phases:
 - id: P1
   name: 'Launcher: one bash program per command, one wire per backend'
@@ -253,6 +253,9 @@ by execution under every local login shell; nothing calls it yet.
 - **Remediation amendment 3 (2026-10-18, review cycle 2).** Reopened with P2, P3 and P4 and landed
   in one commit with them; the classes, the choices, the pins and the gate retune are in P2's third
   note.
+- **Linux CI amendment (2026-10-19).** The first build amendment's reading of `exec 58>file` held
+  only for bash 3.2: bash 5 lets a profile take the parked descriptor, and the program now refuses
+  to run on a broken restore. The decision and its pins are in P7's Linux CI note.
 - **Verify:** frontmatter `P1.verify`.
 - **Touches:** `src/rcac_mcp/executor/{base,launch,__init__}.py`, `tests/{test_launch,conftest,test_hygiene,mutants,test_mutations}.py`, `AGENTS.md` (§3, § Testing, high-blast-radius list: add `src/rcac_mcp/executor/launch.py`).
 
@@ -1025,6 +1028,50 @@ contract or the heredoc writes; every planted violation is killed; every deferra
   a site script's text (probe F) is dropped. `research/01-cluster-shell.md` states what each
   redacted section showed. Redaction only removed: no finding, number or verdict changed. The
   branch is pushed as one commit on `develop`; its unredacted history stays in the local clone.
+- **Linux CI amendment (2026-10-19).** The first CI run of the pushed head (a9a2901; ubuntu-24.04,
+  bash 5.2, GNU coreutils) failed five tests that pass on macOS (bash 3.2, BSD tools). Two causes:
+  - **A non-portable test (four rows).** `test_profile_state_does_not_reach_the_launcher
+    [<local|ssh-bash>-<physical|cdpath>]` ran the external `pwd`, which is `-P` by default in GNU
+    coreutils and `-L` in BSD, so on Linux even the quiet home printed its physical path: the rows
+    could not see the `set -P` leak they guard. They now run `pwd -L`, which prints the `$PWD` the
+    launcher leaves (what `list_directory`'s fixed script reads) on both. The mutant
+    `prologue-physical-kept` is still killed on macOS; its Linux kill is recorded below.
+  - **A real defect on bash 5 (one row).** A startup file's `exec 58>file 59>file` replaces the
+    parked descriptors on bash 5; the 3.2 measured leaves any open descriptor above 9 as it was
+    (`exec 57<&0; exec 57<file` keeps the pipe), which is why P1's build amendment saw no loss. On
+    bash 5 the program then wrote its sentinel and the command's output into the profile's files,
+    and `separate` reported `-1002` "did not start (exit 3)": the command had run and exited 3.
+    That is the class a resubmitted `sbatch` makes costly, and a taken stdin (`exec 57<file`)
+    would have fed a write the wrong bytes. **Decision:** the program refuses to run on a broken
+    restore. The stage parks a second copy of each stream (`PARK`: 47–49 beside 57–59); the
+    prologue checks `[[ /dev/fd/5N -ef /dev/fd/4N ]]` for all three (a keyword, so no profile
+    function or alias reaches it) and, on any mismatch, runs nothing: it prints `TAKEN_MARK` on 49
+    and 59 (whichever is still the caller's stderr) and execs `/usr/bin/false`. `separate` turns a
+    result with no sentinel and the mark into `-1002` with `TAKEN_NOTE` ("the command did not
+    start: the login initialisation took a descriptor its streams were parked on, so it was not
+    run"). So the command is never reported as not started when it ran, and nothing it printed is
+    lost unnoted, because it prints nothing. Rejected: keeping the old "lost or noted" assertion
+    (it passed only because bash 3.2 cannot take the descriptor), and an "unknown whether it ran"
+    outcome (a new reserved code, and the not-started case would lose its meaning). Recorded
+    limits: a profile that takes a descriptor and its copy onto the same file defeats the check;
+    a system with neither `/dev/fd` nor `/proc/self/fd` would refuse every command, loudly.
+    **Pins, exact on both bashes:** `test_a_taken_parked_descriptor_runs_nothing[57|58|59|47|48|49]`
+    builds the takeover in the stage itself (each descriptor parked on a file), so it runs on any
+    bash: `('', TAKEN_NOTE, -1002)` and the command's marker file absent;
+    `test_a_profile_taking_a_parked_descriptor_is_not_run[<local|ssh-bash>-<streams|stdin>]` uses a
+    real profile and probes whether this `/bin/bash` lets a profile take an open descriptor 58: if
+    so, the same refusal and nothing run; if not (3.2), the whole result `('out\n', 'err\n', 3)`
+    with the caller's stdin. A unit separation row and the planted `taken-unnoted` pin `separate`.
+    Mutants: `parked-descriptor-unchecked` (no `-ef` check) and `parked-descriptor-unnoted`
+    (`separate` ignores the mark), both killed locally; `stdin-not-parked` and
+    `startup-not-parked` re-planted on the new `PARK`. The bootstrap grows by 18 bytes, so the
+    largest `ssh` program is now 98,154 bytes (AGENTS §2). AGENTS §3's `-1002`, the high-blast
+    list, § Testing and the `Executor.run` docstring say so (R10); PLAN §2.2's stage text is a
+    record and is left as written. `run_command`'s description already said −1002 means the
+    command never started, so the served surface has no delta.
+  - **The 70 skips on CI** are all "`/bin/<shell>` is not installed here" (the runner has no zsh,
+    tcsh, ksh or csh): zsh 40, tcsh 18, ksh 6, csh 6. None hides a Linux behaviour of the code;
+    the CI workflow is unchanged (a separate concern, routed by the foreman).
 - **Verify:** frontmatter `P7.verify`.
 - **Touches:** `AGENTS.md`, `issues/`, `ROADMAP.md`, any straggler text the sweep names.
 

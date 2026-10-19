@@ -464,6 +464,8 @@ import has no effect.
     shadowing functions and aliases, a `read`, background writers, a chatty `BASH_ENV`) gives results
     byte-identical to a quiet home's for an argv, `exit 4`, `kill $$`, `cat` with stdin and an empty
     script, locally and under sh, bash, zsh and tcsh login shells; a profile `exit 0` is `-1002`, a
+    taken parked descriptor is `-1002` with its own note and nothing run (on every bash, through a
+    stage that parks it elsewhere; through a real profile where the bash lets one take it), a
     hanging profile is `-1001` with empty output, a stream an rc file redirects is reported, and a
     command printing its own sentinel keeps it. A profile that aliases every word of the prologue
     (with `expand_aliases` on) or defines a function named `read` changes nothing either
@@ -981,8 +983,8 @@ The two leaf files at the end of this list are footguns, not human-gated paths.
 - **`executor/launch.py`** — what every command becomes: each argv element one quoted word, a
   `UserPath`'s leading `~` resolved inside the program, the start directory each backend names
   (`START_HOME`, or an absolute directory written into the program; never a positional
-  parameter, which a startup file can rewrite), the parked streams and the per-call sentinel that
-  keep login output out of results, the per-argument size check (`MAX_ARGUMENT`) on the bytes each
+  parameter, which a startup file can rewrite), the parked streams, the check that no startup file
+  took one (`TAKEN_MARK`), and the per-call sentinel that keep login output out of results, the per-argument size check (`MAX_ARGUMENT`) on the bytes each
   wire carries, the prologue's resets (`IFS`, `set -k`, `set -P`) and the function export that
   splits and globs nothing, `--norc` on every bash but the login one (`POSIX_STAGE`, `SCRIPT`) and
   the fixed scripts' `FIXED_RESET`, the read once the command has exited (to the end of the output;
@@ -1066,7 +1068,7 @@ The two leaf files at the end of this list are footguns, not human-gated paths.
   `TypeError`/`ValueError` before anything starts. The limit is Linux's 131,072 bytes for one argv
   element, its NUL included (`launch.MAX_ARGUMENT`), checked against the bytes that cross it: the
   program itself for a local or delegated launch, and over `ssh` the exec string (the bootstrap plus
-  the program's base64 word), so an `ssh` program fits up to 98,166 bytes.
+  the program's base64 word), so an `ssh` program fits up to 98,154 bytes.
 - **Every backend runs every command under the pinned interpreter**, `/bin/bash -l`, through the
   launcher (`executor/launch.py`): never the server's `$SHELL`, never the user's login shell. The
   login initialisation runs (so `module` and the site's tools behave the same for every user), and
@@ -1105,7 +1107,13 @@ The two leaf files at the end of this list are footguns, not human-gated paths.
     arriving at the timeout; reading stopped there` (`launch.LATE_NOTE`).
   - **`NOT_STARTED_EXIT_CODE = -1002`**: the login initialisation ended (a profile's `exit`, a failed
     launch) before the command's first line ran; stdout is empty and stderr is the fixed line
-    `cluster-mcp: the command did not start (exit N); the server log has the details`.
+    `cluster-mcp: the command did not start (exit N); the server log has the details`. Or a startup
+    file took a descriptor the launch parked the command's streams on (bash 5 lets a profile's
+    `exec 58>file` do so): the program checks each parked descriptor against a second copy, and on a
+    mismatch runs nothing, so stderr is instead `cluster-mcp: the command did not start: the login
+    initialisation took a descriptor its streams were parked on, so it was not run; the server log
+    has the details` (`launch.TAKEN_NOTE`). A command that ran is never reported as not started on
+    that account, and its output is never lost there unnoted.
 - **Nothing the login initialisation prints reaches a result, with one exception.** The launch
   parks the command's streams while the login shell initialises, and every program prints a
   per-call sentinel first; each backend's `run` passes its streams through `launch.separate`, which

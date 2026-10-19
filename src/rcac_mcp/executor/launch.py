@@ -22,8 +22,10 @@ shell otherwise). A fixed script also undoes the functions and shell options a p
 to it (`FIXED_RESET`).
 
 Nothing the login initialisation reads or prints reaches a result. The launch parks the caller's
-stdin, stdout and stderr on descriptors 57–59 and gives the login shell `/dev/null` for all three;
-the program's first line takes them back and its second prints a per-call sentinel on both streams.
+stdin, stdout and stderr on descriptors 57–59, with a copy on 47–49, and gives the login shell
+`/dev/null` for all three; the program's first lines take them back and the next prints a per-call
+sentinel on both streams. If a startup file took a parked descriptor, so that it no longer names
+the same file as its copy, the program runs nothing and the result says so (`TAKEN_NOTE`).
 `separate` drops each stream up to and including that sentinel, which also removes whatever a remote
 login shell printed before the program could park anything. The one exception: over SSH, a
 background job started by the remote login shell's own rc file, which runs before anything is
@@ -100,19 +102,32 @@ MAX_TIMEOUT: Final = 10_000_000.0
 HOME_WORD: Final = '"${HOME:?HOME is not set}"'
 
 # The launch's parking step: the caller's streams move to 57–59 (high, so a startup file's own
-# `exec 8>…` cannot take them) and the login shell gets /dev/null for all three.
-PARK: Final = 'exec 57<&0 58>&1 59>&2 </dev/null >/dev/null 2>&1'
+# `exec 8>…` cannot take them), with a second copy on 47–49 that the program checks them against,
+# and the login shell gets /dev/null for all three.
+PARK: Final = 'exec 57<&0 58>&1 59>&2 47<&0 48>&1 49>&2 </dev/null >/dev/null 2>&1'
+
+# What the program prints, in place of its sentinel, when the login initialisation took a parked
+# descriptor (`TAKEN_NOTE` replaces it in the result).
+TAKEN_MARK: Final = b'cluster-mcp:parked-descriptor-taken'
 
 # The program's first two lines: undo what a profile can leave behind (aliases, functions shadowing
 # the words used here, the field separator, shell options: `-k` would turn an argument shaped like an
 # assignment into one, `-P` would name the start directory by its physical path; traps), then take
 # the caller's streams back. Anything those commands print still goes to /dev/null. Bash reads a
 # whole line before running any of it, so the alias reset is a line of its own (quoted, so no alias
-# reaches it): an alias on any later word of a shared line would already have been expanded.
+# reaches it): an alias on any later word of a shared line would already have been expanded. A
+# startup file that took a parked descriptor (bash 5 lets a profile's `exec 58>file` replace it; the
+# 3.2 measured leaves an open descriptor above 9 as it was) leaves it naming another file than its
+# copy: the program then runs nothing, leaves `TAKEN_MARK` on whichever stderr is still the
+# caller's, and exits, so the command is reported as not started, which it was not, rather than run
+# with its streams lost or its stdin replaced.
 PROLOGUE: Final = ('\\unalias -a\n'
                    'unset -f builtin command exec set printf trap cd export declare compgen read; unset IFS; '
                    'set +euxvTkP +o errtrace +o posix; trap - EXIT ERR DEBUG RETURN; '
-                   'exec 0<&57 1>&58 2>&59 57<&- 58>&- 59>&-')
+                   '[[ /dev/fd/57 -ef /dev/fd/47 && /dev/fd/58 -ef /dev/fd/48 && /dev/fd/59 -ef /dev/fd/49 ]] || '
+                   f'{{ printf %s {TAKEN_MARK.decode()} >&49; '
+                   f'printf %s {TAKEN_MARK.decode()} >&59; exec /usr/bin/false; }}; '
+                   'exec 0<&57 1>&58 2>&59 47<&- 48>&- 49>&- 57<&- 58>&- 59>&-')
 
 # A script runs in a fresh non-login bash: it inherits the login environment and every function
 # (`module`), exported one name per line, so no field separator or glob option touches the list; its
@@ -144,6 +159,8 @@ BOOTSTRAP: Final = (f"exec {' '.join(POSIX_STAGE)} -c 'p=$(printf %s \"$1\" | ba
 FIXED_RESET: Final = 'unset -f cat cd chmod cp find mkdir printf sort; set +C +o pipefail\n'
 
 NOT_STARTED_NOTE: Final = 'cluster-mcp: the command did not start (exit {code}); the server log has the details\n'
+TAKEN_NOTE: Final = ('cluster-mcp: the command did not start: the login initialisation took a descriptor its '
+                     'streams were parked on, so it was not run; the server log has the details\n')
 REDIRECTED_NOTE: Final = ("cluster-mcp: the login initialisation redirected the command's {stream}; "
                           'it was not captured\n')
 HELD_NOTE: Final = ('cluster-mcp: the command exited, but something left running held its output open; '
@@ -239,7 +256,8 @@ def separate(out: bytes, err: bytes, code: int, sentinel: bytes, note: bytes = b
 
     Each stream is cut after the first occurrence of the sentinel. With no sentinel on either
     stream the command never started: a timeout stays an empty timeout; anything else becomes
-    `NOT_STARTED_EXIT_CODE` with a fixed note on stderr (the dropped stderr goes to the server log).
+    `NOT_STARTED_EXIT_CODE` with a fixed note on stderr (the dropped stderr goes to the server log),
+    `TAKEN_NOTE` when the program refused to run because a parked descriptor was taken.
     A sentinel on one stream only means the login initialisation redirected the other: that stream
     is empty and a note naming it is appended to stderr. `note`, the wire's own word on how the read
     ended (`HELD_NOTE`, `LATE_NOTE`), always ends stderr.
@@ -251,6 +269,8 @@ def separate(out: bytes, err: bytes, code: int, sentinel: bytes, note: bytes = b
         if code == TIMEOUT_EXIT_CODE:
             return b'', note, code
         log.warning('command did not start (exit %s); its stderr ended: %r', code, err[-4096:])
+        if TAKEN_MARK in err:
+            return b'', TAKEN_NOTE.encode() + note, NOT_STARTED_EXIT_CODE
         return b'', NOT_STARTED_NOTE.format(code=code).encode() + note, NOT_STARTED_EXIT_CODE
     notes = b''
     for stream, kept in (('stdout', kept_out), ('stderr', kept_err)):

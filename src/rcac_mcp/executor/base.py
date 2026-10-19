@@ -104,7 +104,8 @@ class Executor(Protocol):
             as it stopped, and `exit_code == TIMEOUT_EXIT_CODE` (−1001); output still arriving
             `launch.GRACE` past the deadline from a command that has exited ends the call there too,
             as −1001, with a note naming the command's own status. No backend raises on a timeout.
-            A command that never began (the login initialisation ended first) returns
+            A command that never began (the login initialisation ended first, or took a
+            descriptor the command's streams were parked on, so the program ran nothing) returns
             `NOT_STARTED_EXIT_CODE` (−1002); one whose start is announced late, behind a chatty rc
             file on a slow link, has begun. A command killed by a signal reports −N (or 128+N from
             a shell).

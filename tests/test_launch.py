@@ -37,6 +37,10 @@ import pytest
 from rcac_mcp.executor import NOT_STARTED_EXIT_CODE, TIMEOUT_EXIT_CODE, UserPath
 from rcac_mcp.executor import launch
 
+TAKEN_MARK = b'cluster-mcp:parked-descriptor-taken'
+TAKEN_NOTE = (b'cluster-mcp: the command did not start: the login initialisation took a descriptor its streams '
+              b'were parked on, so it was not run; the server log has the details\n')
+
 SANDBOX = Path(__file__).resolve().parent.parent / 'bin' / 'sandbox.sh'
 SYSTEM_PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
 
@@ -44,7 +48,10 @@ SYSTEM_PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
 PROLOGUE = ('\\unalias -a\n'
             'unset -f builtin command exec set printf trap cd export declare compgen read; unset IFS; '
             'set +euxvTkP +o errtrace +o posix; trap - EXIT ERR DEBUG RETURN; '
-            'exec 0<&57 1>&58 2>&59 57<&- 58>&- 59>&-')
+            '[[ /dev/fd/57 -ef /dev/fd/47 && /dev/fd/58 -ef /dev/fd/48 && /dev/fd/59 -ef /dev/fd/49 ]] || '
+            '{ printf %s cluster-mcp:parked-descriptor-taken >&49; '
+            'printf %s cluster-mcp:parked-descriptor-taken >&59; exec /usr/bin/false; }; '
+            'exec 0<&57 1>&58 2>&59 47<&- 48>&- 49>&- 57<&- 58>&- 59>&-')
 SENTINEL_LINE = re.compile(r'printf %s%s ([0-9a-f]{16}) ([0-9a-f]{16}); printf %s%s \1 \2 >&2\n')
 HOME_LINE = 'command cd -- "${HOME:?HOME is not set}" || exec /usr/bin/false\n'
 # A start of 'home' resolves through $HOME; any other is an absolute path written into the program.
@@ -56,9 +63,10 @@ def start_line(start: str) -> str:
 SCRIPT_PREFIX = ('while IFS= read -r cluster_mcp_fn; do export -f -- "$cluster_mcp_fn"; '
                  'done < <(compgen -A function); unset cluster_mcp_fn; BASH_ENV= ENV= exec /bin/bash --norc -c -- ')
 STAGE_ARGV = ['/bin/bash', '--norc', '--posix', '-c',
-              'exec 57<&0 58>&1 59>&2 </dev/null >/dev/null 2>&1 && exec /bin/bash -l -c -- "$1"', 'cluster-mcp']
+              'exec 57<&0 58>&1 59>&2 47<&0 48>&1 49>&2 </dev/null >/dev/null 2>&1 && exec /bin/bash -l -c -- "$1"',
+              'cluster-mcp']
 BOOTSTRAP_PREFIX = ("exec /bin/bash --norc --posix -c 'p=$(printf %s \"$1\" | base64 -d && printf .) && "
-                    "exec 57<&0 58>&1 59>&2 </dev/null >/dev/null 2>&1 && "
+                    "exec 57<&0 58>&1 59>&2 47<&0 48>&1 49>&2 </dev/null >/dev/null 2>&1 && "
                     "exec /bin/bash -l -c -- \"${p%.}\"' cluster-mcp ")
 BASE64 = re.compile(r'[A-Za-z0-9+/]*={0,2}')
 
@@ -202,6 +210,8 @@ def separation_violations(raw: tuple[bytes, bytes, int], sentinel: bytes,
                 found.append(f'a timeout before the sentinel returned {result!r}, not empty output and the marker')
             return found
         note = f'cluster-mcp: the command did not start (exit {code}); the server log has the details\n'.encode()
+        if TAKEN_MARK in err:
+            note = TAKEN_NOTE
         if got_code != NOT_STARTED_EXIT_CODE:
             found.append(f'the command did not start, but the exit code is {got_code}, not {NOT_STARTED_EXIT_CODE}')
         if (got_out, got_err) != (b'', note):
@@ -448,6 +458,7 @@ SEPARATIONS = [
     pytest.param((S + b'part', S, TIMEOUT_EXIT_CODE), id='timeout-after-start'),
     pytest.param((b'noise', b'startup error\n', 0), id='not-started'),
     pytest.param((b'', b'', 127), id='not-started-127'),
+    pytest.param((b'noise', b'profile noise\n' + TAKEN_MARK + TAKEN_MARK, 1), id='parked-descriptor-taken'),
     pytest.param((b'noise', b'', TIMEOUT_EXIT_CODE), id='timeout-before-start'),
     pytest.param((b'noise', S + b'err\n', 0), id='stdout-redirected'),
     pytest.param((S + b'out\n', b'noise', 0), id='stderr-redirected'),
@@ -484,6 +495,10 @@ def _note_dropped(out: bytes, err: bytes, code: int, sentinel: bytes) -> tuple[b
     return (out.partition(sentinel)[2], err.partition(sentinel)[2], code)
 
 
+def _taken_unnoted(out: bytes, err: bytes, code: int, sentinel: bytes) -> tuple[bytes, bytes, int]:
+    return launch.separate(out, err.replace(TAKEN_MARK, b''), code, sentinel)
+
+
 def _timeout_as_not_started(out: bytes, err: bytes, code: int, sentinel: bytes) -> tuple[bytes, bytes, int]:
     return launch.separate(out, err, 0 if code == TIMEOUT_EXIT_CODE else code, sentinel)
 
@@ -494,6 +509,7 @@ def _timeout_as_not_started(out: bytes, err: bytes, code: int, sentinel: bytes) 
     pytest.param(_last_cut, (S + b'a' + S + b'b', S, 0), "stdout is b'b', not", id='last-occurrence'),
     pytest.param(_status_kept, (b'', b'', 0), 'did not start, but the exit code is 0', id='status-kept'),
     pytest.param(_note_dropped, (b'noise', S + b'err', 0), 'no note names it', id='note-dropped'),
+    pytest.param(_taken_unnoted, (b'', TAKEN_MARK, 1), 'did not start, but the result carries', id='taken-unnoted'),
     pytest.param(_timeout_as_not_started, (b'', b'', TIMEOUT_EXIT_CODE), 'a timeout before the sentinel',
                  id='timeout-misread'),
 ])
@@ -989,10 +1005,12 @@ STATES = {
                      "mod?x() { :; }\n", 'greet; echo err >&2; exit 4', None, (b'greeted\n', b'err\n', 4)),
     # `set -k`: an argument shaped like an assignment would become one for the command's environment.
     'keyword': ('set -k\n', ['printf', '%s\\n', 'b=c', 'x'], None, (b'b=c\nx\n', b'', 0)),
-    # `set -P`: the start directory would be named through its physical path.
-    'physical': ('set -P\n', ['pwd'], 'home', None),
+    # `set -P`: the start directory would be named through its physical path. `pwd -L` prints the
+    # `$PWD` the launcher leaves (what a fixed script such as `list_directory`'s reads); a bare `pwd`
+    # is `-P` in GNU coreutils and `-L` in BSD, so it would name the physical path on Linux anyway.
+    'physical': ('set -P\n', ['pwd', '-L'], 'home', None),
     # CDPATH: a relative cwd must stay relative to the start, silently.
-    'cdpath': ('export CDPATH=/:/tmp\n', ['pwd'], 'home', None),
+    'cdpath': ('export CDPATH=/:/tmp\n', ['pwd', '-L'], 'home', None),
     # POSIXLY_CORRECT: the launcher's own lines run outside POSIX mode.
     'posixly-correct': ('export POSIXLY_CORRECT=1\n', 'greet; echo err >&2; exit 4', None, (b'greeted\n', b'err\n', 4)),
 }
@@ -1085,14 +1103,55 @@ def test_a_redirected_stream_is_reported(redirect: str, want: tuple[bytes, bytes
     assert result == want, f'a redirected stream was lost without a note: {result!r}'
 
 
+# A command whose result shows whether it ran: it leaves a file, copies its stdin to stdout, prints
+# on stderr and exits 3.
+RAN = 'touch "$HOME/ran"; cat; echo err >&2; exit 3'
+# How the launch's stage parks each descriptor.
+PARKED = {'57': '57<&0', '58': '58>&1', '59': '59>&2', '47': '47<&0', '48': '48>&1', '49': '49>&2'}
+
+
 @pytest.mark.integration
-def test_a_profile_reusing_a_parked_descriptor_loses_nothing_silently(home: Path) -> None:
-    (home / '.bash_profile').write_text('exec 58>"$HOME/taken" 59>"$HOME/taken too"\n')
-    out, err, code = run_on('local', 'echo out; echo err >&2; exit 3', home)
-    for stream, got, want in (('stdout', out, b'out\n'), ('stderr', err, b'err\n')):
-        noted = REDIRECTED.format(stream).encode() in err
-        assert got.startswith(want) or noted, f'{stream} was lost without a note: {out!r}, {err!r}'
-    assert code == 3, code
+@pytest.mark.parametrize('fd', PARKED)
+def test_a_taken_parked_descriptor_runs_nothing(fd: str, home: Path) -> None:
+    # The launch's own stage, with one parked descriptor naming another file: what a startup file
+    # that takes it leaves behind, on any bash (one that keeps a profile's `exec 58>…` or not).
+    assert launch.STAGE.count(PARKED[fd]) == 1, f'descriptor {fd} is not parked by the stage'
+    stage = launch.STAGE.replace(PARKED[fd], f'{fd}<>"$2"')
+    prog, sentinel = launch.program(RAN)
+    argv = [*launch.POSIX_STAGE, '-c', stage, 'cluster-mcp', prog, str(home / 'elsewhere')]
+    out, err, code, note = _sandboxed(_environment(home) + argv, b'out\n')
+    result = launch.separate(out, err, code, sentinel, note)
+    assert result == (b'', TAKEN_NOTE, NOT_STARTED_EXIT_CODE), f'descriptor {fd} taken: the result is {result!r}'
+    assert not (home / 'ran').exists(), f'descriptor {fd} taken: the command ran'
+
+
+def _keeps_a_profile_takeover(tmp_path: Path) -> bool:
+    """Whether this /bin/bash lets a login profile's `exec 58>file` replace an open descriptor 58."""
+    probe = (tmp_path / 'takeover-probe').resolve()
+    probe.mkdir()
+    (probe / '.bash_profile').write_text('exec 58>"$HOME/kept"\n')
+    stage = 'exec 58>/dev/null && exec /bin/bash -l -c "echo kept >&58"'
+    subprocess.run([str(SANDBOX), 'env', '-i', f'HOME={probe}', f'PATH={SYSTEM_PATH}', '/bin/bash', '--norc',
+                    '--posix', '-c', stage], stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
+    return (probe / 'kept').exists() and (probe / 'kept').read_bytes() == b'kept\n'
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('taken', ['streams', 'stdin'])
+@pytest.mark.parametrize('wire', ['local', 'ssh-bash'])
+def test_a_profile_taking_a_parked_descriptor_is_not_run(wire: str, taken: str, home: Path, tmp_path: Path) -> None:
+    profile = {'streams': 'exec 58>"$HOME/taken" 59>"$HOME/taken too"\n', 'stdin': 'exec 57<"$HOME/decoy"\n'}
+    (home / 'decoy').write_bytes(b'not the stdin sent\n')
+    (home / '.bash_profile').write_text(profile[taken])
+    result = run_on(wire, RAN, home, stdin=b'out\n')
+    if _keeps_a_profile_takeover(tmp_path):
+        # The descriptor was taken: the program runs nothing and says why.
+        assert result == (b'', TAKEN_NOTE, NOT_STARTED_EXIT_CODE), f'{wire}-{taken}: the result is {result!r}'
+        assert not (home / 'ran').exists(), f'{wire}-{taken}: reported as not started, but the command ran'
+    else:
+        # This bash kept the parked descriptor: the command runs with the caller's streams, whole.
+        assert result == (b'out\n', b'err\n', 3), f'{wire}-{taken}: the result is {result!r}'
+        assert (home / 'ran').exists(), f'{wire}-{taken}: the command did not run'
 
 
 @pytest.mark.integration
