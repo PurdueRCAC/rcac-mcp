@@ -3,10 +3,10 @@ slug: ci-workflow
 title: Run the gate on GitHub on every push
 kind: ci
 appetite: small
-status: in_progress
+status: in_review
 branch: ci/ci-workflow
 base: develop
-current_phase: P5
+current_phase: done
 last_updated: '2026-10-18'
 phases:
 - id: P1
@@ -64,7 +64,7 @@ phases:
 - id: P5
   name: 'Outward: a red gate run on a throwaway branch, the branch removed, and the
     deferral ledger'
-  status: in_progress
+  status: done
   satisfies:
   - R9
   depends_on:
@@ -286,16 +286,16 @@ neither `develop` nor `main`.
       never merged.") and commit `[ci] Throwaway: plant .agents/ to show the gate red`. Record
       the plant SHA.
 - [x] **Push 2 (Geoffrey's go):** `git -C "$TMPDIR/ci-workflow-red" push origin ci/ci-workflow-red`.
-- [ ] Read: `gh run list -R purduercac/rcac-mcp -w ci.yml -b ci/ci-workflow-red -c <plant sha> --json databaseId,url,status,conclusion`,
+- [x] Read: `gh run list -R purduercac/rcac-mcp -w ci.yml -b ci/ci-workflow-red -c <plant sha> --json databaseId,url,status,conclusion`,
       `gh run watch <id> -R purduercac/rcac-mcp` (a non-zero exit is expected), and
       `gh run view <id> -R purduercac/rcac-mcp --log-failed`, which must show
       `.agents/planted.md` under the step `Run uv run python bin/sdist_hygiene.py dist/`. A red at
       any other step is a failed proof: investigate, never record it.
-- [ ] **Push 3 (Geoffrey's go):** `git push origin --delete ci/ci-workflow-red`. Then
+- [x] **Push 3 (Geoffrey's go):** `git push origin --delete ci/ci-workflow-red`. Then
       `gh api repos/purduercac/rcac-mcp/branches/ci/ci-workflow-red` answers 404 (not an empty
       `ls-remote`, which an SSH failure also produces). Then
       `git worktree remove "$TMPDIR/ci-workflow-red"` and `git branch -D ci/ci-workflow-red`.
-- [ ] Extend `verify/evidence.py` with modes `red` and `ledger`.
+- [x] Extend `verify/evidence.py` with modes `red` and `ledger`.
   - `red` reads `## Red run` (`run:`, `plant:`). It requires `completed`/`failure`, branch
     `ci/ci-workflow-red`, `headSha` equal to the plant, and the hygiene step as the first failed
     step, with every earlier `Run …` step `success`. `--log-failed` must contain
@@ -306,15 +306,15 @@ neither `develop` nor `main`.
     show `ahead_by` ≥ 1, so the plant is in neither branch.
   - `ledger`: every `issues/*.md` path named in `PLAN.md` or `TECH.md` exists and has a
     `ROADMAP.md` entry.
-- [ ] **Deferral ledger.** Walk P1–P5 and PLAN §5 for "defer", "follow-up", "known limitation",
+- [x] **Deferral ledger.** Walk P1–P5 and PLAN §5 for "defer", "follow-up", "known limitation",
       "not this cycle" and "out of scope". Each such item needs an `issues/{slug}.md` (from the KB
       `ISSUE.md` template, `status: unshaped`) plus a `ROADMAP.md` entry, or a statement in PLAN
       that it is not deferred work. At planning time there is none: PLAN §5 records the
       workflow-lint gap and `uvx twine` as accepted risks (no seed, foreman's ruling 2026-10-17)
       and the mutants dispatch limit as self-resolving at the release.
-- [ ] Record `## Red run` in `EVIDENCE.md`: run id, URL, plant SHA, failing step, log line, and
+- [x] Record `## Red run` in `EVIDENCE.md`: run id, URL, plant SHA, failing step, log line, and
       the removal (the 404 and the date).
-- [ ] **Landing hand-off** (in the phase report and `EVIDENCE.md`): the ci rule this cycle
+- [x] **Landing hand-off** (in the phase report and `EVIDENCE.md`): the ci rule this cycle
       installs needs a green run on the *actual* head, which P4–P5's evidence commits moved past
       X. Publish makes that push (`code-publish` 1.4, `squash-local`: **push 4, its own go**) and
       then runs `sh spec/ci-workflow/verify/gate.sh landing`. Not green is a STOP.
@@ -329,6 +329,19 @@ neither `develop` nor `main`.
   `git push origin <plant>:refs/heads/ci/ci-workflow-red` (the foreman's standing approval for
   this effort). Its `ci.yml` push run is `39189454397`. Run B reads it, records `## Red run`,
   deletes the branch (push 3) and removes the worktree.
+- **Amendment (2026-10-18, run B):** run `39189454397`, attempt 1, event `push`, at the plant:
+  completed/failure, job `gate` red first and only at `Run uv run python bin/sdist_hygiene.py
+  dist/`, every earlier step `success`, its failed log naming `.agents/planted.md`. Branch deleted
+  (push 3, the foreman's standing approval for a throwaway `ci/*-red` branch): `ls-remote --exit-code`
+  exits 2 (no ref) and the branches API answers 404; the throwaway worktree removed, and the local
+  plant branch deleted after checking it pointed at the plant. `red` takes the hygiene step and the
+  planted path from `gate.sh`'s `agents-furniture` replay rather than restating them, and also
+  requires the record's `- failing step:` and `- log:` lines to match GitHub; shown red on a wrong
+  plant SHA, a wrong recorded failing step, a gate expecting another step, the green run's id, and
+  a wrong log line, each plant restored and `cmp`-checked. `ledger` asserts it found at least one
+  `issues/<name>.md` (shown red on an unseeded name). Deferral walk: P1–P5 and PLAN §5 hold no
+  deferred work (the §3 "out of scope" is the untouched coupled core; §5's items are accepted risks
+  or self-resolving, as recorded), so no seed is added.
 
 ---
 

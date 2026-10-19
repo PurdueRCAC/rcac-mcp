@@ -166,3 +166,62 @@ Job `gate`, conclusion `success`; its run steps, each `success`: `uv sync --lock
 --check`, `uv run pytest -q`, `CLUSTER_MCP_TEST_ERA=modern uv run pytest -q`, `bin/sandbox.sh uv
 run rcac-mcp --help`, `uv run python bin/audit_lock.py`, `uv build -o dist/`, `uvx twine check
 --strict dist/*`, `uv run python bin/sdist_hygiene.py dist/`.
+
+## Red run
+
+R9(c), and R3 red on GitHub: a throwaway branch `ci/ci-workflow-red` carried one commit on top of
+the green run's commit X, adding only `.agents/planted.md`. Its push ran `ci.yml`'s `gate` job
+red at the hygiene step, naming the planted path, with every earlier step green. The branch was
+then deleted from `origin`, and the plant is in neither `develop` nor `main` (`verify/evidence.py
+red` re-reads all of this from GitHub).
+
+Recorded: 2026-10-18
+
+- run: 39189454397
+- attempt: 1
+- url: https://github.com/PurdueRCAC/rcac-mcp/actions/runs/39189454397
+- plant: 5c977fad938f7e5cc010714f6d064a47e9716e55
+- branch: ci/ci-workflow-red
+- failing step: Run uv run python bin/sdist_hygiene.py dist/
+- log: dist/rcac_mcp-0.1.1.tar.gz: .agents/planted.md
+- removed: 2026-10-18 (`git push origin --delete ci/ci-workflow-red`; the branches API answers 404)
+- date: 2026-10-18 (completed 2026-10-19T02:21:24Z)
+
+```
+$ gh run list -R purduercac/rcac-mcp -w ci.yml -b ci/ci-workflow-red -c 5c977fad938f7e5cc010714f6d064a47e9716e55 --json databaseId,url,status,conclusion,attempt,event,headSha
+[{"attempt":1,"conclusion":"failure","databaseId":39189454397,"event":"push","headSha":"5c977fad938f7e5cc010714f6d064a47e9716e55","status":"completed","url":"https://github.com/PurdueRCAC/rcac-mcp/actions/runs/39189454397"}]
+$ gh run view 39189454397 -R purduercac/rcac-mcp --log-failed
+gate	Run uv run python bin/sdist_hygiene.py dist/	2026-10-19T02:21:20.5801042Z ##[group]Run uv run python bin/sdist_hygiene.py dist/
+gate	Run uv run python bin/sdist_hygiene.py dist/	2026-10-19T02:21:20.5801483Z uv run python bin/sdist_hygiene.py dist/
+gate	Run uv run python bin/sdist_hygiene.py dist/	2026-10-19T02:21:20.5864213Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+gate	Run uv run python bin/sdist_hygiene.py dist/	2026-10-19T02:21:20.5864573Z env:
+gate	Run uv run python bin/sdist_hygiene.py dist/	2026-10-19T02:21:20.5864862Z   UV_PYTHON_INSTALL_DIR: /home/runner/work/_temp/uv-python-dir
+gate	Run uv run python bin/sdist_hygiene.py dist/	2026-10-19T02:21:20.5865225Z   UV_PYTHON: 3.14
+gate	Run uv run python bin/sdist_hygiene.py dist/	2026-10-19T02:21:20.5865447Z ##[endgroup]
+gate	Run uv run python bin/sdist_hygiene.py dist/	2026-10-19T02:21:20.6413244Z dist/rcac_mcp-0.1.1.tar.gz: .agents/planted.md
+gate	Run uv run python bin/sdist_hygiene.py dist/	2026-10-19T02:21:20.6413935Z sdist hygiene: 1 problem(s); see above
+gate	Run uv run python bin/sdist_hygiene.py dist/	2026-10-19T02:21:20.6481273Z ##[error]Process completed with exit code 1.
+$ gh api repos/purduercac/rcac-mcp/commits/5c977fad938f7e5cc010714f6d064a47e9716e55 --jq '{parents:[.parents[].sha], files:[.files[]|{filename,status}]}'
+{"files":[{"filename":".agents/planted.md","status":"added"}],"parents":["ffb03b51e6b549f7143267d2c202914b6d2eed4a"]}
+$ git push origin --delete ci/ci-workflow-red
+ - [deleted]         ci/ci-workflow-red
+$ gh api repos/purduercac/rcac-mcp/branches/ci/ci-workflow-red
+gh: Branch not found (HTTP 404)
+$ gh api repos/purduercac/rcac-mcp/compare/develop...5c977fad938f7e5cc010714f6d064a47e9716e55 --jq '{status,ahead_by,behind_by}'
+{"ahead_by":10,"behind_by":0,"status":"ahead"}
+$ gh api repos/purduercac/rcac-mcp/compare/main...5c977fad938f7e5cc010714f6d064a47e9716e55 --jq '{status,ahead_by,behind_by}'
+{"ahead_by":11,"behind_by":0,"status":"ahead"}
+```
+
+Job `gate`, conclusion `failure`. Its steps through `Run uvx twine check --strict dist/*` are each
+`success` (the eight run steps before the hygiene step among them); the first and only failed
+step is `Run uv run python bin/sdist_hygiene.py dist/`; the later post steps were skipped or
+succeeded. The log's ANSI colour codes are dropped above. The throwaway worktree (outside the
+cycle worktree) and the local `ci/ci-workflow-red` branch, which pointed at the plant, were
+removed the same day.
+
+## Landing hand-off
+
+The ci rule this cycle installs needs a green push run on the *actual* head, and P4–P5's evidence
+commits moved the branch past X. Publish makes that push (`code-publish` 1.4, `squash-local`, its
+own go) and then runs `sh spec/ci-workflow/verify/gate.sh landing`; not green is a STOP.

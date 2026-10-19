@@ -21,6 +21,16 @@ Modes:
           attempt 1 (or each later attempt listed as `- re-run N: <reason>`), with a job `gate`
           whose `Run <cmd>` step succeeded for every run step of ci.yml's gate job. The recorded
           commit is an ancestor of HEAD, and HEAD differs from it only under spec/ci-workflow/.
+  red     `## Red run` (`- run:`, `- plant:`, `- failing step:`, `- log:`, `- removed:`): GitHub's
+          record of that run is completed/failure, event push, branch ci/ci-workflow-red, workflow
+          file ci.yml, at the plant, in attempt 1 (or each later attempt listed). In its job `gate`
+          every step before the first failed one succeeded, every run step of ci.yml before the
+          hygiene step among them, and the first failed step is the hygiene step, the one gate.sh's
+          agents-furniture replay expects red. Its failed log names that replay's planted path,
+          and the recorded log line is in it. The plant adds exactly that one file and has exactly
+          one parent, the green run's commit. The throwaway branch answers 404, and the plant is
+          in neither develop nor main.
+  ledger  Every issues/<name>.md that PLAN.md or TECH.md names exists and is a ROADMAP.md seed.
   landing The profile ci row's read for HEAD: at least one push run of ci.yml, every one, in its
           latest attempt, completed/success.
 """
@@ -45,6 +55,8 @@ GATE = HERE / 'gate.sh'
 WORKFLOWS = f'{static.CI} {static.MUTANTS}'
 GH_REPO = 'purduercac/rcac-mcp'
 BRANCH = 'ci/ci-workflow'
+RED_BRANCH = 'ci/ci-workflow-red'
+RED_PLANT = 'agents-furniture'
 SPEC = 'spec/ci-workflow/'
 
 
@@ -236,6 +248,27 @@ def one(name: str, record: dict[str, list[str]], key: str, pattern: str, bad: li
     return values[0]
 
 
+def attempts(name: str, view: dict, kv: dict[str, list[str]], bad: list[str]) -> None:
+    attempt = view.get('attempt')
+    reruns = {int(m.group(1)) for key in kv if (m := re.fullmatch(r're-run (\d+)', key))}
+    if not isinstance(attempt, int) or attempt < 1 or reruns != set(range(2, attempt + 1)):
+        bad.append(f'{name}: attempt {attempt!r}, re-runs listed {sorted(reruns)}; each attempt after 1 needs a "- re-run N:" line')
+
+
+def run_record(name: str, run_id: str, want: dict[str, str], bad: list[str]) -> dict:
+    """GitHub's record of one run, checked against WANT and for the ci.yml workflow file."""
+    view = gh_json('run', 'view', run_id, '-R', GH_REPO, '--json',
+                   'attempt,status,conclusion,event,headBranch,headSha,jobs')
+    # `gh run view` has no workflow-path field; the REST record of the same run carries it.
+    path = gh_json('api', f'repos/{GH_REPO}/actions/runs/{run_id}')['path']
+    for key, value in want.items():
+        if view.get(key) != value:
+            bad.append(f'{name}: run {run_id} has {key} {view.get(key)!r}, want {value!r}')
+    if path != static.CI:
+        bad.append(f'{name}: run {run_id} ran {path!r}, want {static.CI!r}')
+    return view
+
+
 def green(record: dict[str, list[str] | None], gate: str, bad: list[str]) -> None:
     lines = record.get('Green run', [])
     if lines is None or 'Green run' not in record:
@@ -247,21 +280,9 @@ def green(record: dict[str, list[str] | None], gate: str, bad: list[str]) -> Non
     commit = one('Green run', kv, 'commit', r'[0-9a-f]{40}', bad)
     if run_id is None or commit is None:
         return
-    view = gh_json('run', 'view', run_id, '-R', GH_REPO, '--json',
-                   'attempt,status,conclusion,event,headBranch,headSha,jobs')
-    # `gh run view` has no workflow-path field; the REST record of the same run carries it.
-    path = gh_json('api', f'repos/{GH_REPO}/actions/runs/{run_id}')['path']
-    want = {'status': 'completed', 'conclusion': 'success', 'event': 'push', 'headBranch': BRANCH,
-            'headSha': commit}
-    for key, value in want.items():
-        if view.get(key) != value:
-            bad.append(f'Green run: run {run_id} has {key} {view.get(key)!r}, want {value!r}')
-    if path != static.CI:
-        bad.append(f'Green run: run {run_id} ran {path!r}, want {static.CI!r}')
-    attempt = view.get('attempt')
-    reruns = {int(m.group(1)) for key in kv if (m := re.fullmatch(r're-run (\d+)', key))}
-    if not isinstance(attempt, int) or attempt < 1 or reruns != set(range(2, attempt + 1)):
-        bad.append(f'Green run: attempt {attempt!r}, re-runs listed {sorted(reruns)}; each attempt after 1 needs a "- re-run N:" line')
+    view = run_record('Green run', run_id, {'status': 'completed', 'conclusion': 'success', 'event': 'push',
+                                            'headBranch': BRANCH, 'headSha': commit}, bad)
+    attempts('Green run', view, kv, bad)
     jobs = [j for j in view.get('jobs', []) if j.get('name') == 'gate']
     if len(jobs) != 1 or jobs[0].get('conclusion') != 'success':
         bad.append(f'Green run: needs one job "gate" with conclusion success, found {[(j.get("name"), j.get("conclusion")) for j in jobs]}')
@@ -281,6 +302,89 @@ def green(record: dict[str, list[str] | None], gate: str, bad: list[str]) -> Non
         bad.append(f'Green run: HEAD differs from {commit[:10]} outside {SPEC}: {moved}')
 
 
+def red(record: dict[str, list[str] | None], gate: str, bad: list[str]) -> None:
+    lines = record.get('Red run', [])
+    if lines is None or 'Red run' not in record:
+        bad.append('needs exactly one "## Red run" section')
+        return
+    green_lines = record.get('Green run') or []
+    recorded('Red run', lines, bad)
+    kv = fields(lines)
+    run_id = one('Red run', kv, 'run', r'\d+', bad)
+    plant = one('Red run', kv, 'plant', r'[0-9a-f]{40}', bad)
+    failing = one('Red run', kv, 'failing step', r'Run .+', bad)
+    logged = one('Red run', kv, 'log', r'.+', bad)
+    one('Red run', kv, 'removed', r'\d{4}-\d{2}-\d{2}\b.*', bad)
+    parent = one('Red run (from Green run)', fields(green_lines), 'commit', r'[0-9a-f]{40}', bad)
+    if None in (run_id, plant, failing, logged, parent):
+        return
+    _, step, text = next((r for r in red_replays(gate) if r[0] == RED_PLANT), (None, None, None))
+    steps = static.job_steps(static.load(Path.cwd()), 'gate')
+    index = next((i for i, s in enumerate(steps) if step and step in s), None)
+    if index is None:
+        bad.append(f'Red run: gate.sh runs no {RED_PLANT} replay whose step is in ci.yml\'s gate job')
+        return
+    hygiene = f'Run {steps[index].splitlines()[0]}'
+    if failing != hygiene:
+        bad.append(f'Red run: records failing step {failing!r}, the plant targets {hygiene!r}')
+    view = run_record('Red run', run_id, {'status': 'completed', 'conclusion': 'failure', 'event': 'push',
+                                          'headBranch': RED_BRANCH, 'headSha': plant}, bad)
+    attempts('Red run', view, kv, bad)
+    jobs = [j for j in view.get('jobs', []) if j.get('name') == 'gate']
+    if len(jobs) != 1 or jobs[0].get('conclusion') != 'failure':
+        bad.append(f'Red run: needs one job "gate" with conclusion failure, found {[(j.get("name"), j.get("conclusion")) for j in jobs]}')
+        return
+    ordered = sorted(jobs[0].get('steps', []), key=lambda s: s['number'])
+    first = next((i for i, s in enumerate(ordered) if s.get('conclusion') == 'failure'), None)
+    if first is None:
+        bad.append('Red run: no step of job gate failed')
+        return
+    if ordered[first]['name'] != hygiene:
+        bad.append(f'Red run: the first failed step is {ordered[first]["name"]!r}, want {hygiene!r}')
+    before = {s['name']: s.get('conclusion') for s in ordered[:first]}
+    for s in ordered[:first]:
+        if s.get('conclusion') != 'success':
+            bad.append(f'Red run: step {s["name"]!r}, before the failure, is {s.get("conclusion")!r}')
+    for cmd in steps[:index]:
+        name = f'Run {cmd.splitlines()[0]}'
+        if before.get(name) != 'success':
+            bad.append(f'Red run: step {name!r} is not shown success before the hygiene step')
+    log = run('gh', 'run', 'view', run_id, '-R', GH_REPO, '--log-failed').splitlines()
+    under = [line for line in log if line.split('\t')[1:2] == [hygiene]]
+    if not any(text in line for line in under):
+        bad.append(f'Red run: the failed log names no {text!r} under {hygiene!r}')
+    if not any(logged in line for line in under):
+        bad.append(f'Red run: the recorded log line {logged!r} is not in the failed log under {hygiene!r}')
+    commit = gh_json('api', f'repos/{GH_REPO}/commits/{plant}')
+    files = [(f.get('filename'), f.get('status')) for f in commit.get('files', [])]
+    if files != [(text, 'added')]:
+        bad.append(f'Red run: the plant changes {files}, want only {text!r} added')
+    parents = [p.get('sha') for p in commit.get('parents', [])]
+    if parents != [parent]:
+        bad.append(f'Red run: the plant\'s parents are {parents}, want the green run\'s commit {parent}')
+    gone = subprocess.run(['gh', 'api', f'repos/{GH_REPO}/branches/{RED_BRANCH}'], capture_output=True, text=True)
+    if gone.returncode == 0 or 'HTTP 404' not in gone.stderr:
+        bad.append(f'Red run: {RED_BRANCH} does not answer 404 (exit {gone.returncode}): {gone.stderr.strip() or "it exists"}')
+    for base in ('develop', 'main'):
+        ahead = gh_json('api', f'repos/{GH_REPO}/compare/{base}...{plant}').get('ahead_by')
+        if not isinstance(ahead, int) or ahead < 1:
+            bad.append(f'Red run: the plant is {ahead!r} ahead of {base}; it must be in neither develop nor main')
+
+
+def ledger(record: dict[str, list[str] | None], gate: str, bad: list[str]) -> None:
+    spec = HERE.parent
+    named = sorted({m for doc in ('PLAN.md', 'TECH.md')
+                    for m in re.findall(r'issues/[a-z0-9][a-z0-9-]*\.md', (spec / doc).read_text())})
+    if not named:
+        bad.append('ledger: PLAN.md and TECH.md name no issues/<name>.md; the walk found nothing to check')
+    roadmap = Path('ROADMAP.md').read_text()
+    for path in named:
+        if not Path(path).is_file():
+            bad.append(f'ledger: {path} is named but does not exist')
+        if f'**Seed:** [`{path}`]({path})' not in roadmap:
+            bad.append(f'ledger: {path} has no ROADMAP.md seed entry')
+
+
 def landing(record: dict[str, list[str] | None], gate: str, bad: list[str]) -> None:
     head = run('git', 'rev-parse', 'HEAD').strip()
     runs = gh_json('run', 'list', '-R', GH_REPO, '--workflow', 'ci.yml', '--commit', head, '-e', 'push',
@@ -292,7 +396,7 @@ def landing(record: dict[str, list[str] | None], gate: str, bad: list[str]) -> N
             bad.append(f'run {r.get("databaseId")} attempt {r.get("attempt")} is {r.get("status")}/{r.get("conclusion")}, not completed/success')
 
 
-MODES = {'local': local, 'green': green, 'landing': landing}
+MODES = {'local': local, 'green': green, 'red': red, 'ledger': ledger, 'landing': landing}
 
 
 def main() -> int:
