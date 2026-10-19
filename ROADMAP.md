@@ -317,7 +317,7 @@ still fails closed in the release gate and in CI; only the message breaks its co
 the `ci-workflow` review, 2026-10-18.
 
 *Horizon: later · Depends on: — · Refs: the shared check `ci-workflow` introduced ([`spec/ci-workflow/`](spec/ci-workflow/))*
-**Seed:** [`issues/sdist-hygiene-truncated-gzip.md`](issues/sdist-hygiene-truncated-gzip.md) · *status: unshaped*
+**Seed:** [`issues/sdist-hygiene-truncated-gzip.md`](issues/sdist-hygiene-truncated-gzip.md) · *status: adopted:sdist-hygiene-truncated-gzip*
 
 ---
 

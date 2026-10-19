@@ -1,5 +1,5 @@
 ---
-status: unshaped
+status: adopted:sdist-hygiene-truncated-gzip
 kind: fix
 appetite: small
 lane: public
