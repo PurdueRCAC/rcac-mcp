@@ -1,5 +1,5 @@
 ---
-status: unshaped
+status: adopted:agents-d-instructions
 kind: fix
 appetite: small
 lane: public

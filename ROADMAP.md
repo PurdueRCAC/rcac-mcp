@@ -98,7 +98,7 @@ thousand characters loses the least, within a configurable budget. A `cluster_co
 the full text, the resource stays, and startup never hangs on the read.
 
 *Horizon: near-term · Depends on: stack-upgrade (both protocol eras carry instructions; cleared: landed on `develop` 2026-10-17), safe-execution (the executor it reads through; cleared: landed on `develop` 2026-10-23) · Refs: absorbs `context-cache-cross-user`*
-**Seed:** [`issues/agents-d-instructions.md`](issues/agents-d-instructions.md) · *status: unshaped*
+**Seed:** [`issues/agents-d-instructions.md`](issues/agents-d-instructions.md) · *status: adopted:agents-d-instructions*
 
 ### Absorbed: one user's cluster context is served to every other user
 
@@ -110,7 +110,7 @@ impact is bounded; the *mechanism* is the bug. Reading the files once at startup
 retires the cache rather than patching it. Found by the harness port, 2026-08-26.
 
 *Horizon: with agents-d-instructions · Depends on: — · Refs: absorbed by `agents-d-instructions`; `AGENTS.md` § Invariants §8 documents the defect as a known one*
-**Seed:** [`issues/context-cache-cross-user.md`](issues/context-cache-cross-user.md) · *status: unshaped*
+**Seed:** [`issues/context-cache-cross-user.md`](issues/context-cache-cross-user.md) · *status: adopted:agents-d-instructions*
 
 ## Neither advertised resource can be read
 
