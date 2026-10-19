@@ -301,3 +301,96 @@ ruling); `list_directory` paths read from `$PWD`; five seeds filed; and `average
   The foreman signs it off for remediation as judge under the autonomy decision, and records that
   finding 1 regressed from the foreman's own cycle-1 routing of class 3. Geoffrey is told in the
   foreman's next report. A third cycle that does not converge escalates to Geoffrey.
+
+## Review cycle 3 — changes-requested; bound reached, escalated (2026-10-19)
+
+- **Reviewed commit:** 8a13f06fc5eb15dc38b5a5d6a30ece8f6bdfb791 · **Mode:** a fresh blind pass, debate variant
+  (ship and block, separate clones), with CI run 39207258885 on the same commit (ubuntu-24.04,
+  bash 5.2, zsh/tcsh/ksh/csh installed: `1447 passed` per era, 0 skipped) as Linux evidence.
+- **History note:** before this pass the branch was redacted and squashed for its first push
+  (`a9a2901` on `404580c`), then merged develop `5153e47` (CI installs the login shells). The
+  cycle's earlier commits stay local; the GOAL's shape and gate clarifications are carried in the
+  squash unchanged.
+- **Cycle 2's routing held for classes 2–6** (the stdin bound, profile shell state, no POSIX stage
+  reading an rc, spec ids, timeout escalation), and the Linux-CI fixes held (the `pwd -L` rows, the
+  parked-descriptor refusal). **Class 1 did not converge:** its idle cutoff after the exit status
+  still truncates on a slow or stalled link.
+
+### Verification run
+
+- Both reviewers: the full `verify` in both eras (`1447 passed`; one ship-side run had one failure,
+  finding 3, under its own concurrent load); sandboxed `--help` exit 0; CI 39207258885 green.
+- Ship: 16 hostile login profiles locally (chatty, stdin-reading, `cd`, `IFS`+glob options, `set
+  -k`, exported `SHELLOPTS`, `CDPATH`, functions over builtins, aliases, traps, a taken parked
+  descriptor, `set -P`): argv, stdin, writes and start directory exact; a real server over stdio
+  with hostile paths, base64 and refusals; reads over the throttled ssh model from 64 KiB/s to
+  unthrottled, exact while the link flows; 6 MiB writes under bash, zsh and tcsh with chatty rcs,
+  exact; R9 on the raw wire; size limits per wire; 1,200 concurrent local launches, no false
+  refusal; six of its own mutants killed.
+- Block: the same throttled model at 6,000 B/s and 24,000 B/s against HEAD and `origin/develop`
+  (`5153e47`); a zsh `.zshenv` background job against `write_file`; R9; the size limit under six
+  login shells; 1,920 concurrent local launches, no false refusal.
+
+### Requirement → evidence matrix (cycle 3)
+
+| R-ID | Status | Note |
+|------|--------|------|
+| R1 | ✅ | only `run_command` passes a string |
+| R2 | ✅ | matrix, three modes; hostile drives |
+| R3 | ✅ | delegate rows; profile `cd` ignored |
+| R4 | ❌ findings 1, 2 | reads truncate on a stalled link; a zsh rc job can read a write's stdin |
+| R5 | ✅ | refusals, target untouched |
+| R6 | ✅ | schema and argv |
+| R7 (test half) | ✅ | bash, zsh, sh, tcsh login shells; on Linux in CI with every shell installed |
+| R7 (`module` half) | ✅ | unchanged evidence (orchestrator) |
+| R8 | ✅ timeouts; ❌ finding 1 | a command that ran reported `-1002` on a slow link |
+| R9 | ✅ | raw wire, both eras |
+| R10 | ❌ findings 1, 2 | §3 and README promise completeness and "no startup file reads stdin" |
+
+### [CRITICAL/CONFIRMED] The post-exit idle cutoff truncates on a slow or stalled link (both reviewers)
+
+- **Where:** `src/rcac_mcp/executor/ssh.py:145-150` (`_collect`), with `launch.py:276-282`; every
+  tool but `run_command` drops stderr on exit 0 (`tools/filesystem.py:141-144`).
+- **Failure scenario:** sshd sends `exit-status` ahead of output still waiting for window space;
+  when the link then delivers nothing for `GRACE` (1 s) — a link below about 32 KB/s delivering
+  whole 32 KiB packets, or any stall of a second — `_collect` stops, returns exit 0 with the "held"
+  note though nothing was left running, and the tool returns the truncated stdout silently. A late
+  start sentinel on such a link turns a submitted job into "did not start" (`-1002`): the `sbatch`
+  double-submit class. **A regression:** `origin/develop` waited for EOF.
+- **Evidence:** throttled model, 512 KiB/s with one stall right after the exit status: 1.6 s and
+  1.2 s stalls → `read_file` 65,536 of 1,048,576 bytes, `is_error=False`; 0.7 s → complete. At
+  6,000 B/s: `read_file` 8,192 of 49,152 bytes, exit 0; `sbatch` with a 40 KB `.bashrc` → "Failed
+  to submit job: … did not start (exit 0)" while the stand-in shows the submission ran; develop's
+  checkout returns the whole 49,152 bytes. At 24,000 B/s with 32 KiB pieces: 32,768 of 256 KiB.
+- **Touches:** a high-blast-radius path; §3 (*[human gate]*): CRITICAL per the rubric.
+
+### [MEDIUM/CONFIRMED] A remote zsh rc's background job can read a write's stdin (block 2)
+
+- **Where:** `src/rcac_mcp/executor/ssh.py:351-352` (stdin fed to the channel the rc's jobs share).
+- **Failure scenario:** zsh, unlike bash, sh and ksh, gives a non-interactive shell's background
+  jobs the real stdin; `.zshenv` = `head -c 1 > "$HOME/rc-took" &`, then `write_file` of 160,000
+  bytes → `is_error=False`, 143,616 bytes on disk, a different hash, deterministic over three runs.
+  The stated exception covers rc jobs writing into a result, not reading the caller's stdin.
+  **A regression:** develop carried content inside the command text.
+- **Touches:** R4; §3's "no startup file reads the caller's stdin" (*[human gate]*).
+
+### [LOW/CONFIRMED] A new holder test races its own output order (ship 2)
+
+- **Where:** `tests/test_executors.py:397` (`startswith('done\ntick\n')`).
+- **Failure scenario:** the background `tick` can print before the foreground `done`; one of six
+  concurrent runs of `test_a_holder_that_keeps_writing_ends_at_the_timeout` failed with complete,
+  correct output. The gate can go red spuriously.
+
+### Coverage observations
+
+- `noclobber-kept` (bash 3.2 refuses an exported `SHELLOPTS`; CI's bash 5 is the evidence),
+  `pipefail-kept` (only an unreachable pipeline), `ssh-final-drain-dropped` (a race guard).
+
+## Escalation — cycle 3
+
+- **The bound is reached** without convergence (cycle 1: four MEDIUM, two LOW; cycle 2: one
+  CRITICAL, two HIGH, two MEDIUM, one LOW; cycle 3: one CRITICAL, one MEDIUM, one LOW). Findings 1
+  and 2 sit in high-blast-radius paths and §3. The cycle STOPs here for Geoffrey; nothing is
+  remediated until he rules. Class 1 has now failed twice as a timing heuristic (a fixed grace,
+  then an idle cutoff); the foreman's recommendation to him replaces the heuristic rather than
+  tuning it.

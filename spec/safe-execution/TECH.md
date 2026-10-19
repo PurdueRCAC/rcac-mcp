@@ -3,7 +3,7 @@ slug: safe-execution
 title: Every tool passes exactly what it was given, under one interpreter
 kind: fix
 appetite: big
-status: in_review
+status: blocked
 branch: fix/safe-execution
 base: develop
 current_phase: done
@@ -121,11 +121,11 @@ phases:
     pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp
     --help
 review:
-  last_reviewed_commit: b32778d31d93b7e055e53ec04bb772470f52b903
+  last_reviewed_commit: 8a13f06fc5eb15dc38b5a5d6a30ece8f6bdfb791
   verdict: changes-requested
-  blocked_reason: CRITICAL ssh truncation (fixed post-exit grace) + 2 HIGH + 2 MEDIUM
-    + 1 LOW
-  cycle: 2
+  blocked_reason: 'Review bound reached (cycle 3: CRITICAL truncation on stalled links,
+    MEDIUM zsh rc reads stdin); escalated to Geoffrey'
+  cycle: 3
 ---
 
 # TECH.md — Every tool passes exactly what it was given, under one interpreter
