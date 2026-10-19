@@ -726,8 +726,8 @@ CASES: tuple[Case, ...] = (
          'differs from the quiet home'),
     # A startup file that took a parked descriptor leaves the command not run, and the result says so.
     Case('parked-descriptor-unchecked', 'executor/launch.py',
-         (("'[[ /dev/fd/57 -ef /dev/fd/47 && /dev/fd/58 -ef /dev/fd/48 && /dev/fd/59 -ef /dev/fd/49 ]] || '",
-           "'true || '"),),
+         (("PARKED_SAME: Final = '[[ /dev/fd/57 -ef /dev/fd/47 && /dev/fd/58 -ef /dev/fd/48 && /dev/fd/59 -ef /dev/fd/49 ]]'",
+           "PARKED_SAME: Final = 'true'"),),
          ('test_launch.py::test_a_taken_parked_descriptor_runs_nothing[57]',
           'test_launch.py::test_a_taken_parked_descriptor_runs_nothing[58]'),
          'taken: the result is'),

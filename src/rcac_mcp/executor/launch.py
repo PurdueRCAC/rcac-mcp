@@ -110,6 +110,12 @@ PARK: Final = 'exec 57<&0 58>&1 59>&2 47<&0 48>&1 49>&2 </dev/null >/dev/null 2>
 # descriptor (`TAKEN_NOTE` replaces it in the result).
 TAKEN_MARK: Final = b'cluster-mcp:parked-descriptor-taken'
 
+# True when each parked descriptor still names the same file as its copy. The prologue asks up to
+# three times: on macOS a stat through /dev/fd now and then fails while the descriptors are intact
+# (about one first check in 1,500 under a concurrent test run; the next check passes), whereas a
+# taken descriptor fails every time.
+PARKED_SAME: Final = '[[ /dev/fd/57 -ef /dev/fd/47 && /dev/fd/58 -ef /dev/fd/48 && /dev/fd/59 -ef /dev/fd/49 ]]'
+
 # The program's first two lines: undo what a profile can leave behind (aliases, functions shadowing
 # the words used here, the field separator, shell options: `-k` would turn an argument shaped like an
 # assignment into one, `-P` would name the start directory by its physical path; traps), then take
@@ -124,7 +130,7 @@ TAKEN_MARK: Final = b'cluster-mcp:parked-descriptor-taken'
 PROLOGUE: Final = ('\\unalias -a\n'
                    'unset -f builtin command exec set printf trap cd export declare compgen read; unset IFS; '
                    'set +euxvTkP +o errtrace +o posix; trap - EXIT ERR DEBUG RETURN; '
-                   '[[ /dev/fd/57 -ef /dev/fd/47 && /dev/fd/58 -ef /dev/fd/48 && /dev/fd/59 -ef /dev/fd/49 ]] || '
+                   f'{PARKED_SAME} || {PARKED_SAME} || {PARKED_SAME} || '
                    f'{{ printf %s {TAKEN_MARK.decode()} >&49; '
                    f'printf %s {TAKEN_MARK.decode()} >&59; exec /usr/bin/false; }}; '
                    'exec 0<&57 1>&58 2>&59 47<&- 48>&- 49>&- 57<&- 58>&- 59>&-')

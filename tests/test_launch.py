@@ -49,6 +49,8 @@ PROLOGUE = ('\\unalias -a\n'
             'unset -f builtin command exec set printf trap cd export declare compgen read; unset IFS; '
             'set +euxvTkP +o errtrace +o posix; trap - EXIT ERR DEBUG RETURN; '
             '[[ /dev/fd/57 -ef /dev/fd/47 && /dev/fd/58 -ef /dev/fd/48 && /dev/fd/59 -ef /dev/fd/49 ]] || '
+            '[[ /dev/fd/57 -ef /dev/fd/47 && /dev/fd/58 -ef /dev/fd/48 && /dev/fd/59 -ef /dev/fd/49 ]] || '
+            '[[ /dev/fd/57 -ef /dev/fd/47 && /dev/fd/58 -ef /dev/fd/48 && /dev/fd/59 -ef /dev/fd/49 ]] || '
             '{ printf %s cluster-mcp:parked-descriptor-taken >&49; '
             'printf %s cluster-mcp:parked-descriptor-taken >&59; exec /usr/bin/false; }; '
             'exec 0<&57 1>&58 2>&59 47<&- 48>&- 49>&- 57<&- 58>&- 59>&-')

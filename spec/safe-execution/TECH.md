@@ -1055,6 +1055,17 @@ contract or the heredoc writes; every planted violation is killed; every deferra
     outcome (a new reserved code, and the not-started case would lose its meaning). Recorded
     limits: a profile that takes a descriptor and its copy onto the same file defeats the check;
     a system with neither `/dev/fd` nor `/proc/self/fd` would refuse every command, loudly.
+    **A false refusal, found by the local gate and fixed.** The first local run of P7's and P6's
+    gates after c547e12 failed one `test_literal_args` row each (a different row each run, every
+    mode): the check refused with no profile at all. Diagnosed with the refusal block printing each
+    pair: the `-ef` failed on one pair (58 or 59, once 57), while `stat -L` and an immediate re-check
+    of the same descriptors right after agreed. Measured through `bin/sandbox.sh` with 24
+    concurrent launches: 2 first checks in 3,000 failed, each passing on its first retry; none in
+    2,000 without the sandbox wrapper's extra process. The cause inside macOS's `/dev/fd` was not
+    isolated. The prologue now asks `PARKED_SAME` up to three times before refusing; a taken
+    descriptor fails every time. After the change: 0 refusals in 4,000 sandboxed launches and in
+    four concurrent `test_literal_args.py` runs (648 rows), against 1–3 failed rows per run before.
+    Linux CI never showed it (its `-ef` reads `/proc/self/fd`).
     **Pins, exact on both bashes:** `test_a_taken_parked_descriptor_runs_nothing[57|58|59|47|48|49]`
     builds the takeover in the stage itself (each descriptor parked on a file), so it runs on any
     bash: `('', TAKEN_NOTE, -1002)` and the command's marker file absent;
