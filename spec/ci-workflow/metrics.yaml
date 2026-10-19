@@ -1,0 +1,23 @@
+# Written only by $KB/bin/factory/metrics.py. Observation, never state: nothing routes on it.
+slug: ci-workflow
+escaped_from: null
+planned: {date: '2026-10-17', phases: 5}
+landed: {date: '2026-10-18', phases: 5, failed_verifies: 1}
+open: null
+runs:
+- {step: feature, start: '2026-10-16T23:25:07-04:00', stop: '2026-10-16T23:28:27-04:00', seconds: 200, end: gate, agent: claude-opus-5-5}
+- {step: plan, start: '2026-10-16T23:28:27-04:00', stop: '2026-10-17T00:11:05-04:00', seconds: 2558, end: gate, agent: claude-opus-5-5}
+- {step: 'build:P1', start: '2026-10-17T00:11:05-04:00', stop: '2026-10-17T00:14:14-04:00', seconds: 189, end: gate, agent: claude-opus-5-5}
+- {step: 'build:P2', start: '2026-10-17T00:14:30-04:00', stop: '2026-10-17T00:20:02-04:00', seconds: 332, end: gate, agent: claude-opus-5-5}
+- {step: 'build:P3', start: '2026-10-17T00:22:32-04:00', stop: '2026-10-17T00:34:04-04:00', seconds: 692, end: question, agent: claude-opus-5-5}
+- {step: 'build:P2', start: '2026-10-18T21:46:17-04:00', stop: '2026-10-18T22:09:36-04:00', seconds: 1399, end: gate, agent: claude-opus-5-5}
+- {step: 'build:P4', start: '2026-10-18T22:11:03-04:00', stop: '2026-10-18T22:20:40-04:00', seconds: 577, end: gate, agent: claude-opus-5-5}
+- {step: 'build:P5', start: '2026-10-18T22:21:55-04:00', stop: '2026-10-18T22:32:29-04:00', seconds: 634, end: gate, agent: claude-opus-5-5}
+- {step: review, start: '2026-10-18T22:33:53-04:00', stop: '2026-10-18T22:42:40-04:00', seconds: 527, end: gate, agent: claude-opus-5-5}
+- {step: publish, start: '2026-10-18T22:43:41-04:00', stop: '2026-10-18T22:43:41-04:00', seconds: 0, end: done, agent: claude-opus-5-5}
+reviews:
+- cycle: 1
+  date: '2026-10-18'
+  verdict: approved
+  confirmed: {critical: 0, high: 0, medium: 0, low: 0}
+  plausible: 0

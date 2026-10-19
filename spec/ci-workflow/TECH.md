@@ -3,7 +3,7 @@ slug: ci-workflow
 title: Run the gate on GitHub on every push
 kind: ci
 appetite: small
-status: in_review
+status: done
 branch: ci/ci-workflow
 base: develop
 current_phase: done
