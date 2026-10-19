@@ -162,6 +162,13 @@ part of the instructions.
     did.
   - `resource-reads-without-executor`'s ROADMAP entry narrows to `rcac://storage` at this cycle's
     retirement, not before.
+- **C11. Who "every user" is in R7 and R9** (foreman, PLAN/TECH gate, 2026-10-19): R9's identical
+  text is owed to every user the server serves, and the instructions and `rcac://context` reach
+  any client that can connect. `cluster_context`, as a tool call, reaches only a mapped user,
+  because `delegate` mode refuses tool calls from an authenticated identity absent from the user
+  map today (§5), and this cycle does not change that. The site text is world-readable
+  administrative markdown, so the difference discloses nothing; the plan reads "authenticated user"
+  as "mapped user" for the tool, and §5 stays untouched.
 
 ## Related materials
 
