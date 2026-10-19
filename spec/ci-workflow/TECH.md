@@ -6,8 +6,8 @@ appetite: small
 status: in_progress
 branch: ci/ci-workflow
 base: develop
-current_phase: P2
-last_updated: '2026-10-17'
+current_phase: P3
+last_updated: '2026-10-18'
 phases:
 - id: P1
   name: One sdist-hygiene definition, run by the release recipe and tested for holes
@@ -21,7 +21,7 @@ phases:
   verify: sh spec/ci-workflow/verify/gate.sh P1
 - id: P2
   name: The gate and mutants workflows, with AGENTS.md naming them, in one commit
-  status: in_progress
+  status: done
   satisfies:
   - R1
   - R2
@@ -200,6 +200,16 @@ PLAN §2.2–§2.5.
   performed in offline mode". 0.12.19, the newest 0.12, prints the same; 0.13.0 (2026-10-09) is
   inside the 14-day cooldown until 2026-10-23. Every other step passes under 0.12.17 (online audit:
   no advisories in 94 packages). Awaiting the foreman's ruling: the pin, or a fix on `develop`.
+- **Amendment (2026-10-18, rebase onto `develop` `de2b380`):** the fix landed on `develop`
+  (`audit-uv-portability`, `de2b380`, after release 0.1.1 at `c68adaa`): `bin/audit_lock.py`
+  decides "offline" itself and runs the launching uv, `tests/test_audit.py` pins the wrapper's
+  own messages under every supported uv, and `pyproject.toml` declares `[tool.uv]
+  required-version = ">=0.12.17"`, exactly CI's pin. The rebase conflicted only in
+  `bin/audit_lock.py`'s docstring, resolved by keeping `develop`'s launching-uv and `UV_OFFLINE`
+  text and this cycle's sentence that CI runs the file; `AGENTS.md` merged cleanly (`develop`'s
+  "Supported uv is 0.12.17+" and § Testing's `test_audit.py` entry beside this cycle's CI text).
+  Pin, workflows and gate unchanged. The gate is green: the replay runs all nine steps under uv
+  0.12.17.
 
 ## Phase P3 — Local evidence
 **Satisfies:** R9 (a) and (d) · **Depends on:** P2
