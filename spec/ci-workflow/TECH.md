@@ -64,7 +64,7 @@ phases:
 - id: P5
   name: 'Outward: a red gate run on a throwaway branch, the branch removed, and the
     deferral ledger'
-  status: pending
+  status: in_progress
   satisfies:
   - R9
   depends_on:
@@ -278,14 +278,14 @@ green, and its id is recorded.
 step on GitHub, naming the path. The branch is then gone from `origin`, and the plant is in
 neither `develop` nor `main`.
 
-- [ ] `sh spec/ci-workflow/verify/gate.sh prepush` prints `gate[prepush]: ok`.
-- [ ] Throwaway, outside the cycle worktree:
+- [x] `sh spec/ci-workflow/verify/gate.sh prepush` prints `gate[prepush]: ok`.
+- [x] Throwaway, outside the cycle worktree:
       `git worktree add -b ci/ci-workflow-red "$TMPDIR/ci-workflow-red" <X>`, where X is the green
       run's recorded commit, so the plant's one parent is X. In it, add
       `.agents/planted.md` ("Planted by the ci-workflow cycle to show the sdist hygiene step red;
       never merged.") and commit `[ci] Throwaway: plant .agents/ to show the gate red`. Record
       the plant SHA.
-- [ ] **Push 2 (Geoffrey's go):** `git -C "$TMPDIR/ci-workflow-red" push origin ci/ci-workflow-red`.
+- [x] **Push 2 (Geoffrey's go):** `git -C "$TMPDIR/ci-workflow-red" push origin ci/ci-workflow-red`.
 - [ ] Read: `gh run list -R purduercac/rcac-mcp -w ci.yml -b ci/ci-workflow-red -c <plant sha> --json databaseId,url,status,conclusion`,
       `gh run watch <id> -R purduercac/rcac-mcp` (a non-zero exit is expected), and
       `gh run view <id> -R purduercac/rcac-mcp --log-failed`, which must show
@@ -322,6 +322,13 @@ neither `develop` nor `main`.
   ledger` (reads only).
 - **Touches:** `spec/ci-workflow/EVIDENCE.md`, `spec/ci-workflow/verify/evidence.py`, and
   `issues/` + `ROADMAP.md` only if a deferral is recorded.
+- **Amendment (2026-10-18, run A):** prepush green on `adda414` (P4's commit). Plant
+  `5c977fad938f7e5cc010714f6d064a47e9716e55`, one parent X (`ffb03b5`), adding only
+  `.agents/planted.md`; the throwaway worktree is under the session scratchpad rather than
+  `$TMPDIR` (same role: outside the cycle worktree). Pushed as
+  `git push origin <plant>:refs/heads/ci/ci-workflow-red` (the foreman's standing approval for
+  this effort). Its `ci.yml` push run is `39189454397`. Run B reads it, records `## Red run`,
+  deletes the branch (push 3) and removes the worktree.
 
 ---
 
