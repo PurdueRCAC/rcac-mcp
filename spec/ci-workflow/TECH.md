@@ -52,7 +52,7 @@ phases:
   verify: sh spec/ci-workflow/verify/gate.sh P3
 - id: P4
   name: 'Outward: a green gate run on the cycle branch head'
-  status: pending
+  status: in_progress
   satisfies:
   - R9
   depends_on:
@@ -239,7 +239,7 @@ re-checked live by the gate. **R9 is graded by the orchestrator** (its evidence 
 **Goal:** the `ci.yml` run for a push of `ci/ci-workflow` concludes `success` with every step
 green, and its id is recorded.
 
-- [ ] `sh spec/ci-workflow/verify/gate.sh prepush` prints `gate[prepush]: ok`.
+- [x] `sh spec/ci-workflow/verify/gate.sh prepush` prints `gate[prepush]: ok`.
 - [ ] **Push 1 (Geoffrey's go, obtained by the foreman):** `git push -u origin ci/ci-workflow`.
 - [ ] Read: `gh run list -R purduercac/rcac-mcp --workflow ci.yml --commit "$(git rev-parse HEAD)" -e push --json databaseId,attempt,url,status,conclusion,headSha`
       (re-read until listed), then `gh run watch <id> -R purduercac/rcac-mcp --exit-status`.
