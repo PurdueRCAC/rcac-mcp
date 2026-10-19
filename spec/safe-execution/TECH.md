@@ -1061,8 +1061,8 @@ contract or the heredoc writes; every planted violation is killed; every deferra
     pair: the `-ef` failed on one pair (58 or 59, once 57), while `stat -L` and an immediate re-check
     of the same descriptors right after agreed. Measured through `bin/sandbox.sh` with 24
     concurrent launches: 2 first checks in 3,000 failed, each passing on its first retry; none in
-    2,000 without the sandbox wrapper's extra process. The cause inside macOS's `/dev/fd` was not
-    isolated. The prologue now asks `PARKED_SAME` up to three times before refusing; a taken
+    2,000 without the sandbox wrapper's extra process. The cause, found in the next run (below), is
+    that macOS's `/dev/fd` is shared across processes by descriptor number. The prologue now asks `PARKED_SAME` up to three times before refusing; a taken
     descriptor fails every time. After the change: 0 refusals in 4,000 sandboxed launches and in
     four concurrent `test_literal_args.py` runs (648 rows), against 1–3 failed rows per run before.
     Linux CI never showed it (its `-ef` reads `/proc/self/fd`).
@@ -1098,6 +1098,36 @@ contract or the heredoc writes; every planted violation is killed; every deferra
   - **The 70 skips on CI** are all "`/bin/<shell>` is not installed here" (the runner has no zsh,
     tcsh, ksh or csh): zsh 40, tcsh 18, ksh 6, csh 6. None hides a Linux behaviour of the code;
     the CI workflow is unchanged (a separate concern, routed by the foreman).
+- **Shells-on-CI amendment (2026-10-19, foreman's rulings).** `develop` gained 5153e47, which
+  installs zsh, tcsh, ksh and csh on the CI runner. The branch was already pushed, so `develop`
+  came in by merge (2194a59) rather than a rebase, which only a force push could have published;
+  it merged cleanly (AGENTS.md § Conventions and the workflow), and the landing squashes either way.
+  - **The `-ef` cause, named.** macOS's `/dev/fd` (devfs `fdesc`) keeps one node per descriptor
+    number, shared by every process; a stat of `/dev/fd/N` while another process stats its own `N`
+    can fail with EBADF. Measured: twelve processes each statting a pipe's two dups 20,000 times,
+    on the same two numbers in every process, 82,817 of 240,000 stats failed with EBADF (73,991 on
+    another pair of numbers); on numbers distinct per process, none. In bash, twelve loops of 3,000
+    `[[ /dev/fd/N -ef /dev/fd/N+1 ]]` on a pipe: 7,065 failures with the same `N` everywhere, 0 with
+    distinct ones; `fstat` of the same descriptors always agreed. Every launch parks on 47–49 and
+    57–59, so concurrent launches collide. The failure is one-sided (a failed stat reads as "not
+    the same", never as "the same"), so the retry cannot pass a taken descriptor and is the right
+    response; it stays at three asks, and `PARKED_SAME`'s comment names the cause. Linux stats
+    `/proc/self/fd`, per process, and never showed it.
+  - **No silent skip on CI.** All three missing-shell skips (`test_launch._wire_argv`,
+    `test_ssh_exec`'s `serve` and `slow`) now call `conftest.need_shell`: it skips off CI and fails
+    on CI (`CI=true`), naming the shell. Pins in `tests/test_hygiene.py`:
+    `test_a_missing_shell_fails_on_ci_and_skips_elsewhere` (CI `true` fails, unset or `false`
+    skips) and `test_only_need_shell_skips`, a static scan that no other `skip`, `skipif`,
+    `importorskip` or `xfail` appears in `tests/*.py`, with planted controls. AGENTS § Testing
+    and § Conventions say so.
+  - **Bash twins** for the remote-rc rows that only zsh drove: `test_a_remote_rc_never_reads_the_
+    callers_stdin`, `test_a_remote_rc_background_job_can_write_into_a_result`,
+    `test_a_late_sentinel_still_counts_as_started` and `test_a_call_holding_stdin_is_bounded` now
+    run `[zshenv]` (zsh, `.zshenv`) and `[bashrc]` (bash, the `.bashrc` it reads for a shell sshd
+    started), and `test_a_redirected_stream_is_reported` runs `ssh-zsh` and `ssh-bash` (with
+    `SSH_CLIENT` set). The rc texts are now valid in both shells (`printf` for `print -rn`, `&` for
+    `&!`). The mutants `ssh-stdin-before-start`, `ssh-fixed-grace-from-exit` and
+    `ssh-stdin-wait-unbounded` now target both twins, and each kills both.
 - **Verify:** frontmatter `P7.verify`.
 - **Touches:** `AGENTS.md`, `issues/`, `ROADMAP.md`, any straggler text the sweep names.
 

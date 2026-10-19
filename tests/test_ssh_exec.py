@@ -35,6 +35,7 @@ from typing import Any, Callable, Iterator
 import pytest
 
 import argv_echo
+from conftest import need_shell
 from harness import Outcome, call, drive, in_memory, shared_server
 from rcac_mcp.executor import TIMEOUT_EXIT_CODE, CommandResult, Executor, UserPath
 from rcac_mcp.executor import launch, ssh
@@ -54,8 +55,7 @@ def serve(tmp_path: Path) -> Iterator[Callable[..., LoopbackSSH]]:
     servers: list[LoopbackSSH] = []
 
     def start(shell: str, name: str = 'home') -> LoopbackSSH:
-        if not os.access(shell, os.X_OK):
-            pytest.skip(f'{shell} is not installed here')
+        need_shell(shell)
         home = (tmp_path / name).resolve()
         home.mkdir(exist_ok=True)
         servers.append(LoopbackSSH(home, shell, tmp_path))
@@ -167,15 +167,25 @@ def test_a_startup_cd_does_not_move_the_start(startup: str, serve: Callable[...,
         f'ssh-{startup}: a startup cd moved where the command started: {got!r}, not the login home'
 
 
+# The remote login shell's own rc file, which runs before the bootstrap: zsh's .zshenv, and the
+# .bashrc a bash built to read it for a shell sshd started reads (RHEL's, Debian's and macOS's are;
+# the loopback server sets SSH_CLIENT, as sshd does). (login shell, rc file)
+REMOTE_RCS = {
+    'zshenv': ('/bin/zsh', '.zshenv'),
+    'bashrc': ('/bin/bash', '.bashrc'),
+}
+
 # The remote login shell's rc file runs before the bootstrap, on the channel's own stdin.
-RC_READS = 'read -r line; print -rn -- "$line" > "$HOME/rc-read"\n'
+RC_READS = 'read -r line; printf %s "$line" > "$HOME/rc-read"\n'
 
 
 @pytest.mark.integration
-def test_a_remote_rc_never_reads_the_callers_stdin(serve: Callable[..., LoopbackSSH]) -> None:
-    quiet, reader = serve('/bin/zsh', 'quiet'), serve('/bin/zsh', 'reader')
+@pytest.mark.parametrize('rc', list(REMOTE_RCS))
+def test_a_remote_rc_never_reads_the_callers_stdin(rc: str, serve: Callable[..., LoopbackSSH]) -> None:
+    shell, name = REMOTE_RCS[rc]
+    quiet, reader = serve(shell, 'quiet'), serve(shell, 'reader')
     rc_read = Path(reader.home) / 'rc-read'
-    (Path(reader.home) / '.zshenv').write_text(RC_READS)
+    (Path(reader.home) / name).write_text(RC_READS)
     violations = []
     # With no stdin to send, its end goes at once: the rc file reads nothing and the command runs.
     for case in ('argv', 'exit', 'empty'):
@@ -231,14 +241,16 @@ def test_a_startup_background_job_does_not_hold_the_call(startup: str, serve: Ca
 # own rc file starts, before anything is parked, can write into a result while the command runs
 # (issues/startup-background-jobs.md). The code row shows it still holds; the text row that every
 # text promising separation states it, so neither can change without the other.
-LEAK = '(sleep 1; echo RC-LEAK-OUT; echo RC-LEAK-ERR >&2) &!\n'
+LEAK = '(sleep 1; echo RC-LEAK-OUT; echo RC-LEAK-ERR >&2) &\n'
 EXCEPTION = "a background job started by the remote login shell's own rc file"
 
 
 @pytest.mark.integration
-def test_a_remote_rc_background_job_can_write_into_a_result(serve: Callable[..., LoopbackSSH]) -> None:
-    server = serve('/bin/zsh')
-    (Path(server.home) / '.zshenv').write_text(LEAK)
+@pytest.mark.parametrize('rc', list(REMOTE_RCS))
+def test_a_remote_rc_background_job_can_write_into_a_result(rc: str, serve: Callable[..., LoopbackSSH]) -> None:
+    shell, name = REMOTE_RCS[rc]
+    server = serve(shell)
+    (Path(server.home) / name).write_text(LEAK)
     result = _run(server, 'sleep 2; echo command-output', timeout=20)
     assert (result.stdout, result.stderr, result.exit_code) == ('RC-LEAK-OUT\ncommand-output\n', 'RC-LEAK-ERR\n', 0), \
         (f'the documented exception no longer holds: {result!r}; the texts that state it (AGENTS.md §3, '
@@ -354,8 +366,7 @@ def slow(tmp_path: Path) -> Iterator[Callable[..., ThrottledSSH]]:
     servers: list[ThrottledSSH] = []
 
     def start(shell: str, rate: int, name: str = 'home') -> ThrottledSSH:
-        if not os.access(shell, os.X_OK):
-            pytest.skip(f'{shell} is not installed here')
+        need_shell(shell)
         home = (tmp_path / name).resolve()
         home.mkdir(exist_ok=True)
         servers.append(ThrottledSSH(home, shell, tmp_path, rate))
@@ -412,10 +423,12 @@ CHATTY_RC = "head -c 1048576 /dev/zero | tr '\\0' z\n"
 
 
 @pytest.mark.integration
-def test_a_late_sentinel_still_counts_as_started(slow: Callable[..., ThrottledSSH]) -> None:
-    server = slow('/bin/zsh', 512 * 1024)
+@pytest.mark.parametrize('rc', list(REMOTE_RCS))
+def test_a_late_sentinel_still_counts_as_started(rc: str, slow: Callable[..., ThrottledSSH]) -> None:
+    shell, name = REMOTE_RCS[rc]
+    server = slow(shell, 512 * 1024)
     home = Path(server.home)
-    (home / '.zshenv').write_text(CHATTY_RC)
+    (home / name).write_text(CHATTY_RC)
     ran = _run(server, ['touch', '--', UserPath('~/ran')], timeout=60)
     sent = b'line one\nline two\n\0\xff'
     fed = _run(server, ['cat'], stdin=sent, timeout=60)
@@ -453,13 +466,15 @@ def _bounded_call(run: Callable[[], Any], within: float) -> tuple[Any, float]:
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize('rc', list(REMOTE_RCS))
 @pytest.mark.parametrize('call_kind', ['run', 'write_file', 'sbatch'])
-def test_a_call_holding_stdin_is_bounded(call_kind: str, serve: Callable[..., LoopbackSSH], executes: Any,
+def test_a_call_holding_stdin_is_bounded(call_kind: str, rc: str, serve: Callable[..., LoopbackSSH], executes: Any,
                                          monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ssh, 'START_TIMEOUT', START_BOUND, raising=False)
-    server = serve('/bin/zsh')
+    shell, name = REMOTE_RCS[rc]
+    server = serve(shell)
     home = Path(server.home)
-    (home / '.zshenv').write_text(RC_READS)
+    (home / name).write_text(RC_READS)
     argv_echo.install(home, 'sbatch')
     executor = server.executor()
     calls = {

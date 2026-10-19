@@ -37,6 +37,8 @@ import pytest
 from rcac_mcp.executor import NOT_STARTED_EXIT_CODE, TIMEOUT_EXIT_CODE, UserPath
 from rcac_mcp.executor import launch
 
+from conftest import need_shell
+
 TAKEN_MARK = b'cluster-mcp:parked-descriptor-taken'
 TAKEN_NOTE = (b'cluster-mcp: the command did not start: the login initialisation took a descriptor its streams '
               b'were parked on, so it was not run; the server log has the details\n')
@@ -665,8 +667,7 @@ def _wire_argv(wire: str, prog: str) -> list[str]:
     if wire == 'local':
         return launch.bash_argv(prog)
     shell = f'/bin/{wire.removeprefix("ssh-")}'
-    if not os.access(shell, os.X_OK):
-        pytest.skip(f'{shell} is not installed here')
+    need_shell(shell)
     return [shell, '-c', launch.ssh_command(prog)]
 
 
@@ -1098,11 +1099,14 @@ REDIRECTED = "cluster-mcp: the login initialisation redirected the command's {};
     pytest.param('exec >/dev/null', (b'', b'err\n' + REDIRECTED.format('stdout').encode(), 3), id='stdout'),
     pytest.param('exec 2>/dev/null', (b'out\n', REDIRECTED.format('stderr').encode(), 3), id='stderr'),
 ])
-def test_a_redirected_stream_is_reported(redirect: str, want: tuple[bytes, bytes, int], home: Path) -> None:
-    # The remote login shell's own rc file sends one stream away before the bootstrap starts.
-    (home / '.zshenv').write_text(redirect + '\n')
-    result = run_on('ssh-zsh', 'echo out; echo err >&2; exit 3', home)
-    assert result == want, f'a redirected stream was lost without a note: {result!r}'
+@pytest.mark.parametrize(('wire', 'rc'), [('ssh-zsh', '.zshenv'), ('ssh-bash', '.bashrc')])
+def test_a_redirected_stream_is_reported(wire: str, rc: str, redirect: str, want: tuple[bytes, bytes, int],
+                                         home: Path) -> None:
+    # The remote login shell's own rc file sends one stream away before the bootstrap starts: zsh's
+    # .zshenv, or the .bashrc bash reads for a shell sshd started (SSH_CLIENT set).
+    (home / rc).write_text(redirect + '\n')
+    result = run_on(wire, 'echo out; echo err >&2; exit 3', home, env=SSHD_ENV)
+    assert result == want, f'{wire}: a redirected stream was lost without a note: {result!r}'
 
 
 # A command whose result shows whether it ran: it leaves a file, copies its stdin to stdout, prints

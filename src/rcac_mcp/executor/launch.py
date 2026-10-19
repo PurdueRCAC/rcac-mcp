@@ -111,9 +111,11 @@ PARK: Final = 'exec 57<&0 58>&1 59>&2 47<&0 48>&1 49>&2 </dev/null >/dev/null 2>
 TAKEN_MARK: Final = b'cluster-mcp:parked-descriptor-taken'
 
 # True when each parked descriptor still names the same file as its copy. The prologue asks up to
-# three times: on macOS a stat through /dev/fd now and then fails while the descriptors are intact
-# (about one first check in 1,500 under a concurrent test run; the next check passes), whereas a
-# taken descriptor fails every time.
+# three times. macOS's /dev/fd shares one node per descriptor number among all processes, so a stat
+# of /dev/fd/57 while another process stats its own 57 can fail with EBADF; every launch parks on the
+# same numbers, so concurrent launches collide now and then. Such a failure only ever reads as "not
+# the same", never the reverse, and the next ask passes; a taken descriptor fails every time.
+# (Linux reads /proc/self/fd, which is per process.)
 PARKED_SAME: Final = '[[ /dev/fd/57 -ef /dev/fd/47 && /dev/fd/58 -ef /dev/fd/48 && /dev/fd/59 -ef /dev/fd/49 ]]'
 
 # The program's first two lines: undo what a profile can leave behind (aliases, functions shadowing

@@ -64,6 +64,20 @@ PROCESS_ENTRY_POINTS = (
 NETWORK_ENTRY_POINTS = [(socket.socket, 'connect'), (socket.socket, 'connect_ex'),
                         (socket, 'create_connection'), (socket, 'getaddrinfo')]
 
+def need_shell(shell: str) -> None:
+    """Return if `shell` is installed; otherwise skip the test, or fail it on CI.
+
+    Every login-shell row goes through here. On CI (`CI=true`, as GitHub Actions sets it) the
+    workflow installs every shell the suite drives, so a missing one fails the row, naming it: a
+    skipped row there would be coverage silently lost. Elsewhere it skips.
+    """
+    if os.access(shell, os.X_OK):
+        return
+    if os.environ.get('CI', '').lower() == 'true':
+        pytest.fail(f'{shell} is not installed here, and on CI every shell the suite drives must be', pytrace=False)
+    pytest.skip(f'{shell} is not installed here')
+
+
 SHIM_MESSAGE = 'refused by the test PATH shim'
 SHIM_SCRIPT = f"""#!/bin/sh
 echo '{SHIM_MESSAGE}' >&2

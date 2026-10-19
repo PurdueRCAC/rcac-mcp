@@ -393,7 +393,10 @@ import has no effect.
     `test_path_shim_survives_a_login_bash`), the harness fence and the build-inside-the-loop rule
     are active. No feature-scoped spec id (`R#`, `P#`) appears in the package or the suite
     (`test_no_spec_ids_in_the_package_or_the_suite`, which reads the imported package, so a planted
-    id in a mutated copy fails it).
+    id in a mutated copy fails it). A row that needs a login shell calls `conftest.need_shell`, the
+    suite's only skip: off CI a missing shell skips the row; on CI (`CI=true`) it fails it, naming
+    the shell (`test_a_missing_shell_fails_on_ci_and_skips_elsewhere`), and no other skip, `skipif`,
+    `importorskip` or `xfail` exists in `tests/*.py` (`test_only_need_shell_skips`, static).
   - `tests/test_protocol.py` (`unit`): `boundary_violations`, `cancellation_violations`,
     `era_violations`. A `PermissionError` (in memory and over HTTP), a `RuntimeError` and an
     `MCPError` raised by middleware around a tool call each arrive as a tool error result whose
@@ -1341,7 +1344,8 @@ What each mode means:
   per command, verbatim, in that order. A change to any of the three lists changes the workflow in
   the same commit, and the reverse. Before them, one provisioning step installs the login shells the suite
   drives (`zsh`, `tcsh`, `ksh`, `csh`) and nothing else: the runner lacks them, and without them
-  those tests skip on Linux. It has no local counterpart, since macOS ships them. The sdist furniture set lives only in `bin/sdist_hygiene.py`,
+  those tests would fail there (`conftest.need_shell` fails a missing-shell row on CI rather than
+  skip it). It has no local counterpart, since macOS ships them. The sdist furniture set lives only in `bin/sdist_hygiene.py`,
   which the recipe and CI both run. The workflow's `python-version` is the floor of
   `requires-python` and moves with it. Every `uses:` in `.github/workflows/` names a full commit
   SHA, the version in a trailing comment; the token stays `permissions: contents: read`, and no

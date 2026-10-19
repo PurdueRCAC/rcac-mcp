@@ -581,3 +581,74 @@ def test_no_spec_ids_in_the_package_or_the_suite() -> None:
 ])
 def test_spec_id_check_catches_planted_ids(text: str, found: bool) -> None:
     assert bool(spec_id_violations('planted', text)) == found
+
+
+# A row that needs a login shell runs it or, off CI, skips: `conftest.need_shell` is the one place
+# that decides, and on CI (where the workflow installs every shell) it fails the row instead. Any
+# other skip in the suite would let a row vanish from CI without failing.
+SKIPPERS = {'skip', 'skipif', 'importorskip', 'xfail'}
+
+
+def skip_violations(name: str, text: str) -> list[str]:
+    """Every skip, conditional skip or expected failure in `text` outside `need_shell`."""
+    found = []
+    tree = ast.parse(text, name)
+    allowed: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == 'need_shell' and name.endswith('conftest.py'):
+            allowed |= {n.lineno for n in ast.walk(node) if hasattr(n, 'lineno')}
+    # `pytest.skip.Exception` names the outcome without skipping anything.
+    named = {id(node.value) for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+    for node in ast.walk(tree):
+        word = node.attr if isinstance(node, ast.Attribute) else node.id if isinstance(node, ast.Name) else None
+        if word in SKIPPERS and node.lineno not in allowed and id(node) not in named:
+            found.append(f'{name}:{node.lineno}: {word}')
+    return found
+
+
+@pytest.mark.unit
+def test_only_need_shell_skips() -> None:
+    files = sorted(TESTS.glob('*.py'))
+    assert any(f.name == 'conftest.py' for f in files), 'conftest.py not found'
+    violations = [v for f in files for v in skip_violations(str(f), f.read_text())]
+    assert violations == [], 'a test can skip on CI without failing:\n' + '\n'.join(violations)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(('name', 'text', 'found'), [
+    pytest.param('t.py', 'import pytest\npytest.skip("no zsh")\n', True, id='skip'),
+    pytest.param('t.py', 'import pytest\n@pytest.mark.skipif(True, reason="x")\ndef test(): pass\n', True,
+                 id='skipif'),
+    pytest.param('t.py', 'from pytest import importorskip\nimportorskip("yaml")\n', True, id='importorskip'),
+    pytest.param('t.py', 'def need_shell(s):\n    pytest.skip(s)\n', True, id='need-shell-elsewhere'),
+    pytest.param('conftest.py', 'def need_shell(s):\n    pytest.skip(s)\n', False, id='need-shell'),
+    pytest.param('t.py', 'import pytest\nraised = pytest.skip.Exception\n', False, id='outcome-type'),
+])
+def test_skip_check_catches_planted_skips(name: str, text: str, found: bool) -> None:
+    assert bool(skip_violations(name, text)) == found
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(('ci', 'outcome'), [
+    pytest.param('true', pytest.fail.Exception, id='ci'),
+    pytest.param(None, pytest.skip.Exception, id='local'),
+    pytest.param('false', pytest.skip.Exception, id='ci-false'),
+])
+def test_a_missing_shell_fails_on_ci_and_skips_elsewhere(ci: str | None, outcome: type[BaseException],
+                                                         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from conftest import need_shell
+    if ci is None:
+        monkeypatch.delenv('CI', raising=False)
+    else:
+        monkeypatch.setenv('CI', ci)
+    missing = str(tmp_path / 'no-such-shell')
+    # Caught by hand: under pytest.raises a skip that should have been a failure would skip this row.
+    try:
+        need_shell(missing)
+    except BaseException as exc:
+        raised: BaseException | None = exc
+    else:
+        raised = None
+    assert type(raised) is outcome, f'CI={ci}: a missing shell gave {raised!r}, not {outcome.__name__}'
+    assert missing in str(raised), raised
+    need_shell('/bin/sh')
