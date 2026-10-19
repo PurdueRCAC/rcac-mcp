@@ -1066,6 +1066,21 @@ contract or the heredoc writes; every planted violation is killed; every deferra
     descriptor fails every time. After the change: 0 refusals in 4,000 sandboxed launches and in
     four concurrent `test_literal_args.py` runs (648 rows), against 1–3 failed rows per run before.
     Linux CI never showed it (its `-ef` reads `/proc/self/fd`).
+  - **CI evidence, by pushed head** (workflow CI, job `gate`; "passed/skipped" per era):
+    a9a2901 run 39199991590, failure (5 failed, 1341 passed, 70 skipped: the five rows above);
+    c547e12 run 39202286076, success (1359 passed, 70 skipped, both eras); 4cfea29 run
+    39203683155, success (the same counts); 320192b, a probe commit carrying the mutants
+    `prologue-physical-kept` and `parked-descriptor-unchecked` together, run 39203706779, failure
+    as intended: `[local-physical]` and `[ssh-bash-physical]` red with "the profile's state reached
+    the launcher" (so the `pwd -L` rows kill the leak on Linux), all six
+    `test_a_taken_parked_descriptor_runs_nothing` rows red, and the four real-profile rows red with
+    exactly the defect, `-1002` "did not start (exit 3)" for `streams` and the decoy's bytes as
+    stdin with exit 3 for `stdin` (so the probe found bash 5 keeping the takeover); the rest of its
+    48 failures are the rendered-program and mutant-anchor checks the edit also trips. The next
+    commit reverts the probe; its run is the final head's.
+  - **Local gates** on 4cfea29 (macOS, bash 3.2): P7's stored gate green (1429 passed in each era,
+    0 skipped; the sweep's mutation step killed all 165 cases and both controls reported
+    correctly); P6's stored gate green.
     **Pins, exact on both bashes:** `test_a_taken_parked_descriptor_runs_nothing[57|58|59|47|48|49]`
     builds the takeover in the stage itself (each descriptor parked on a file), so it runs on any
     bash: `('', TAKEN_NOTE, -1002)` and the command's marker file absent;

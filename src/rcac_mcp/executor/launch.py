@@ -114,7 +114,7 @@ TAKEN_MARK: Final = b'cluster-mcp:parked-descriptor-taken'
 # three times: on macOS a stat through /dev/fd now and then fails while the descriptors are intact
 # (about one first check in 1,500 under a concurrent test run; the next check passes), whereas a
 # taken descriptor fails every time.
-PARKED_SAME: Final = 'true'
+PARKED_SAME: Final = '[[ /dev/fd/57 -ef /dev/fd/47 && /dev/fd/58 -ef /dev/fd/48 && /dev/fd/59 -ef /dev/fd/49 ]]'
 
 # The program's first two lines: undo what a profile can leave behind (aliases, functions shadowing
 # the words used here, the field separator, shell options: `-k` would turn an argument shaped like an
@@ -129,7 +129,7 @@ PARKED_SAME: Final = 'true'
 # with its streams lost or its stdin replaced.
 PROLOGUE: Final = ('\\unalias -a\n'
                    'unset -f builtin command exec set printf trap cd export declare compgen read; unset IFS; '
-                   'set +euxvTk +o errtrace +o posix; trap - EXIT ERR DEBUG RETURN; '
+                   'set +euxvTkP +o errtrace +o posix; trap - EXIT ERR DEBUG RETURN; '
                    f'{PARKED_SAME} || {PARKED_SAME} || {PARKED_SAME} || '
                    f'{{ printf %s {TAKEN_MARK.decode()} >&49; '
                    f'printf %s {TAKEN_MARK.decode()} >&59; exec /usr/bin/false; }}; '
