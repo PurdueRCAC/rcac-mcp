@@ -6,7 +6,7 @@ appetite: small
 status: in_progress
 branch: ci/ci-workflow
 base: develop
-current_phase: P3
+current_phase: P4
 last_updated: '2026-10-18'
 phases:
 - id: P1
@@ -41,7 +41,7 @@ phases:
 - id: P3
   name: Local evidence - zero-finding lint, and the gate red at the right step for
     each plant
-  status: in_progress
+  status: done
   satisfies:
   - R9
   depends_on:
@@ -229,6 +229,10 @@ re-checked live by the gate. **R9 is graded by the orchestrator** (its evidence 
 - **Amendment (2026-10-17, rebase onto `develop` `fb2d4dd`):** reopened to re-record the lint and
   the local reds against the nine-step gate job; the hygiene reds now fail at step 9/9. Gate
   unchanged.
+- **Amendment (2026-10-18, rebase onto `develop` `de2b380`):** `EVIDENCE.md`'s `## Lint` and
+  `## Local reds` re-recorded on the rebased tree (`7d56cd1`): lint zero findings; the three red
+  replays under uv 0.12.17, the hygiene reds at step 9/9 naming `dist/rcac_mcp-0.1.1.tar.gz`'s
+  planted path and `test-red` at step 3/9; all ten hygiene mutants killed. Gate unchanged.
 
 ## Phase P4 — Outward: a green gate run on the cycle branch head
 **Satisfies:** R9 (b); observes R1 and R2 on GitHub · **Depends on:** P3

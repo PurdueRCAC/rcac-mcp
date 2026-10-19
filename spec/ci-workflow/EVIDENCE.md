@@ -9,13 +9,14 @@ commands and pins in `verify/gate.sh`, the steps of `.github/workflows/ci.yml`, 
 
 R9(a): a static lint of both workflow files with zero findings.
 
-Recorded: 2026-10-17
+Recorded: 2026-10-18
 
 Tools, each fetched by `uvx` at the version `verify/gate.sh` pins: actionlint 1.7.12
 (`actionlint-py==1.7.12.25`), with shellcheck 0.11.0 (`shellcheck-py==0.11.0.1`) on its `PATH`
 so every `run:` script is shellchecked too; and zizmor 1.31.1, online, so it also checks each
 action pin against GitHub (`ref-version-mismatch`, `impostor-commit`). Run from the worktree root
-on the tree of `d29e18c` (P3 changes nothing outside `spec/ci-workflow/`).
+on the tree of `7d56cd1`, the cycle rebased onto `develop` `de2b380` (P3 changes nothing outside
+`spec/ci-workflow/`).
 
 ```
 $ uvx -q --with shellcheck-py==0.11.0.1 --from actionlint-py==1.7.12.25 actionlint -version
@@ -47,49 +48,59 @@ and R1 says every push runs (`research/01-facts.md`).
 
 ## Local reds
 
-R9(d), and R3 red locally: the gate job replayed (`verify/replay.py`) on a snapshot of the tree,
-each with one plant, red at the intended step with every earlier step green and the intended text
-in that step's output (blank lines dropped). `exit 0` is the replay's own verdict: its expectation
-held. The snapshot (`28ed49c43e`) is a commit synthesized from what `git add -A` would stage, with
-the tree of `d29e18c`; the `security-furniture` plant removes the `/.security` sdist exclude and the
+R9(d), and R3 red locally: the nine-step gate job replayed (`verify/replay.py`) on a snapshot of
+the tree, each with one plant, under CI's uv 0.12.17 (the replay installs it and asserts its
+version), red at the intended step with every earlier step green and the intended text in that
+step's output (blank lines dropped). `exit 0` is the replay's own verdict: its expectation held.
+Each snapshot is a commit synthesized from what `git add -A` would stage, with the tree of
+`7d56cd1`; the `security-furniture` plant removes the `/.security` sdist exclude and the
 `.gitignore` line in the snapshot only, so a real hatchling build ships `.security/planted.md`.
 
-Recorded: 2026-10-17
+Recorded: 2026-10-18
 
 ```
 $ uv run -q --with pyyaml==6.0.3 python spec/ci-workflow/verify/replay.py --plant security-furniture --expect-red sdist_hygiene --expect-log '.security/planted.md'
-replay[gate @ 28ed49c43e from worktree + security-furniture] step 1/7 ok: uv sync --locked
-replay[gate @ 28ed49c43e from worktree + security-furniture] step 2/7 ok: uv lock --check
-replay[gate @ 28ed49c43e from worktree + security-furniture] step 3/7 ok: uv run pytest -q
-replay[gate @ 28ed49c43e from worktree + security-furniture] step 4/7 ok: bin/sandbox.sh uv run rcac-mcp --help
-replay[gate @ 28ed49c43e from worktree + security-furniture] step 5/7 ok: uv build -o dist/
-replay[gate @ 28ed49c43e from worktree + security-furniture] step 6/7 ok: uvx twine check --strict dist/*
-replay[gate @ 28ed49c43e from worktree + security-furniture] step 7/7 FAILED (exit 1): uv run python bin/sdist_hygiene.py dist/
-dist/rcac_mcp-0.1.0.tar.gz: .security/planted.md
+replay[gate @ e1284c7816 from worktree + security-furniture] step 1/9 ok: uv sync --locked
+replay[gate @ e1284c7816 from worktree + security-furniture] step 2/9 ok: uv lock --check
+replay[gate @ e1284c7816 from worktree + security-furniture] step 3/9 ok: uv run pytest -q
+replay[gate @ e1284c7816 from worktree + security-furniture] step 4/9 ok: CLUSTER_MCP_TEST_ERA=modern uv run pytest -q
+replay[gate @ e1284c7816 from worktree + security-furniture] step 5/9 ok: bin/sandbox.sh uv run rcac-mcp --help
+replay[gate @ e1284c7816 from worktree + security-furniture] step 6/9 ok: uv run python bin/audit_lock.py
+replay[gate @ e1284c7816 from worktree + security-furniture] step 7/9 ok: uv build -o dist/
+replay[gate @ e1284c7816 from worktree + security-furniture] step 8/9 ok: uvx twine check --strict dist/*
+replay[gate @ e1284c7816 from worktree + security-furniture] step 9/9 FAILED (exit 1): uv run python bin/sdist_hygiene.py dist/
+dist/rcac_mcp-0.1.1.tar.gz: .security/planted.md
 sdist hygiene: 1 problem(s); see above
-replay[gate @ 28ed49c43e from worktree + security-furniture]: red as expected at 'uv run python bin/sdist_hygiene.py dist/', naming '.security/planted.md'
+replay[gate @ e1284c7816 from worktree + security-furniture]: red as expected at 'uv run python bin/sdist_hygiene.py dist/', naming '.security/planted.md'
 exit 0
 $ uv run -q --with pyyaml==6.0.3 python spec/ci-workflow/verify/replay.py --plant agents-furniture --expect-red sdist_hygiene --expect-log '.agents/planted.md'
-replay[gate @ 28ed49c43e from worktree + agents-furniture] step 1/7 ok: uv sync --locked
-replay[gate @ 28ed49c43e from worktree + agents-furniture] step 2/7 ok: uv lock --check
-replay[gate @ 28ed49c43e from worktree + agents-furniture] step 3/7 ok: uv run pytest -q
-replay[gate @ 28ed49c43e from worktree + agents-furniture] step 4/7 ok: bin/sandbox.sh uv run rcac-mcp --help
-replay[gate @ 28ed49c43e from worktree + agents-furniture] step 5/7 ok: uv build -o dist/
-replay[gate @ 28ed49c43e from worktree + agents-furniture] step 6/7 ok: uvx twine check --strict dist/*
-replay[gate @ 28ed49c43e from worktree + agents-furniture] step 7/7 FAILED (exit 1): uv run python bin/sdist_hygiene.py dist/
-dist/rcac_mcp-0.1.0.tar.gz: .agents/planted.md
+replay[gate @ 7fe2d9a9d2 from worktree + agents-furniture] step 1/9 ok: uv sync --locked
+replay[gate @ 7fe2d9a9d2 from worktree + agents-furniture] step 2/9 ok: uv lock --check
+replay[gate @ 7fe2d9a9d2 from worktree + agents-furniture] step 3/9 ok: uv run pytest -q
+replay[gate @ 7fe2d9a9d2 from worktree + agents-furniture] step 4/9 ok: CLUSTER_MCP_TEST_ERA=modern uv run pytest -q
+replay[gate @ 7fe2d9a9d2 from worktree + agents-furniture] step 5/9 ok: bin/sandbox.sh uv run rcac-mcp --help
+replay[gate @ 7fe2d9a9d2 from worktree + agents-furniture] step 6/9 ok: uv run python bin/audit_lock.py
+replay[gate @ 7fe2d9a9d2 from worktree + agents-furniture] step 7/9 ok: uv build -o dist/
+replay[gate @ 7fe2d9a9d2 from worktree + agents-furniture] step 8/9 ok: uvx twine check --strict dist/*
+replay[gate @ 7fe2d9a9d2 from worktree + agents-furniture] step 9/9 FAILED (exit 1): uv run python bin/sdist_hygiene.py dist/
+dist/rcac_mcp-0.1.1.tar.gz: .agents/planted.md
 sdist hygiene: 1 problem(s); see above
-replay[gate @ 28ed49c43e from worktree + agents-furniture]: red as expected at 'uv run python bin/sdist_hygiene.py dist/', naming '.agents/planted.md'
+replay[gate @ 7fe2d9a9d2 from worktree + agents-furniture]: red as expected at 'uv run python bin/sdist_hygiene.py dist/', naming '.agents/planted.md'
 exit 0
 $ uv run -q --with pyyaml==6.0.3 python spec/ci-workflow/verify/replay.py --plant test-red --expect-red 'uv run pytest -q' --expect-log 'planted red'
-replay[gate @ 28ed49c43e from worktree + test-red] step 1/7 ok: uv sync --locked
-replay[gate @ 28ed49c43e from worktree + test-red] step 2/7 ok: uv lock --check
-replay[gate @ 28ed49c43e from worktree + test-red] step 3/7 FAILED (exit 1): uv run pytest -q
-........................................................................ [ 22%]
-........................................................................ [ 45%]
-........................................................................ [ 68%]
-...........F............................................................ [ 91%]
-............................                                             [100%]
+replay[gate @ e95a60aaef from worktree + test-red] step 1/9 ok: uv sync --locked
+replay[gate @ e95a60aaef from worktree + test-red] step 2/9 ok: uv lock --check
+replay[gate @ e95a60aaef from worktree + test-red] step 3/9 FAILED (exit 1): uv run pytest -q
+........................................................................ [ 10%]
+........................................................................ [ 21%]
+........................................................................ [ 32%]
+........................................................................ [ 43%]
+........................................................................ [ 54%]
+........................................................................ [ 64%]
+........................................................................ [ 75%]
+...F.................................................................... [ 86%]
+........................................................................ [ 97%]
+..................                                                       [100%]
 =================================== FAILURES ===================================
 _______________________________ test_planted_red _______________________________
     @mark.unit
@@ -98,11 +109,16 @@ _______________________________ test_planted_red _______________________________
 E       AssertionError: planted red
 E       assert False
 tests/test_planted_red.py:6: AssertionError
+=============================== warnings summary ===============================
+tests/test_tokens.py::test_mismatched_token_is_rejected[algorithm]
+  /private/var/folders/42/998kw6wj2ts8nlls3qyqmqs00000gn/T/ci-replay.7btcfxhc/repo/.venv/lib/python3.14/site-packages/jwt/api_jwt.py:149: InsecureKeyLengthWarning: The HMAC key is 32 bytes long, which is below the minimum recommended length of 64 bytes for SHA512. See RFC 7518 Section 3.2.
+    return self._jws.encode(
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
 =========================== short test summary info ============================
 FAILED tests/test_planted_red.py::test_planted_red - AssertionError: planted red
 assert False
-1 failed, 315 passed in 11.47s
-replay[gate @ 28ed49c43e from worktree + test-red]: red as expected at 'uv run pytest -q', naming 'planted red'
+1 failed, 665 passed, 1 warning in 20.15s
+replay[gate @ e95a60aaef from worktree + test-red]: red as expected at 'uv run pytest -q', naming 'planted red'
 exit 0
 ```
 
