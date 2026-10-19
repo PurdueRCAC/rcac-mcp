@@ -23,14 +23,35 @@ using your existing `~/.ssh/config` and keys.
 
 Alternatively, set `RCAC_SSH_HOST` in your environment and omit `--ssh-host` from the args.
 
+If the server cannot connect, your client shows the reason as the error to its first request:
+`cannot connect to <host>: <cause>` (unknown host or SSH alias, connection refused, authentication
+failed, or timed out after 15 seconds per step unless your SSH config sets `ConnectTimeout`). Check
+that `--ssh-host` names the SSH host or `~/.ssh/config` alias you use with `ssh`, not the MCP
+server's name.
+
 ## Execution Modes
 
 The server supports three execution modes:
 
 - **`ssh`** (default for stdio) — Execute commands on a remote HPC cluster via SSH.
-- **`local`** — Execute commands locally via `$SHELL`. For development/testing only.
+- **`local`** — Execute commands locally under bash. For development/testing only.
 - **`delegate`** — Multi-user mode; run as a privileged process and delegate commands to
   authenticated users via `sudo`. Requires JWT or OIDC authentication.
+
+In every mode a command runs in a login bash (`/bin/bash -l`), whatever the user's login shell, so
+`module` and the site's tools behave the same for everyone. No startup file reads a command's stdin
+or changes where it starts, and nothing the login initialisation prints is returned, with one
+exception: over ssh, a background job started by the remote login shell's own rc file (zsh's
+`.zshenv`, say) can write into a result while the command runs
+([`issues/startup-background-jobs.md`](issues/startup-background-jobs.md)). A result holds all of
+the command's output, however slowly it arrives; if something left running keeps the output open
+after the command exits, the call returns once nothing has arrived for a second, and stderr ends
+with a note saying so. Over ssh a command's stdin is sent only once it has started, so if the remote
+login shell's rc file reads stdin, a call that sends stdin times out and never writes partial
+content (`write_file` and `sbatch`'s job script both send stdin; without a timeout of their own,
+they wait at most 30 s with nothing arriving for the command to start, then fail naming exit code
+`-1001`). A command that exceeds its `timeout` returns what it printed so far with exit code
+`-1001`.
 
 See [SECURITY.md](SECURITY.md) for detailed architecture and configuration.
 
@@ -88,7 +109,7 @@ This server does not search RCAC documentation. The separate `rcac-docs-mcp` ser
 - `run_command(command, cwd, timeout)` — Execute a shell command on the remote system
 - `list_directory(path, show_hidden)` — List contents of a directory
 - `read_file(path, encoding, max_size)` — Read contents of a file
-- `write_file(path, content, append, create_dirs)` — Write content to a file
+- `write_file(path, content, append, create_dirs, encoding)` — Write content to a file, byte for byte (`encoding="base64"` for binary)
 - `upload_file(local_path, remote_path)` — Upload a file to the remote system
 - `download_file(remote_path, local_path)` — Download a file from the remote system
 
@@ -105,11 +126,13 @@ This server does not search RCAC documentation. The separate `rcac-docs-mcp` ser
 
 ### Slurm
 
-- `sbatch(...)` — Submit a batch job (from script path or inline content)
+- `sbatch(...)` — Submit a batch job (from script path or inline content, written byte for byte); `args` are the job script's arguments, `extra_args` more sbatch options, each a list with one argument per element
 - `squeue(...)` — View the job queue
 - `scancel(...)` — Cancel jobs
 - `sacct(...)` — Query job accounting history
 - `sinfo(...)` — Cluster and partition status
+
+The `extra_args` of `sbatch`, `squeue`, `scancel`, `sacct` and `sinfo` is a list of options, one argument per element (`extra_args=["--long"]`); a string is refused.
 - `scontrol_show_job(job_id)` — Detailed Slurm job info
 - `scontrol_show_node(node)` — Detailed node info
 - `slist()` — Slurm accounts and usage (RCAC-specific)

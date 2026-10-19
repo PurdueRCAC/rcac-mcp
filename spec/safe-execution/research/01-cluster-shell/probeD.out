@@ -1,0 +1,84 @@
+===== gautschi
+--- scontrol show node -x (getopt permutation?)
+scontrol: invalid option -- 'x'
+Try "scontrol --help" for more information
+--- scontrol show node -- -x
+Node -x not found
+--- scontrol show node=-x
+Node -x not found
+--- squeue --user=-x
+squeue: error: Invalid user: -x
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+--- squeue -u -x
+squeue: error: Invalid user: -x
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+--- squeue --me -- extra
+squeue: error: Unrecognized option: extra
+Usage: squeue [-A account] [--clusters names] [-i seconds] [--job jobid]
+              [-n name] [-o format] [--only-job-state] [-p partitions]
+--- sbatch --usage
+Usage: sbatch [-N nnodes] [-n ntasks]
+              [-c ncpus] [-r n] [-p partition] [--hold] [--parsable] [-t minutes]
+              [-D path] [--no-kill] [--overcommit]
+              [--input file] [--output file] [--error file]
+--- slurm version
+slurm 26.05.4
+--- site tools
+myquota -> /usr/local/bin/myquota : Bourne-Again shell script, ASCII text executable
+jobinfo -> /usr/local/bin/jobinfo : Python script, ASCII text executable
+jobcmd -> MISSING : 
+jobenv -> MISSING : 
+jobscript -> MISSING : 
+average_wait -> /usr/local/bin/average_wait : Bourne-Again shell script, ASCII text executable
+slist -> /usr/local/bin/slist : Bourne-Again shell script, ASCII text executable
+sfeatures -> /usr/local/bin/sfeatures : Bourne-Again shell script, ASCII text executable
+showpartitions -> /usr/local/bin/showpartitions : Bourne-Again shell script, ASCII text executable
+findscratch -> /usr/local/bin/findscratch : Korn shell script, ASCII text executable
+--- average_wait arg parsing [site-script text redacted]
+--- jobinfo arg parsing [site-script text redacted]
+--- coreutils
+cat (GNU coreutils) 8.32
+ls (GNU coreutils) 8.32
+base64 (GNU coreutils) 8.32
+===== negishi
+--- scontrol show node -x (getopt permutation?)
+scontrol: invalid option -- 'x'
+Try "scontrol --help" for more information
+--- scontrol show node -- -x
+Node -x not found
+--- scontrol show node=-x
+Node -x not found
+--- squeue --user=-x
+squeue: error: Invalid user: -x
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+--- squeue -u -x
+squeue: error: Invalid user: -x
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+--- squeue --me -- extra
+squeue: error: Unrecognized option: extra
+Usage: squeue [-A account] [--clusters names] [-i seconds] [--job jobid]
+              [-n name] [-o format] [--only-job-state] [-p partitions]
+--- sbatch --usage
+Usage: sbatch [-N nnodes] [-n ntasks]
+              [-c ncpus] [-r n] [-p partition] [--hold] [--parsable] [-t minutes]
+              [-D path] [--no-kill] [--overcommit]
+              [--input file] [--output file] [--error file]
+--- slurm version
+slurm 26.05.4
+--- site tools
+myquota -> /usr/local/bin/myquota : Bourne-Again shell script, ASCII text executable
+jobinfo -> /usr/local/bin/jobinfo : Python script, ASCII text executable
+jobcmd -> MISSING : 
+jobenv -> MISSING : 
+jobscript -> MISSING : 
+average_wait -> /usr/local/bin/average_wait : Bourne-Again shell script, ASCII text executable
+slist -> /usr/local/bin/slist : Bourne-Again shell script, ASCII text executable
+sfeatures -> /usr/local/bin/sfeatures : Bourne-Again shell script, ASCII text executable
+showpartitions -> /usr/local/bin/showpartitions : Bourne-Again shell script, ASCII text executable
+findscratch -> /usr/local/bin/findscratch : Korn shell script, ASCII text executable
+--- average_wait arg parsing [site-script text redacted]
+--- jobinfo arg parsing [site-script text redacted]
+--- coreutils
+cat (GNU coreutils) 8.30
+ls (GNU coreutils) 8.30
+base64 (GNU coreutils) 8.30

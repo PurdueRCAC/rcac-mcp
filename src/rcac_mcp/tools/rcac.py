@@ -50,7 +50,7 @@ def myquota() -> str:
         myquota()
     """
     executor = get_executor()
-    result = executor.run('myquota')
+    result = executor.run(['myquota'])
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to get quota info: {result.stderr}')
@@ -77,7 +77,7 @@ def jobinfo(job_id: int) -> str:
     """
     _validate_job_id(job_id)
     executor = get_executor()
-    result = executor.run(f'jobinfo {job_id}')
+    result = executor.run(['jobinfo', str(job_id)])
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to get job info: {result.stderr}')
@@ -104,7 +104,7 @@ def jobcmd(job_id: int) -> str:
     """
     _validate_job_id(job_id)
     executor = get_executor()
-    result = executor.run(f'jobcmd {job_id}')
+    result = executor.run(['jobcmd', str(job_id)])
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to get job command: {result.stderr}')
@@ -131,7 +131,7 @@ def jobenv(job_id: int) -> str:
     """
     _validate_job_id(job_id)
     executor = get_executor()
-    result = executor.run(f'jobenv {job_id}')
+    result = executor.run(['jobenv', str(job_id)])
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to get job environment: {result.stderr}')
@@ -158,7 +158,7 @@ def jobscript(job_id: int) -> str:
     """
     _validate_job_id(job_id)
     executor = get_executor()
-    result = executor.run(f'jobscript {job_id}')
+    result = executor.run(['jobscript', str(job_id)])
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to get job script: {result.stderr}')
@@ -182,7 +182,7 @@ def showpartitions() -> str:
         showpartitions()
     """
     executor = get_executor()
-    result = executor.run('showpartitions')
+    result = executor.run(['showpartitions'])
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to get partition info: {result.stderr}')
@@ -215,13 +215,16 @@ def average_wait(
     """
     executor = get_executor()
 
-    cmd = 'average_wait'
+    # average_wait passes these on to sacct, whose partition option is --partition (-p there is
+    # --parsable).
+    argv = ['average_wait']
+    # An empty value was not given, as for the Slurm tools' options.
     if partition:
-        cmd += f' -p {partition}'
+        argv += ['--partition', partition]
     if account:
-        cmd += f' -A {account}'
+        argv += ['-A', account]
 
-    result = executor.run(cmd)
+    result = executor.run(argv)
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to get wait time stats: {result.stderr}')
@@ -356,13 +359,13 @@ def storage_paths() -> StoragePaths:
 
     # Get the actual scratch path using findscratch (authoritative source)
     # This returns the full path like /scratch/gautschi/glentner
-    scratch_result = executor.run('findscratch')
+    scratch_result = executor.run(['findscratch'])
     if scratch_result.exit_code != 0 or not scratch_result.stdout.strip():
         raise RuntimeError(f'Failed to get scratch path: {scratch_result.stderr}')
     scratch_path = scratch_result.stdout.strip()
 
     # Get myquota output
-    quota_result = executor.run('myquota')
+    quota_result = executor.run(['myquota'])
     if quota_result.exit_code != 0:
         raise RuntimeError(f'Failed to get quota info: {quota_result.stderr}')
 

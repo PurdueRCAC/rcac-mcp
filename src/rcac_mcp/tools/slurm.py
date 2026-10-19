@@ -6,21 +6,35 @@
 These tools provide interfaces to standard Slurm commands for job submission,
 monitoring, and cluster status queries. Also includes RCAC-specific Slurm
 extensions like slist and sfeatures.
+
+Every tool hands the executor an argv: each option value is its own element, so it reaches the
+program as exactly one literal argument, and a positional value follows `--`.
 """
 
 # Type annotations
 from __future__ import annotations
-from typing import Optional, List
+from typing import Final, Optional, List
 import re
 from datetime import datetime
 
 # Internal libs
 from rcac_mcp.tools import mcp_tool
 from rcac_mcp.context import get_executor
+from rcac_mcp.executor import UserPath
+from rcac_mcp.scripts import fixed, script_argv
+from rcac_mcp.tools.filesystem import MKDIR, WRITE
 
 
 # Default directory for job scripts
 DEFAULT_JOBS_DIR = '~/jobs'
+
+# Write stdin to the job script "$1" exactly, as write_file does, after creating its directory
+# "$2", then make it executable. `--` comes before the mode: BSD chmod stops reading options at the
+# mode, so a `--` after it would be taken as a file.
+WRITE_JOB_SCRIPT: Final = fixed(MKDIR + WRITE + ' && chmod -- +x "$1"')
+
+# The characters a job script's filename keeps from the job name; any other becomes `_`.
+UNSAFE_NAME = re.compile(r'[^A-Za-z0-9._-]')
 
 
 def _validate_job_id(job_id: int) -> None:
@@ -29,15 +43,41 @@ def _validate_job_id(job_id: int) -> None:
         raise ValueError(f'job_id must be a positive integer, got: {job_id}')
 
 
-def _build_args(args: List[str]) -> str:
-    """Build command argument string from list, filtering None values."""
-    return ' '.join(arg for arg in args if arg)
+def _options(*pairs: tuple[str, Optional[str]]) -> List[str]:
+    """Each (option, value) pair whose value was given, as two elements: the option, then the value.
+
+    An optional value that is empty was not given, as if it were None: some clients send `''` for
+    an optional string they leave unset, and an option with an empty value is never what is meant.
+    """
+    argv: List[str] = []
+    for option, value in pairs:
+        if value:
+            argv += [option, value]
+    return argv
+
+
+def _extra(extra_args: Optional[List[str]]) -> List[str]:
+    """The caller's extra options, one argument per element; an element "--" is refused."""
+    if not extra_args:
+        return []
+    if '--' in extra_args:
+        raise ValueError('extra_args must not contain "--": each element is an option for the program, '
+                         'and "--" would end its options')
+    return list(extra_args)
+
+
+def _job_script_path(job_name: Optional[str]) -> UserPath:
+    """Where a job script written from content goes: ~/jobs/<name>_<timestamp>.sh."""
+    name = UNSAFE_NAME.sub('_', job_name or '').lstrip('.-') or 'job'
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    return UserPath(f'{DEFAULT_JOBS_DIR}/{name}_{timestamp}.sh')
 
 
 @mcp_tool
 def sbatch(
     script_path: Optional[str] = None,
     script_content: Optional[str] = None,
+    args: Optional[List[str]] = None,
     job_name: Optional[str] = None,
     account: Optional[str] = None,
     partition: Optional[str] = None,
@@ -51,18 +91,21 @@ def sbatch(
     constraint: Optional[str] = None,
     output: Optional[str] = None,
     error: Optional[str] = None,
-    extra_args: Optional[str] = None,
+    extra_args: Optional[List[str]] = None,
 ) -> str:
     """
     Submit a batch job to Slurm.
 
     Either script_path (existing file on cluster) or script_content
     (script text to write) must be provided. If script_content is given,
-    the script is written to ~/jobs/<job_name>_<timestamp>.sh before submission.
+    the script is written byte for byte (no newline added) to
+    ~/jobs/<job_name>_<timestamp>.sh and made executable before submission.
+    Every value reaches sbatch, or the job script, as exactly one argument.
 
     Args:
-        script_path: Path to existing job script on the cluster.
+        script_path: Path to existing job script on the cluster (one literal path).
         script_content: Job script content to write and submit.
+        args: Arguments for the job script, one per element, passed after its path.
         job_name: Job name (-J/--job-name). Used in script filename if writing.
         account: Slurm account to charge (-A/--account).
         partition: Partition to submit to (-p/--partition).
@@ -76,85 +119,69 @@ def sbatch(
         constraint: Node constraint (-C/--constraint).
         output: Stdout file path (-o/--output).
         error: Stderr file path (-e/--error).
-        extra_args: Additional sbatch arguments as a string.
+        extra_args: Additional sbatch options, one argument per element (e.g. ['--exclusive']),
+            placed after the options above and before the script path; an element '--' is refused.
 
     Returns:
         The submitted job ID as a string.
 
     Examples:
         sbatch(script_path='~/jobs/my_job.sh')
+        sbatch(script_path='~/jobs/sweep.sh', args=['--lr', '0.01', 'run one'])
         sbatch(
-            script_content='#!/bin/bash\\n#SBATCH -c 4\\npython train.py',
+            script_content='#!/bin/bash\\n#SBATCH -c 4\\npython train.py\\n',
             job_name='train',
             account='mylab',
             partition='gpu',
             time='02:00:00',
+            extra_args=['--mail-type', 'END'],
         )
     """
-    executor = get_executor()
-
-    if script_path is None and script_content is None:
+    # An empty script_path was not given, as for the options below; script_content is content, so
+    # an empty one is an empty script.
+    if not script_path and script_content is None:
         raise ValueError('Either script_path or script_content must be provided')
 
-    if script_path is not None and script_content is not None:
+    if script_path and script_content is not None:
         raise ValueError('Provide either script_path or script_content, not both')
 
-    # If script_content provided, write it to a file first
+    # Every refusal comes before any executor call: nothing is written for a job that cannot be
+    # submitted.
+    options = _extra(extra_args)
+    data = None
     if script_content is not None:
-        # Ensure jobs directory exists
-        executor.run(f'mkdir -p {DEFAULT_JOBS_DIR}')
+        try:
+            data = script_content.encode('utf-8')
+        except UnicodeEncodeError:
+            raise ValueError('script_content is not valid UTF-8 text: it contains a lone surrogate') from None
 
-        # Generate script filename
-        name = job_name or 'job'
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        script_path = f'{DEFAULT_JOBS_DIR}/{name}_{timestamp}.sh'
+    executor = get_executor()
 
-        # Write script content
-        safe_content = script_content.replace("'", "'\"'\"'")
-        write_cmd = f"cat > {script_path} << 'RCAC_MCP_EOF'\n{script_content}\nRCAC_MCP_EOF"
-        write_result = executor.run(write_cmd)
+    if data is not None:
+        path = _job_script_path(job_name)
+        # The content travels on stdin only, so the script holds exactly the bytes sent.
+        written = executor.run(script_argv(WRITE_JOB_SCRIPT, 'sbatch', path, UserPath(DEFAULT_JOBS_DIR)),
+                               stdin=data)
+        if written.exit_code != 0:
+            raise RuntimeError(f'Failed to write job script (exit {written.exit_code}): {written.stderr}')
+    else:
+        path = UserPath(script_path)
 
-        if write_result.exit_code != 0:
-            raise RuntimeError(f'Failed to write job script: {write_result.stderr}')
-
-        # Make executable
-        executor.run(f'chmod +x {script_path}')
-
-    # Build sbatch command
-    args = []
-    if job_name:
-        args.append(f'-J {job_name}')
-    if account:
-        args.append(f'-A {account}')
-    if partition:
-        args.append(f'-p {partition}')
-    if qos:
-        args.append(f'-q {qos}')
-    if time:
-        args.append(f'-t {time}')
+    argv = ['sbatch']
+    argv += _options(('-J', job_name), ('-A', account), ('-p', partition), ('-q', qos), ('-t', time))
     if nodes:
-        args.append(f'-N {nodes}')
+        argv += ['-N', str(nodes)]
     if ntasks:
-        args.append(f'-n {ntasks}')
+        argv += ['-n', str(ntasks)]
     if cpus_per_task:
-        args.append(f'-c {cpus_per_task}')
-    if mem:
-        args.append(f'--mem={mem}')
-    if gpus:
-        args.append(f'--gpus={gpus}')
-    if constraint:
-        args.append(f'-C {constraint}')
-    if output:
-        args.append(f'-o {output}')
-    if error:
-        args.append(f'-e {error}')
-    if extra_args:
-        args.append(extra_args)
+        argv += ['-c', str(cpus_per_task)]
+    argv += _options(('--mem', mem), ('--gpus', gpus), ('-C', constraint))
+    argv += _options(('-o', UserPath(output) if output else None), ('-e', UserPath(error) if error else None))
+    # The script path is a UserPath, so it is absolute or starts with `./`: even when an extra
+    # option that takes a value consumes the `--`, the path is never read as an option.
+    argv += [*options, '--', path, *(args or [])]
 
-    args.append(script_path)
-    cmd = f'sbatch {_build_args(args)}'
-
-    result = executor.run(cmd)
+    result = executor.run(argv)
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to submit job: {result.stderr}')
@@ -175,7 +202,7 @@ def squeue(
     state: Optional[str] = None,
     job_ids: Optional[List[int]] = None,
     me: bool = True,
-    extra_args: Optional[str] = None,
+    extra_args: Optional[List[str]] = None,
 ) -> str:
     """
     View the Slurm job queue.
@@ -190,7 +217,8 @@ def squeue(
         state: Filter by job state (-t/--states), e.g., 'PENDING', 'RUNNING'.
         job_ids: Specific job IDs to query (-j/--jobs).
         me: Show only current user's jobs (default: True).
-        extra_args: Additional squeue arguments.
+        extra_args: Additional squeue options, one argument per element (e.g. ['--long']),
+            placed after the options above; an element '--' is refused.
 
     Returns:
         Job queue listing.
@@ -200,29 +228,22 @@ def squeue(
         squeue(state='PENDING')
         squeue(me=False, account='mylab')
         squeue(job_ids=[19804935, 19804936])
+        squeue(extra_args=['--long'])
     """
+    options = _extra(extra_args)
     executor = get_executor()
 
-    args = []
+    argv = ['squeue']
 
     # Default to --me unless other filters specified
     if me and not user and not account:
-        args.append('--me')
-    if user:
-        args.append(f'-u {user}')
-    if account:
-        args.append(f'-A {account}')
-    if partition:
-        args.append(f'-p {partition}')
-    if state:
-        args.append(f'-t {state}')
+        argv.append('--me')
+    argv += _options(('-u', user), ('-A', account), ('-p', partition), ('-t', state))
     if job_ids:
-        args.append(f'-j {",".join(str(j) for j in job_ids)}')
-    if extra_args:
-        args.append(extra_args)
+        argv += ['-j', ','.join(str(j) for j in job_ids)]
+    argv += options
 
-    cmd = f'squeue {_build_args(args)}'
-    result = executor.run(cmd)
+    result = executor.run(argv)
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to query queue: {result.stderr}')
@@ -239,7 +260,7 @@ def scancel(
     state: Optional[str] = None,
     name: Optional[str] = None,
     me: bool = False,
-    extra_args: Optional[str] = None,
+    extra_args: Optional[List[str]] = None,
 ) -> str:
     """
     Cancel Slurm jobs.
@@ -255,7 +276,8 @@ def scancel(
         state: Cancel jobs in this state (-t/--state).
         name: Cancel jobs with this name (-n/--name).
         me: Cancel all current user's jobs (--me).
-        extra_args: Additional scancel arguments.
+        extra_args: Additional scancel options, one argument per element (e.g. ['--signal', 'USR1']),
+            placed after the options above; an element '--' is refused.
 
     Returns:
         Confirmation message or empty string on success.
@@ -265,31 +287,21 @@ def scancel(
         scancel(me=True)
         scancel(state='PENDING', account='mylab')
     """
-    executor = get_executor()
-
     if not job_ids and not me and not user and not account and not name:
         raise ValueError('Must specify job_ids, me=True, or a filter (user/account/name)')
 
-    args = []
-    if job_ids:
-        args.append(' '.join(str(j) for j in job_ids))
-    if me:
-        args.append('--me')
-    if user:
-        args.append(f'-u {user}')
-    if account:
-        args.append(f'-A {account}')
-    if partition:
-        args.append(f'-p {partition}')
-    if state:
-        args.append(f'-t {state}')
-    if name:
-        args.append(f'-n {name}')
-    if extra_args:
-        args.append(extra_args)
+    options = _extra(extra_args)
+    executor = get_executor()
 
-    cmd = f'scancel {_build_args(args)}'
-    result = executor.run(cmd)
+    argv = ['scancel']
+    if me:
+        argv.append('--me')
+    argv += _options(('-u', user), ('-A', account), ('-p', partition), ('-t', state), ('-n', name))
+    argv += options
+    if job_ids:
+        argv += ['--', *(str(j) for j in job_ids)]
+
+    result = executor.run(argv)
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to cancel jobs: {result.stderr}')
@@ -308,7 +320,7 @@ def sacct(
     endtime: Optional[str] = None,
     format: Optional[str] = None,
     me: bool = True,
-    extra_args: Optional[str] = None,
+    extra_args: Optional[List[str]] = None,
 ) -> str:
     """
     Query Slurm job accounting history.
@@ -326,7 +338,8 @@ def sacct(
         endtime: End of time range (-E/--endtime).
         format: Output format (-o/--format), e.g., 'JobID,JobName,State,ExitCode'.
         me: Show only current user's jobs (default: True).
-        extra_args: Additional sacct arguments.
+        extra_args: Additional sacct options, one argument per element (e.g. ['--parsable2']),
+            placed after the options above; an element '--' is refused.
 
     Returns:
         Job accounting information.
@@ -337,36 +350,23 @@ def sacct(
         sacct(job_ids=[19804935])
         sacct(format='JobID,JobName,State,Elapsed,MaxRSS')
     """
+    options = _extra(extra_args)
     executor = get_executor()
 
-    args = ['-X']  # Always exclude sub-job steps for cleaner output
+    argv = ['sacct', '-X']  # Always exclude sub-job steps for cleaner output
 
     if me and not user and not account:
         # Get current user
-        user_result = executor.run('whoami')
+        user_result = executor.run(['whoami'])
         current_user = user_result.stdout.strip()
-        args.append(f'-u {current_user}')
-    if user:
-        args.append(f'-u {user}')
-    if account:
-        args.append(f'-A {account}')
+        argv += ['-u', current_user]
+    argv += _options(('-u', user), ('-A', account))
     if job_ids:
-        args.append(f'-j {",".join(str(j) for j in job_ids)}')
-    if name:
-        args.append(f'--name={name}')
-    if state:
-        args.append(f'-s {state}')
-    if starttime:
-        args.append(f'-S {starttime}')
-    if endtime:
-        args.append(f'-E {endtime}')
-    if format:
-        args.append(f'-o {format}')
-    if extra_args:
-        args.append(extra_args)
+        argv += ['-j', ','.join(str(j) for j in job_ids)]
+    argv += _options(('--name', name), ('-s', state), ('-S', starttime), ('-E', endtime), ('-o', format))
+    argv += options
 
-    cmd = f'sacct {_build_args(args)}'
-    result = executor.run(cmd)
+    result = executor.run(argv)
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to query job history: {result.stderr}')
@@ -380,7 +380,7 @@ def sinfo(
     nodes: Optional[str] = None,
     state: Optional[str] = None,
     format: Optional[str] = None,
-    extra_args: Optional[str] = None,
+    extra_args: Optional[List[str]] = None,
 ) -> str:
     """
     Show cluster and partition status.
@@ -393,7 +393,8 @@ def sinfo(
         nodes: Filter by node list (-n/--nodes).
         state: Filter by node state (-t/--states), e.g., 'idle', 'alloc'.
         format: Output format (-o/--format).
-        extra_args: Additional sinfo arguments.
+        extra_args: Additional sinfo options, one argument per element (e.g. ['--Node', '--long']),
+            placed after the options above; an element '--' is refused.
 
     Returns:
         Cluster/partition status information.
@@ -403,22 +404,14 @@ def sinfo(
         sinfo(partition='gpu')
         sinfo(state='idle')
     """
+    options = _extra(extra_args)
     executor = get_executor()
 
-    args = []
-    if partition:
-        args.append(f'-p {partition}')
-    if nodes:
-        args.append(f'-n {nodes}')
-    if state:
-        args.append(f'-t {state}')
-    if format:
-        args.append(f'-o "{format}"')
-    if extra_args:
-        args.append(extra_args)
+    argv = ['sinfo']
+    argv += _options(('-p', partition), ('-n', nodes), ('-t', state), ('-o', format))
+    argv += options
 
-    cmd = f'sinfo {_build_args(args)}'
-    result = executor.run(cmd)
+    result = executor.run(argv)
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to get cluster info: {result.stderr}')
@@ -446,7 +439,7 @@ def scontrol_show_job(job_id: int) -> str:
     _validate_job_id(job_id)
     executor = get_executor()
 
-    result = executor.run(f'scontrol show job {job_id}')
+    result = executor.run(['scontrol', 'show', 'job', str(job_id)])
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to get job details: {result.stderr}')
@@ -474,11 +467,13 @@ def scontrol_show_node(node: Optional[str] = None) -> str:
     """
     executor = get_executor()
 
-    cmd = 'scontrol show node'
+    argv = ['scontrol', 'show', 'node']
+    # An empty name was not given, as for the Slurm tools' options: every node is shown.
     if node:
-        cmd += f' {node}'
+        # After `--`, the name is never read as an scontrol option.
+        argv += ['--', node]
 
-    result = executor.run(cmd)
+    result = executor.run(argv)
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to get node details: {result.stderr}')
@@ -502,7 +497,7 @@ def slist() -> str:
         slist()
     """
     executor = get_executor()
-    result = executor.run('slist')
+    result = executor.run(['slist'])
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to get account list: {result.stderr}')
@@ -526,7 +521,7 @@ def sfeatures() -> str:
         sfeatures()
     """
     executor = get_executor()
-    result = executor.run('sfeatures')
+    result = executor.run(['sfeatures'])
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to get node features: {result.stderr}')

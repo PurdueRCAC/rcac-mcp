@@ -112,3 +112,7 @@ covers every Purdue cluster today).
   doc-words, written in bare prose.
 - 2026-10-16: removing the documentation guidance shrank `SERVER_INSTRUCTIONS` from about 3.0K to
   about 2.1K characters (2,988 to 2,085).
+- 2026-10-17: since `safe-execution`, the context listing runs in a login bash, so its `sort` order
+  follows whatever locale the login profile sets (it followed the zsh environment's before).
+  Whether to pin it with `LC_ALL=C` is an § Invariants §8 compatibility decision this cycle owns
+  (`spec/safe-execution/` PLAN risk 9).

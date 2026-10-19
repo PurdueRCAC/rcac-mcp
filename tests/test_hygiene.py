@@ -21,6 +21,7 @@ import multiprocessing
 import os
 import pty
 import pwd
+import re
 import shutil
 import socket
 import subprocess
@@ -31,6 +32,8 @@ import _posixsubprocess
 import pytest
 
 import harness
+import rcac_mcp
+from rcac_mcp.executor import launch
 
 TESTS = Path(__file__).resolve().parent
 SANDBOX = TESTS.parent / 'bin' / 'sandbox.sh'
@@ -403,6 +406,10 @@ def test_path_shim_shadows_sudo_and_ssh(path_shim: Path) -> None:
     assert os.environ['PATH'].split(os.pathsep)[0] == str(path_shim)
     for program in ('sudo', 'ssh'):
         assert shutil.which(program) == str(path_shim / program), program
+    # A login bash rebuilds PATH; the file BASH_ENV names puts the shim first again.
+    bash_env = Path(os.environ['BASH_ENV'])
+    assert bash_env.parent == path_shim
+    assert bash_env.read_text().startswith(f'PATH={path_shim}:'), bash_env.read_text()
 
 
 # Resolves each name inside the sandbox and runs it only when it resolves into the shim ($1).
@@ -427,6 +434,69 @@ def test_path_shim_reaches_sandboxed_children(path_shim: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == [
         f'{name}|{path_shim / name}|126|refused by the test PATH shim' for name in ('sudo', 'ssh')], result.stdout
+
+
+@pytest.mark.integration
+def test_path_shim_survives_a_login_bash(path_shim: Path) -> None:
+    # The pinned interpreter is a login bash, whose /etc/profile may rebuild PATH (macOS's
+    # path_helper puts /usr/bin first); a command it launches must still resolve the shim.
+    prog, sentinel = launch.program(['/bin/sh', '-c', SHIM_PROBE, 'sh', str(path_shim)])
+    raw_out, raw_err, raw_code, note = launch.run_process([str(SANDBOX), *launch.bash_argv(prog)], None, 60)
+    out, err, code = launch.separate(raw_out, raw_err, raw_code, sentinel, note)
+    assert code == 0, err.decode(errors='replace')
+    assert out.decode().splitlines() == [
+        f'{name}|{path_shim / name}|126|refused by the test PATH shim' for name in ('sudo', 'ssh')], out
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(('argv', 'fragment'), [
+    pytest.param(['/bin/sh', '-c', 'true'], 'does not run /bin/bash', id='not-bash'),
+    pytest.param(['sudo', '-u', 'umapped', '/bin/bash', '-c', 'true'], 'does not start exactly', id='sudo-flags-dropped'),
+    pytest.param(['sudo', '-n', '-H', '-u', 'root', '/bin/bash', '-c', 'true'], 'does not start exactly',
+                 id='sudo-other-user'),
+    pytest.param(['sudo', '-n', '-H', '-u', 'umapped', '/bin/sh', '-c', 'true'], 'does not run /bin/bash',
+                 id='sudo-not-bash'),
+])
+def test_executes_refuses_what_it_does_not_stand_in_for(argv: list[str], fragment: str, executes) -> None:
+    # Refused before anything launches: no process starts for an argv the fence does not accept.
+    with pytest.raises(OSError, match=fragment):
+        launch.run_process(argv, None, 5)
+    assert executes.launched == [] and executes.refused == [argv]
+
+
+@pytest.mark.integration
+def test_executes_launches_only_inside_the_sandbox(executes, path_shim: Path) -> None:
+    from rcac_mcp.executor.delegate import DelegatingExecutor
+    from rcac_mcp.executor.shell import LocalShellExecutor
+
+    local = LocalShellExecutor().run('printf %s "$HOME"', timeout=20)
+    probe = 'printf "%s|%s|%s" "$HOME" "$USER" "$(command -v sudo)"'
+    delegated = DelegatingExecutor('someone', {'someone': executes.user}).run(probe, timeout=20)
+    assert len(executes.launched) == 2, executes.launched
+    for argv in executes.launched:
+        assert argv[:3] == [str(SANDBOX), 'env', '-i'], argv
+        assert 'sudo' not in argv, f'a launch names sudo: {argv!r}'
+    assert local.stdout == str(executes.server_home), local
+    # The stand-in gives the delegated command the mapped user's home and name, and sudo inside it
+    # still resolves to the shim.
+    assert delegated.stdout == f'{executes.mapped_home}|{executes.user}|{path_shim / "sudo"}', delegated
+
+
+@pytest.mark.integration
+def test_executes_opens_the_fence_only_to_sandboxed_launches(executes) -> None:
+    # Under `executes` the harness fence lets an in-process server call through...
+    async def scenario() -> tuple[str, ...]:
+        async with harness.in_memory(harness.bare_server()) as client:
+            return await harness.tool_names(client)
+
+    assert 'write_file' in harness.drive(scenario())
+    # ...because nothing outside bin/sandbox.sh can launch behind it: an unsandboxed argv is refused
+    # before it starts. (Called through a name, since the static check reads literal launches.)
+    unsandboxed = ['/bin/sh', '-c', 'exit 0']
+    launcher = subprocess.Popen
+    with pytest.raises(OSError, match='does not start with'):
+        launcher(unsandboxed)
+    assert executes.refused == [unsandboxed] and executes.launched == []
 
 
 @pytest.mark.unit
@@ -482,3 +552,32 @@ def test_harness_builds_servers_inside_the_running_loop(tmp_path: Path, monkeypa
         assert harness.drive(read()) == 'main'
     finally:
         probe.reset(token)
+
+
+# A feature-scoped spec id (`R#`, `P#`) in a comment, docstring or message of the package or the
+# suite: those restart per feature and live in `spec/`, never in the code (AGENTS.md § Conventions).
+SPEC_ID = re.compile(r'\b[RP][0-9]{1,2}\b')
+
+
+def spec_id_violations(name: str, text: str) -> list[str]:
+    """Every line of `text` that names a feature-scoped spec id."""
+    return [f'{name}:{n}: {line.strip()[:120]}' for n, line in enumerate(text.splitlines(), 1) if SPEC_ID.search(line)]
+
+
+@pytest.mark.unit
+def test_no_spec_ids_in_the_package_or_the_suite() -> None:
+    package = Path(rcac_mcp.__file__).resolve().parent
+    files = sorted(package.rglob('*.py')) + sorted(Path(__file__).resolve().parent.glob('*.py'))
+    assert files, 'no source files found to check'
+    violations = [v for f in files for v in spec_id_violations(str(f), f.read_text())]
+    assert violations == [], 'a spec id names a requirement or phase in the code:\n' + '\n'.join(violations)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(('text', 'found'), [
+    pytest.param('"""Differs from ' + 'R' + '9\'s report."""', True, id='requirement'),
+    pytest.param('# Added in ' + 'P' + '3.', True, id='phase'),
+    pytest.param('x = "R2D2 P100 RP1 HTTP2"', False, id='not-ids'),
+])
+def test_spec_id_check_catches_planted_ids(text: str, found: bool) -> None:
+    assert bool(spec_id_violations('planted', text)) == found

@@ -1,5 +1,5 @@
 ---
-status: unshaped
+status: adopted:safe-execution
 kind: fix
 appetite: big
 lane: public

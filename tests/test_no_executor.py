@@ -24,7 +24,8 @@ from typing import Any, Sequence
 import pytest
 
 from harness import (Outcome, RecordingExecutor, Rendezvous, bare_server, call, delegate_server, drive,
-                     http_client, in_memory, mint, serving, shared_server, user_map)
+                     http_client, in_memory, launched_script, mint, serving, shared_server, user_map)
+from rcac_mcp.executor import launch
 from test_registry import EXPECTED_TOOLS
 from test_tools import TOOL_CASES
 
@@ -76,9 +77,17 @@ def other_request_violations(outcome: Outcome, ran: Sequence[tuple[str, str]], o
 
 
 def launched_as(argv: Sequence[str]) -> tuple[str, str]:
-    """The (local user, command line) of a recorded `sudo … -u <user> <shell> -c <command>` launch."""
+    """The (local user, script) of a recorded `sudo … -u <user> /bin/bash … <program>` launch.
+
+    The script is read back from the program with `launched_script`; an argv that carries no
+    launcher program reports its last element.
+    """
     argv = list(argv)
-    return (argv[argv.index('-u') + 1] if '-u' in argv[:-1] else argv[0]), argv[-1]
+    try:
+        script = str(launched_script(argv)[0])
+    except ValueError:
+        script = argv[-1]
+    return (argv[argv.index('-u') + 1] if '-u' in argv[:-1] else argv[0]), script
 
 
 def report(violations: list[str]) -> str:
@@ -177,7 +186,7 @@ def test_delegate_without_token_after_authenticated_request(tmp_path: Path, monk
 
     first, anon = drive(scenario())
     ran = [launched_as(argv) for argv in launches]
-    violations = refusal_violations(anon, [], [a for a in launches if a[-1] != OTHER], NO_EXECUTOR)
+    violations = refusal_violations(anon, [], [a for a in launches if launched_as(a)[1] != OTHER], NO_EXECUTOR)
     violations += other_request_violations(first, ran, 'ualice')
     assert violations == [], report(violations)
     assert guard.refused == []
@@ -198,14 +207,14 @@ def test_delegate_without_token_while_authenticated_request_in_flight(
 
     first, anon = drive(scenario())
     ran = [launched_as(argv) for argv in launches]
-    violations = refusal_violations(anon, [], [a for a in launches if a[-1] != OTHER], NO_EXECUTOR)
+    violations = refusal_violations(anon, [], [a for a in launches if launched_as(a)[1] != OTHER], NO_EXECUTOR)
     violations += other_request_violations(first, ran, 'ualice')
     assert violations == [], report(violations)
     assert guard.refused == []
 
 
 REFUSED = Outcome(True, f"Error calling tool 'run_command': {NO_EXECUTOR}. Set executor via set_executor() first.")
-ANON_ARGV = ['sudo', '-n', '-H', '-u', 'ualice', '/bin/sh', '-c', ANON]
+ANON_ARGV = ['sudo', '-n', '-H', '-u', 'ualice', *launch.bash_argv(launch.program(ANON, start='home')[0])]
 
 
 @pytest.mark.unit
@@ -213,7 +222,7 @@ ANON_ARGV = ['sudo', '-n', '-H', '-u', 'ualice', '/bin/sh', '-c', ANON]
     pytest.param(Outcome(False, f'ualice|{ANON}'), [], [], 'not an error', id='not-an-error'),
     pytest.param(Outcome(True, "[Errno 2] No such file or directory: '/remote/results.csv'"), [], [],
                  'error lacks reason', id='lacks-reason'),
-    pytest.param(REFUSED, [('run', ANON, None, None)], [], 'executor ran', id='executor-ran'),
+    pytest.param(REFUSED, [('run', ANON, None, None, None)], [], 'executor ran', id='executor-ran'),
     pytest.param(REFUSED, [], [ANON_ARGV], 'process launched', id='process-launched'),
 ])
 def test_refusal_check_catches_execution(outcome: Outcome, calls: list[Any], launched: list[list[str]],

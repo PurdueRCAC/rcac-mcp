@@ -1,0 +1,1041 @@
+---
+slug: safe-execution
+title: Every tool passes exactly what it was given, under one interpreter
+kind: fix
+appetite: big
+status: in_review
+branch: fix/safe-execution
+base: develop
+current_phase: done
+last_updated: '2026-10-18'
+phases:
+- id: P1
+  name: 'Launcher: one bash program per command, one wire per backend'
+  status: done
+  satisfies:
+  - R2
+  - R7
+  - R8
+  depends_on: []
+  parallel: false
+  hammerable: false
+  hill: uphill
+  verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run
+    pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp
+    --help
+- id: P2
+  name: 'Protocol: argv, stdin and one timeout contract in all three backends'
+  status: done
+  satisfies:
+  - R3
+  - R7
+  - R8
+  - R10
+  depends_on:
+  - P1
+  parallel: false
+  hammerable: false
+  hill: uphill
+  verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run
+    pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp
+    --help
+- id: P3
+  name: 'Startup: a failed SSH connect is answered, in both eras'
+  status: done
+  satisfies:
+  - R9
+  depends_on:
+  - P2
+  parallel: false
+  hammerable: false
+  hill: uphill
+  verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run
+    pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp
+    --help
+- id: P4
+  name: Filesystem, transfer and resource callers on argv; byte-exact writes
+  status: done
+  satisfies:
+  - R1
+  - R2
+  - R3
+  - R4
+  - R5
+  depends_on:
+  - P2
+  parallel: false
+  hammerable: false
+  hill: uphill
+  verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run
+    pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp
+    --help
+- id: P5
+  name: Slurm and site tools on argv; sbatch args and list extra_args
+  status: done
+  satisfies:
+  - R1
+  - R2
+  - R4
+  - R6
+  depends_on:
+  - P4
+  parallel: false
+  hammerable: false
+  hill: uphill
+  verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run
+    pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp
+    --help
+- id: P6
+  name: 'Literal-argument matrix: every string parameter, all three modes'
+  status: done
+  satisfies:
+  - R1
+  - R2
+  - R3
+  - R4
+  depends_on:
+  - P5
+  parallel: false
+  hammerable: false
+  hill: uphill
+  attempts: 1
+  verify: uv lock --check && uv run pytest -q tests/test_literal_args.py && CLUSTER_MCP_TEST_ERA=modern
+    uv run pytest -q tests/test_literal_args.py && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern
+    uv run pytest -q && uv run python tests/mutants.py --self-check tool-command-string
+    read-file-no-dashdash option-value-joined scontrol-node-positional launcher-arg-unquoted
+    delegate-tilde-server-home empty-optional-passed-literally empty-positional-passed-literally
+    empty-list-path-passed-literally empty-cwd-passed-literally transfer-empty-path-passed
+    surrogate-unnamed transfer-local-fallback && bin/sandbox.sh uv run rcac-mcp --help
+- id: P7
+  name: 'Sweep: retired texts, every mutant, deferral ledger'
+  status: done
+  satisfies:
+  - R7
+  - R10
+  depends_on:
+  - P6
+  parallel: false
+  hammerable: false
+  hill: uphill
+  verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run
+    pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp
+    --help
+review:
+  last_reviewed_commit: b32778d31d93b7e055e53ec04bb772470f52b903
+  verdict: changes-requested
+  blocked_reason: CRITICAL ssh truncation (fixed post-exit grace) + 2 HIGH + 2 MEDIUM
+    + 1 LOW
+  cycle: 2
+---
+
+# TECH.md — Every tool passes exactly what it was given, under one interpreter
+
+The **context engine and finite-state machine** for building this fix. The YAML frontmatter above
+is the resume ground truth (`uv run --with pyyaml python "$KB/bin/factory/next_phase.py"
+spec/safe-execution/TECH.md`); the per-phase checklists below are the work.
+
+- **Vision / requirements (locked):** [`GOAL.md`](GOAL.md) — R1–R10 are the contract.
+- **Authoritative design:** [`PLAN.md`](PLAN.md) (§ numbers below refer to it).
+- **Backing research:** [`research/00-digest.md`](research/00-digest.md) + briefs 01–06.
+
+## Conventions (apply to every phase)
+
+- `AGENTS.md` is the constitution. This cycle touches § Invariants §1, §2, §3, §5, §7, §8, §9 and the
+  high-blast-radius list; the executor and `__init__.py` are human-gated paths.
+- One phase per `code-build`; one atomic commit with the code and the `TECH.md` state change,
+  subject `[fix] Build safe-execution P<n>: …`, no trailers.
+- **Same-commit rules:** a text describing a contract changes in the commit that changes the
+  contract (R10, § Conventions); a tool docstring change moves `tests/fixtures/served_surface.json`
+  and the README in the same commit (§9); a red `test_mutation_anchor_applies[<case>]` is re-planted
+  in the same commit, with the reason in the commit body.
+- **Mutation ids in a `verify:` are a contract.** A phase plants every case its gate names, each
+  killed for its own `why`. A case that cannot be killed is a design question to raise, not a case
+  to drop.
+- **Committed text carries outcomes only.** Commit messages, docstrings and AGENTS.md describe the
+  hardened behaviour ("every value reaches the command as one literal argument"; "transfers run as
+  the mapped user"), never how the old behaviour could be abused, and never point at the private findings lane.
+- No command in any phase reaches a cluster, runs `sudo` or runs `ssh`. Real executions happen only
+  under `bin/sandbox.sh` (the `executes` fixture, the loopback SSH server, CLI drives).
+
+---
+
+## Phase P1 — Launcher: one bash program per command, one wire per backend
+**Satisfies:** R2, R7, R8 (the mechanism; the backends adopt it in P2) · **Depends on:** —
+**Goal:** `src/rcac_mcp/executor/launch.py` exists, is pure apart from `run_process`, and is proved
+by execution under every local login shell; nothing calls it yet.
+
+- [x] `executor/base.py`: add `UserPath(str)`, `TIMEOUT_EXIT_CODE: Final = -1001` and
+      `NOT_STARTED_EXIT_CODE: Final = -1002` (exported from `rcac_mcp.executor`). Protocol signatures
+      unchanged in this phase.
+- [x] `AGENTS.md` §3: document `-1001` (timeout) and `-1002` (startup ended before the command
+      began) before any backend returns them (the §3 below-−1000 rule). The `-1`/asymmetry bullets
+      stay until P2 changes the code.
+- [x] `executor/launch.py` per PLAN §2.2 and §2.2a: `BASH = '/bin/bash'`, `BASH_ARGS = ('-l',)`,
+      `program() -> (program, sentinel)` (the prologue exactly as §2.2a; the two-half sentinel on
+      both streams; `start_home`; `command cd -- … || exec /usr/bin/false`; scripts in the fresh
+      non-login bash with functions exported; plain `exec`, never a redirection-only
+      `command exec`, which stalls bash 3.2), `separate()` (first-occurrence cut per stream;
+      not-started → `-1002` + fixed note + WARNING log; one-stream anomaly → note + WARNING; a
+      timeout with no sentinel → empty output, `-1001`), `bash_argv()` (the `bash --posix` stage
+      parking fds 57–59, `-c --`), `ssh_command()` (the bootstrap text exactly as PLAN §2.2, with
+      `&& printf .` and the same parking), `check_timeout()`, `run_process()` (poll at the deadline; TERM → drain → KILL →
+      drain → close; `stdin=PIPE` always), `decode()`, `expand_local()`. Words: `${HOME:?…}`,
+      `~//` collapsed, relative `UserPath` gains `./`. Refuse NUL, non-strict-UTF-8 text and a
+      program over 96 KiB (`ValueError` naming the argument), a non-`str` element (`TypeError`), an
+      empty argv, a bare `UserPath` as the command.
+- [x] `tests/test_launch.py` (`unit`): `launch_violations` over rendered programs: each element one
+      word; `UserPath('~')`, `'~/'`, `'~/a b'` via `"$HOME"`; `'~name/x'`, `'~'` as a plain `str`,
+      `'$HOME'`, `'*'` literal; relative cwd gains `./`; script with no cwd is verbatim; bootstrap
+      contains no `!`, backslash or newline and only the base64 alphabet after its fixed prefix.
+      Planted negatives for each.
+- [x] `tests/test_launch.py` (`integration`, launches via `[SANDBOX, …]`): render a program over a
+      hostile value set (PLAN §2.6) and execute it as `bash_argv` and as `ssh_command` under `/bin/sh`,
+      `/bin/bash`, `/bin/zsh`, `/bin/ksh`, `/bin/csh`, `/bin/tcsh` (`env -i HOME=<fixture>`); output
+      must equal the values byte for byte, including a value ending in newlines and a script ending in
+      a here-document, a script starting with `-`, and `cat` under a `~/.bash_profile` that runs
+      `read` and defines a `cd()` that prints (stdin and stdout must be untouched). With `PATH`
+      lacking `base64`, the bootstrap exits nonzero and runs nothing. With `HOME=''`, a `~/x` path
+      fails instead of reading `/x`. `run_process`: `echo part; sleep 30` with `timeout=0.5` keeps
+      `part`, returns `-1001` within ~3 s; a backgrounded `sleep` in the group is gone afterwards; a
+      `setsid`-escaped child cannot hold the call past the bounded drain; `sleep 4 & echo done; exit
+      0` with `timeout=1` returns `0`, not the marker; `1e12`, `nan`, `0` and `-1` are refused before
+      anything starts. Unit (stubbed `Popen`, `os.killpg` patched): a SIGHUP death returns `-1`.
+- [x] `tests/test_launch.py` (`integration`), **startup separation** (PLAN §2.2a): a planted chatty
+      startup set in the fixture home — `.bash_profile`, `.bash_login`, `.profile`, `.bashrc`,
+      `.bash_logout`, `.zshenv`, `.zprofile`, `.cshrc`, `.tcshrc`, `.login` and a `BASH_ENV` file —
+      each writing to stdout and stderr (partial lines, binary, 1 MiB from `.zshenv`), plus `set -x`,
+      an EXIT and a DEBUG trap, functions named `printf` and `cd`, a `read` from stdin and a
+      background writer. For an argv, a script with `exit 4`, a `kill $$` script, `cat` with stdin
+      bytes, and an empty script, each result (stdout, stderr, exit code) is **byte-identical** to
+      the quiet home's, through `bash_argv` and through `ssh_command` under `/bin/sh`, `/bin/bash`,
+      `/bin/zsh`, `/bin/tcsh`. Plus: a profile `exit 0` → `-1002` and the note; a profile `sleep 30`
+      with `timeout=1` → `('', '', -1001)`; a profile `exec 58>file` → the note, never silent; a
+      command printing its own nonce keeps it. Unit: `separate` over planted byte strings
+      (`separation_violations`, with planted negatives).
+- [x] `tests/conftest.py`: the PATH shim also exports `BASH_ENV` → a file that re-prepends the shim
+      directory (a login bash on macOS reorders `PATH` via `path_helper`). `tests/test_hygiene.py`:
+      a self-test that `command -v sudo` and `command -v ssh` inside `bash_argv('…')` launched under
+      the sandbox resolve to the shim.
+- [x] `tests/mutants.py`: plant `launcher-arg-unquoted`, `launcher-tilde-user-expanded` (a
+      `UserPath` left as a bare `~` for bash), `launcher-tilde-name-expanded` (`~name` resolved),
+      `launcher-cwd-cdpath` (no `./` prefix on a cwd), `launcher-relative-dash` (no `./` on a
+      relative `UserPath`), `bootstrap-raw-program` (program sent unencoded),
+      `bootstrap-newlines-stripped` (no `printf .`), `bootstrap-decode-unchecked` (`; printf .`),
+      `stdin-not-parked` (stdin not parked for the login initialisation), `timeout-group-not-killed` (kill the leader only),
+      `timeout-partial-output-dropped`, `timeout-completed-misreported` (no `poll()` at the
+      deadline), `startup-output-kept` (`separate` returns the raw streams), `startup-not-parked`
+      (the stage without the fd parking), `startup-traps-kept` (no trap reset in the prologue),
+      `stage-reads-bash-env` (stage without `--posix`), `not-started-exit-zero` (the startup's own
+      status returned), `script-in-login-shell` (the script run in the login shell, so `exit` runs
+      `~/.bash_logout`).
+- **Build amendment (2026-10-17).** Under macOS bash 3.2 a profile's `exec 58>file` does not take
+  the parked descriptor: the command's output is still captured, so there is no loss to note. The
+  `exec 58>file` row therefore asserts that nothing is lost *silently* (each stream arrives or is
+  noted), and the note path is pinned where a stream really is redirected: the remote login shell's
+  own `.zshenv` (`exec >/dev/null`, `exec 2>/dev/null`). The hygiene self-test launches
+  `bash_argv(program([...probe]))`. `AGENTS.md`'s repo map also gains `launch.py`, which exists now.
+- **Build amendment (2026-10-17, foreman's ruling).** Bash reads a whole line before running any
+  of it, so a profile that enabled `expand_aliases` and aliased a word on the prologue's shared
+  first line (`exec`, say) had that alias expanded before `unalias -a` ran: the command ran with
+  parked streams and was reported as −1002. The prologue now opens with `\unalias -a` on a line of
+  its own (PLAN §2.2a corrected to match). Sibling check: the only word the program uses after the
+  prologue that `unset -f` did not cover was `[` (the script line's `[ -z "$fns" ]`), so `[` joins
+  the `unset -f` list. Pinned by `test_profile_cannot_hijack_the_prologue[<wire>-alias|
+  <wire>-bracket-function]` (byte-identical to a quiet home) and the mutants
+  `prologue-unalias-shared-line` and `prologue-bracket-function-kept`, added to the gate. Known
+  limit, not designed around: a profile that defines functions named after the words the prologue
+  itself relies on before its reset (`unset`, `unalias`, `builtin`, `set`) is a pathological
+  configuration, not a supported one.
+- **Remediation amendment (2026-10-18, review cycle 1).** Reopened with P2 and landed in one commit
+  with it; the classes, the choices and the pins are in P2's remediation amendment.
+- **Remediation amendment 2 (2026-10-18, foreman's rulings).** Reopened again with P2, one commit;
+  see P2's second note.
+- **Remediation amendment 3 (2026-10-18, review cycle 2).** Reopened with P2, P3 and P4 and landed
+  in one commit with them; the classes, the choices, the pins and the gate retune are in P2's third
+  note.
+- **Verify:** frontmatter `P1.verify`.
+- **Touches:** `src/rcac_mcp/executor/{base,launch,__init__}.py`, `tests/{test_launch,conftest,test_hygiene,mutants,test_mutations}.py`, `AGENTS.md` (§3, § Testing, high-blast-radius list: add `src/rcac_mcp/executor/launch.py`).
+
+## Phase P2 — Protocol: argv, stdin and one timeout contract in all three backends
+**Satisfies:** R3 (cwd and transfer paths), R7, R8, R10 (executor texts) · **Depends on:** P1
+**Goal:** `Executor.run(command: Sequence[str] | str, cwd, timeout, stdin)` and `put`/`get -> str`
+land in `base.py` and in **all three** backends in one commit (§2); every command runs under
+`/bin/bash -l`; a timeout returns `-1001` with captured output everywhere. Tools still pass strings
+(as scripts) until P4/P5.
+
+- [x] `executor/base.py`: the new `run` signature and docstring (argv vs script, `UserPath`,
+      `stdin`, the pinned interpreter, the timeout contract), `put`/`get` return the absolute
+      destination.
+- [x] `executor/shell.py`, `executor/delegate.py`, `executor/ssh.py` per PLAN §2.3. Delegate argv
+      exactly `['sudo', '-n', '-H', '-u', user, '/bin/bash', '-l', '-c', program]`; `_shell` and
+      every `os.path.expanduser` removed; delegate programs start in `$HOME`; delegate `put`/`get`
+      copy as the mapped user through `run` and return the file written (unresolved, read exactly).
+      SSH `run` on the raw channel (stdin fed then EOF, both streams drained with a `select`/sleep
+      wait, at the deadline the exit status if it has arrived, else `signal` TERM request, close,
+      `-1001`; `-1` kept for signal death / no status); `put`/`get` on Paramiko's `SFTPClient`
+      directly with the `~/` mapping (leading slashes collapsed).
+- [x] `tests/harness.py`: `RecordingExecutor.run(command, cwd, timeout, stdin)` records the command
+      as given and `stdin`; `put`/`get` return a path. `launched_script(argv)` returns the script and
+      sentinel from a recorded launch, and `RecordedPopen` answers with the sentinel first on both
+      streams so `separate` keeps its reply. Its docstring keeps the rewrite-point note.
+- [x] Every backend's `run` passes its streams through `launch.separate` (PLAN §2.2a), so the
+      startup rows hold in all three modes: the chatty set in the `executes` mapped home (delegate)
+      and in the loopback server's home (ssh, login shells bash, zsh, sh, tcsh, with `.zshenv`,
+      `.cshrc` and `.bashrc` chatty) gives results byte-identical to the quiet home's.
+- [x] `tests/conftest.py`: the `executes` fixture (PLAN §2.6): patches `Popen` in
+      `rcac_mcp.executor.launch` only; bash-only; `[SANDBOX, 'env', '-i', …]` with a sudo-like
+      environment; the exact `sudo` prefix asserted and replaced by the relaying stand-in with a
+      separate mapped `HOME`, from a foreign cwd; self-tests in `tests/test_hygiene.py` (non-bash argv
+      refused; a wrong `sudo` prefix refused and never launched; every launch starts with the
+      sandbox).
+- [x] `tests/ssh_server.py` (helper, not collected) + `tests/test_ssh_exec.py` (`integration`): the
+      executing loopback server (sshd-like `env -i`, starts in `$HOME`, SFTP subsystem, no kill on
+      channel close) over login shells `/bin/bash`, `/bin/zsh`, `/bin/sh`, `/bin/tcsh`. Rows: R7's
+      probe (`[ -n "$BASH_VERSION" ] && ! shopt -qo posix && [ "$CLUSTER_MCP_TEST_LOGIN" = 1 ] &&
+      [ a == a ]`, the marker exported by a quiet `.bash_profile`) succeeds for a bash and a zsh
+      login shell; stdin bytes arrive exactly and EOF is delivered
+      (`cat` returns); a timeout returns partial stdout/stderr and `-1001`, never raises (R8), and
+      the test removes what it left running; an argv with hostile values arrives literally;
+      `put`/`get` with `~/x`, `~//x` and a `{host}`-shaped local name land where named. Unit (fake
+      channel): exit status before EOF does not busy-wait (bounded iterations); a completed command
+      at the deadline returns its status.
+- [x] `tests/test_identity.py`, `test_isolation.py`, `test_no_executor.py`, `test_protocol.py`: read
+      the launched script through one shared decoder (`launched_script(argv)` in the harness), since
+      the program now begins with the prologue.
+- [x] `tests/test_executors.py`: rewrite the argv rows and drift controls (`wrong-shell` →
+      `wrong-interpreter`); retire `test_shell_is_captured_at_construction` for "the argv names
+      `/bin/bash -l` whatever `$SHELL` is" (`SHELL=/bin/zsh`); add R8 rows for `local` and `delegate`
+      through `executes` (`echo part; sleep 30`, `timeout=0.5`) and a control that a SIGHUP death
+      (`kill -HUP $$`) reports `-1`, not the marker; R3 delegate rows: `cwd='~'` and
+      `cwd='~/sub dir'` resolve under the mapped home, never the server's `HOME`; `put`/`get` with
+      `~/…` on both sides land under the mapped home and return that path; `~name/x` stays literal.
+      R7 rows for `local`/`delegate` with `SHELL=/bin/zsh`.
+- [x] `tests/test_ssh_smoke.py`: the server decodes the bootstrap and checks the program; it keeps
+      "no process is launched".
+- [x] Re-plant `sudo-n-dropped`, `sudo-H-dropped`, `command-quoted`, `cwd-unquoted` (now in
+      `launch.py`), `ssh-exit-status-dropped`; retire `shell-read-per-call` (reason in the body);
+      plant `interpreter-from-shell-env`, `ssh-timeout-raises`, `timeout-sentinel-minus-one`,
+      `delegate-tilde-server-home`, `delegate-server-cwd` (no `start_home`), `transfer-as-server`
+      (delegate copy outside `run`), `ssh-stdin-not-closed`, `ssh-bootstrap-dropped`,
+      `ssh-drain-spins`, `sftp-tilde-root` (`~//x` → `/x`), `sftp-path-formatted` (Fabric's `get`),
+      `backend-separation-skipped` (the SSH `run` returns the streams without `separate`).
+- [x] R10, same commit: `AGENTS.md` §2 (signature, `stdin`, returns, `UserPath`), §3 (replace the
+      `-1` overload and asymmetry bullets with the one contract), §5 (argv, what is quoted, transfers
+      as the mapped user, `_shell` bullet removed), footguns (`delegate.py`, `ssh.py`, `launch.py`),
+      repo map, architecture diagram, § Testing (new modules, `executes`, the shim re-pin, the
+      internals-bound list); `README.md` (`local` mode line; commands run in a login bash);
+      `APP_HELP` in `__init__.py`; `SECURITY.md` diagram; `run_command`'s docstring (runs under
+      bash after the login initialisation, whose own output is never returned; on timeout
+      `exit_code` is −1001 and the output is what was captured; −1002 means it never started) with the fixture's
+      `run_command.description` delta (PLAN risk 2).
+- [x] Deferrals (each an `issues/{slug}.md` from the KB `ISSUE.md` template, `status: unshaped`, plus
+      a `ROADMAP.md` entry): `startup-background-jobs` (PLAN risk 5's residual limits),
+      `ssh-reconnect-loop` (the endless `_ensure_connected`) and
+      `timeout-process-cleanup` (whether the `signal` request stops a timed-out remote command, and
+      grandchildren under a non-root delegate server; PLAN risk 4). The seed states that measuring
+      it needs a long-running process on a login node, outside the dogfood class, so it waits for
+      Geoffrey's approval; no phase attempts it.
+- **Build amendment (2026-10-17).** The delegate argv is `['sudo', '-n', '-H', '-u', user] +
+  launch.bash_argv(program)` — `/bin/bash --posix -c <stage> cluster-mcp <program>`, the stage then
+  execs `/bin/bash -l` — as PLAN §2.3 and P1's two-stage launch define it; the
+  `/bin/bash -l -c program` written in the checklist above predates the stage. Same contract (§5's
+  text names the real argv). The delegate transfer's fixed script runs as `/bin/bash --posix -c
+  TRANSFER …`, so the bash that runs it reads no `BASH_ENV` a profile exported (a chatty one would
+  print into the returned path); P4's fixed scripts meet the same read, and `--posix` before `-c`
+  leaves the element after `-c` the script, so the `FIXED_SCRIPTS` pin is unaffected.
+  `interpreter-from-shell-env` is planted in `launch.bash_argv`, the one place both `local` and
+  `delegate` take their interpreter from, and targets both backends' argv rows. `put`/`get` deliver
+  into a directory destination under the source's name in all three backends (Fabric's `put` did),
+  and §2 says so. The loopback SFTP refuses any path outside the test's tree, which is what lets
+  `sftp-tilde-root` fail without touching the real filesystem; the loopback server sends no exit
+  status for a signalled process (Paramiko's server side has no `exit-signal`). `executes` is not
+  yet accepted by the harness fence (no P2 test calls a server in-process through it); P4/P6 extend
+  the fence when their matrix needs it. The fixture delta is `run_command.description` only, and
+  `tests/test_surface.py`'s docstring names it with § Testing and §9. `SECURITY.md`'s delegate model
+  gains that transfers run as the mapped user. The three deferral entries sit in `ROADMAP.md`
+  Part III; their order is Geoffrey's call. `local-put-renamed` was re-planted (the `put` signature
+  now returns `str`) and `shell-read-per-call` retired: its contract (the server's `$SHELL`,
+  captured at construction) is gone, replaced by `interpreter-from-shell-env`.
+- **Remediation amendment (2026-10-18, review cycle 1; P1 and P2 bundled).** `REVIEW.md` routed
+  five classes into the launcher and the backends; the foreman signed the human gate off for this
+  remediation. P1 and P2 are reopened together and land in one commit: `launch.program`'s start
+  parameter, the stage, the size check and `run_process` change with the three backends that call
+  them, and §2, §3, §5 and the footguns change with the code (R10, § Conventions), so neither phase's
+  half stands alone. Their gates are retuned to P7's, the latest done phase's (the skill's rule for
+  a reopened earlier phase): it runs the full suite in both eras and the sweep, whose mutation step
+  runs every planted case, a superset of the ids each gate named.
+  - **Class 1, start directory.** `program(command, cwd, start)` replaces `start_home`: `start='home'`
+    renders `command cd -- "${HOME:?…}"`, `start='stage'` renders `command cd -- "${1:?…}"`, both
+    after the login initialisation, so no startup file's `cd` moves the start. `ssh` now passes
+    `'home'` (the login home), `delegate` `'home'` as before, `local` `'stage'`: the stage passes its
+    own `"$PWD"` (the directory the launch started in) as the login bash's `$1`, which bash binds
+    after its startup files run (measured on bash 3.2: a profile's `set --` leaves it alone). The
+    `ssh.py` docstring says so. Pins: `test_a_profile_cd_does_not_move_the_start[local|delegate]`,
+    `test_a_startup_cd_does_not_move_the_start[bash-profile|zshenv]` (red first in `local` and both
+    `ssh` rows; `delegate` already held).
+  - **Class 2, stdin.** Over `ssh`, `_exec` sends the caller's bytes from a thread only once
+    `_collect` has seen the program's sentinel on either stream; a program that never starts gets
+    none. **Choice:** an empty stdin's EOF goes at once. It carries no byte of the caller's, and
+    withholding it too would make every call of a user whose rc file reads stdin hang to its
+    timeout. Consequence, recorded: with stdin to send, an rc file that reads stdin waits for bytes
+    that never come before the program starts, so that call ends at its timeout (`-1001`, empty
+    output) rather than run with its stdin shortened; the rows with no stdin are byte-identical to a
+    quiet home's. `local` and `delegate` keep stdin parked. Pins:
+    `test_a_remote_rc_never_reads_the_callers_stdin` (zsh `.zshenv` `read -r line`; red first: the rc
+    took `line one`, cat returned the rest), `test_a_profile_cannot_read_stdin[local|delegate]`.
+  - **Class 3, call duration.** **Grace:** `launch.GRACE`, 1 s, the bound already used after each
+    signal at a timeout. **Mechanism:** `run_process` calls `communicate` in `POLL` (0.05 s) steps
+    and checks `poll()` between them; once the process (the exec chain ends in the command; `sudo`
+    exits with its child) has exited, `_settled` reads for `GRACE` more, then closes the pipes and
+    returns the command's status, signalling nothing (a background job the command meant to leave
+    keeps running). `_collect` starts the same grace when the exit status arrives and returns that
+    status when it ends, whether or not the output has ended. **With R8:** a command whose exit
+    status is known is never reported as a timeout, even if the deadline passes during its grace
+    (a call can last its timeout plus `GRACE`); a command still running at the deadline is
+    `-1001` as before, and after the TERM each backend reads for `GRACE` what it prints as it stops
+    (`run_process` already did; `_collect` now does too, `_stopped`), keeping all partial output.
+    The `timeout-completed-misreported` row's `sleep 4 &` case is now this path. The loopback SSH
+    server sends the exit status when its process exits, as sshd does, not after the output ends.
+    Pins: `test_a_profile_background_job_does_not_hold_the_call[local|delegate]`,
+    `test_a_startup_background_job_does_not_hold_the_call[bash-profile|zshenv]` (each against the
+    quiet home's elapsed time; red first at 6.0–6.1 s for a `sleep 6` holder),
+    `test_a_held_output_does_not_hold_a_completed_command`, and
+    `test_a_timeout_drains_what_follows_the_term` (the block reviewer's surviving
+    `ssh-timeout-no-drain`, now planted and killed).
+  - **Class 4, the separation texts.** `AGENTS.md` §3, the `run_command` description (fixture delta
+    `run_command.description`, scripted), the `Executor` docstring, the README and the launcher's
+    module docstring state the exception: over `ssh`, a background job started by the remote login
+    shell's own rc file can write into a result while the command runs. §2 and §3 also state the
+    start directories, the stdin rule and the grace. `test_a_remote_rc_background_job_can_write_into_a_result`
+    pins that it still can, `test_separation_texts_state_the_remote_rc_exception` that the four
+    texts say so (red first: all four). `issues/startup-background-jobs.md` and its `ROADMAP.md`
+    entry gain dated lines: the held call is fixed, the rc-file case is the documented exception.
+  - **Class 5, size limits.** `MAX_PROGRAM` (96 KiB of program) is replaced by `MAX_ARGUMENT`
+    (131,072 bytes, Linux's per-argument limit with the NUL), checked against the bytes that cross
+    it: `bash_argv` checks the program (one argv element), `ssh_command` the exec string (bootstrap,
+    base64 word), each a `ValueError` naming the limit; `SSHExecutor.run` builds the exec string
+    before connecting. The largest `ssh` program is 98,172 bytes; a local or delegated one 131,071.
+    `program()` no longer checks size. Pins: `test_local_launch_limit_is_the_per_argument_limit`,
+    `test_ssh_wire_limit_counts_the_bootstrap` (boundary computed from `len(BOOTSTRAP)`; red first:
+    a 98,173-byte program passed with a 131,074-byte exec string),
+    `test_an_oversize_program_is_refused_before_connecting`.
+  - **Mutants.** Re-planted where the anchor moved: `delegate-tilde-server-home`,
+    `delegate-server-cwd`, `ssh-bootstrap-dropped`, `ssh-drain-spins`, `bootstrap-raw-program`,
+    `timeout-completed-misreported`; `stdin-not-parked` gains the two executor rows. New, one or more
+    per class: `ssh-start-not-home`, `local-start-not-stage`, `stage-start-home` (1);
+    `ssh-stdin-before-start` (2); `exit-not-noticed`, `drain-waits-for-holders`,
+    `ssh-drain-waits-for-holders`, `ssh-timeout-no-drain` (3); `separation-exception-unstated` (4);
+    `local-size-unchecked`, `ssh-size-ignores-bootstrap` (5).
+- **Remediation amendment 2 (2026-10-18, foreman's rulings on the first).** Rulings: an empty
+  stdin's EOF at once, accepted; a call with stdin to a user whose remote rc reads stdin ending
+  `-1001` with nothing written, accepted, to be stated and pinned; the gate retunes, accepted; the
+  local start directory, **rejected as built**, which reopened class 1.
+  - **The finding.** The foreman probed Gautschi's bash 5.1.8 (the shell local mode runs there): a
+    `.bash_profile` of `set -- clobbered-by-profile` and `cd /tmp` made `bash -l -c '…' stage-name
+    /original/start` print `1=clobbered-by-profile`. Bash 4 and later bind a login bash's positional
+    parameters before its startup files run; macOS's bash 3.2 binds them after, which is why the
+    first note's measurement passed. So the stage's `"$PWD"`-as-`$1` route let a startup file move
+    a local command's start.
+  - **The mechanism now.** `program(…, start)` takes `'home'` (unchanged: `ssh`, `delegate`) or an
+    absolute directory, written into the program as one quoted word; `LocalShellExecutor` passes
+    `os.getcwd()`, which is the stage's `$PWD`, since the launch inherits it. `STAGE` hands the login
+    bash nothing after the program again. The `executes` fixture's `local_cwd` now changes the test
+    process's working directory (default: a fresh directory under the test's tree) instead of
+    relaying the launch through a `cd`.
+  - **The sweep.** Every other use of positional parameters runs where no startup file can reach
+    it: the stage (`bash --posix -c`, reads no startup file, not even `BASH_ENV`), the SSH
+    bootstrap's stage (the same, its `$1` set by its own argv after the remote rc has run), the
+    fixed scripts and the delegate transfer (`bash --posix -c SCRIPT NAME …`), and a `run_command`
+    script (a fresh non-login `bash -c` with `BASH_ENV=` and `ENV=` empty). The login bash's own
+    program reads none: `test_program_reads_no_positional_parameter` checks rendered programs for
+    `$0`–`$9`, `$@`, `$*`, `$#`, `BASH_ARGV`, `BASH_ARGC` and that the stage and bootstrap give the
+    login bash none. `$0` (`cluster-mcp`) appears only in bash's own error prefix. Not version-
+    dependent and left as found: the prologue does not reset `IFS`, so a profile that sets it
+    globally could keep `export -f $fns` from exporting functions to a script.
+  - **Bash 5 red/green, by hand** (a Gautschi login node, `GNU bash, version 5.1.8(1)-release`, as
+    `<user>`, within the dogfood class). A throwaway tree
+    `/scratch/<cluster>/<user>/<dev-dir>/se-start-probe/` with `home/.bash_profile` =
+    `set -- clobbered` / `shift` / `cd /tmp` and a `start/` directory; from `start/`, each built
+    argv (`bash_argv(program(['pwd'], …))`, NUL-separated, base64) through
+    `xargs -0 env -i HOME=…/se-start-probe/home PATH=/usr/bin:/bin`; then
+    `rm -rf` of that tree and an `ls` confirming it gone.
+    Output (stdout | stderr | xargs exit), sentinels included:
+    - old code (d1a568a, `start='stage'`): `24493b5a05846d473fc159259813eec3 |
+      24493b5a05846d473fc159259813eec3cluster-mcp: line 4: 1: the start directory is not set | 123`
+      (the profile emptied `$1`; xargs reports a child exit of 1 as 123);
+    - new code (`start=<that start/ directory>`):
+      `4b029526e4c75e9013abb1f54572d8c5/scratch/<cluster>/<user>/<dev-dir>/se-start-probe/start |
+      4b029526e4c75e9013abb1f54572d8c5 | 0`.
+    Locally (bash 3.2), `test_a_profile_cd_does_not_move_the_start[local]` now carries
+    `set -- clobbered; shift` in its profile; it cannot go red here, hence the transcript.
+  - **Ruling 2's texts and pins.** AGENTS §2, the README and the `Executor.run` docstring state that
+    over `ssh`, if the remote rc file reads stdin, "a call that sends stdin times out and never
+    writes partial content"; `test_stdin_texts_state_the_rc_timeout` pins the phrase in all three
+    (mutant `stdin-rule-unstated`). `test_a_remote_rc_never_reads_the_callers_stdin` now sends its
+    stdin to `sh -c 'cat > "$HOME/written"'` and asserts that after the timeout, once the rc file's
+    read has ended, nothing was written. For that row to mean what sshd does, the loopback server
+    now closes a process's output pipes before its stdin when the client closes the channel (sshd
+    closes the child's descriptors), so a command that starts late dies on its first write (its
+    sentinel). Residual, recorded: an rc file that ignores SIGPIPE would let such a late program
+    run with an empty stdin.
+  - **Mutants.** `stage-start-home` retired with the route it mutated; `local-start-not-stage`
+    re-planted as `local-start-dropped`; new `local-start-positional` (the positional route back:
+    the stage passes `"$PWD"` and the start line reads `$1`), killed by
+    `test_program_reads_no_positional_parameter`; new `stdin-rule-unstated`.
+  - **A P6 gate flake, fixed.** P6's re-run went red once: `transfer-empty-path-passed` killed "for
+    the wrong reason". Its matrix row runs its calls concurrently, so under that mutant the empty
+    path's upload and the `~` one race into the same file in the login home, and about one run in
+    twelve fails as Paramiko's `size mismatch in put` instead of "was accepted, not refused" (twelve
+    repeated children: eleven and one). Both failures carry "reaches the executor as an empty path",
+    the contract the case breaks, so that is now its `why`. Pre-existing (SFTP and the matrix are
+    untouched here); recorded as P6 attempt 1.
+- **Remediation amendment 3 (2026-10-18, review cycle 2; P1–P4 bundled).** `REVIEW.md` cycle 2
+  routed six classes; the foreman signed the human gate off for this remediation, the last cycle
+  the bound allows. P1, P2, P3 and P4 reopen and land in one commit: the launcher (P1), the
+  backends and the texts that describe them (P2, R10), the fixed scripts' argv (P4's `scripts.py`)
+  and the spec-id fix (P3's `tests/test_startup.py`) change together, and `tests/mutants.py` and
+  `AGENTS.md` carry rows of every class. P3's and P4's gates are retuned to P7's, the latest done
+  phase's (the skill's rule for a reopened earlier phase): the full suite in both eras is a
+  superset of their test subsets, and the sweep's mutation step runs every planted case, a
+  superset of the ids each named.
+  - **Class 1, a result is complete unless only holders remain.** Cycle 1's fixed grace from the
+    exit status is gone. `run_process` (local, delegate) and `_collect` (ssh) now read on after the
+    exit status while output arrives: they track when a byte last arrived and when the status was
+    first seen, and stop early only once nothing has arrived for `GRACE` (1 s) since the later of
+    the two. That stop is never silent: the wire returns a fourth element, a note, and
+    `separate(…, note)` ends stderr with it whatever else it does (`launch.HELD_NOTE`: "the command
+    exited, but something left running held its output open; nothing arrived for 1 s, so reading
+    stopped there"). Output that keeps arriving ends at `GRACE` past the deadline as `-1001`, with
+    `launch.LATE_NOTE` naming the command's own status; nothing is signalled there, and closing the
+    pipes (or the channel) gives the writer a broken pipe. A completed command's status is still
+    never turned into a timeout while its output has gone quiet: an idle holder at the deadline
+    ends the call by `GRACE` past it with the status and `HELD_NOTE`. Pinned at both sides of the
+    trade-off: a background holder adds only the note and at most `GRACE` (the held rows, three
+    modes, now expect the note); output arriving in bursts within `GRACE` of each other is read
+    whole (`test_output_after_the_exit_is_read_while_it_arrives[local|delegate]`, red first: "now
+    late" without "later"; the unit `test_output_after_the_exit_status_is_read_to_the_end`); a
+    writer that never stops ends at the timeout with the note (`test_a_holder_that_keeps_writing_
+    ends_at_the_timeout`, local, delegate, ssh under bash and zsh; red first: exit 0 after 8 s). A
+    link that stalls for over `GRACE` after the status would stop early, noted; no rate that keeps
+    arriving is cut. **The slow link** is `tests/ssh_server.py`'s `ThrottledSSH`, the suite's own
+    model: both pipes read eagerly into a 2 MiB window (Paramiko's default), one link carrying both
+    streams in arrival order at a fixed rate in 8 KiB pieces, the exit status sent as soon as the
+    process exits, ahead of the queue. `read_file` through the tool, bytes returned (HEAD b32778d →
+    now): 256 KiB/s, 640 KiB file: 229,376 → 655,360; 1 MiB/s, 3 MiB: 1,744,896 → 3,145,728; 4 MiB/s,
+    6 MiB: 6,291,456 → 6,291,456 (the window drains within a fixed grace, so HEAD passed this one);
+    `run_command('cat big.txt; echo DONE >&2')` at 256 KiB/s: stdout 237,568 → 655,360 bytes, stderr
+    `'' → 'DONE\n'`. **A late sentinel still counts as started:** a zsh login shell whose `.zshenv`
+    prints 1 MiB, at 512 KiB/s: `touch ~/ran` returned `-1002` with `~/ran` created at HEAD, now
+    `('', '', 0)`; `cat` with stdin bytes behind the same rc gets them exactly.
+  - **Class 2, every call that holds stdin has a bound.** **Choice: the backend bounds the wait
+    for the start, not the tools.** Over `ssh`, while the caller's stdin is held back (`started`
+    pending), `_collect` ends the call as a timeout (TERM request, `_stopped`, `-1001`, nothing
+    sent) once `ssh.START_TIMEOUT` (30 s) has passed with nothing arriving, or at the call's own
+    deadline if sooner. Why the backend: a timeout passed by `write_file` or `sbatch` would bound the
+    whole write, so a long legitimate write on a slow link could be cut, leaving a partial file; the
+    start bound covers only the wait the hazard creates, and counting it from the last byte keeps a
+    chatty rc on a slow link (output still arriving) from tripping it. Only `ssh` needs it: `local`
+    and `delegate` park stdin, so no profile can read it. `write_file` and `sbatch` now name the
+    exit code in their failure (`Failed to write file (exit -1001): …`), so the documented `-1001`
+    reaches the caller. The texts (AGENTS §2, the README, `Executor.run`) state the bound, and
+    `test_stdin_texts_state_the_rc_timeout` now also holds each to `f'{START_TIMEOUT:g} s'` and
+    "with nothing arriving". Pin: `test_a_call_holding_stdin_is_bounded[run|write_file|sbatch]`
+    (`.zshenv` `read -r line`, no timeout, the bound lowered to 1.5 s; red first: none returned in
+    11.5 s), nothing written and `sbatch` never called.
+  - **Class 3, nothing after the startup files depends on shell state they can change.** The sweep,
+    each item measured locally (bash 3.2) and, where it differs, on Gautschi's bash 5.1.8:
+    - `IFS` (`:` or empty) split `export -f $fns`: `export: greet\nml: not a function`, functions lost
+      to scripts (both bashes). **Fixed twice over:** the prologue runs `unset IFS`, and the export
+      reads `compgen -A function` one name per line (`while IFS= read -r …; do export -f -- …; done
+      < <(…)`), so neither splitting nor globbing touches it.
+    - Glob options (`failglob`, `nullglob`, `extglob`, `dotglob`, `nocaseglob`, `GLOBIGNORE`) with a
+      function named like a pattern (`mod?x`): `failglob` aborted the export (`no match: mod?x`).
+      Fixed by the same loop; `noglob` and the rest then touch nothing the program expands.
+    - `set -k`: an argv element shaped like an assignment (`b=c`, which `shlex.quote` leaves bare)
+      became one for the command's environment, so `printf %s\\n b=c x` printed only `x` (an R2
+      break). **Fixed:** the prologue resets `k`.
+    - `set -P`: the start directory was named by its physical path (a symlinked home printed its
+      target), which `list_directory`'s absolute paths read. **Fixed:** the prologue resets `P`.
+    - Exported functions over the programs a fixed script runs (`cat`, `mkdir`, `chmod`, …): a
+      POSIX-mode bash imports them, so `cat >"$1"` ran the profile's `cat` and wrote its output
+      (both bashes). Exported `SHELLOPTS` with `noclobber` (bash 5 only; 3.2 refuses to import it):
+      an overwrite failed, "cannot overwrite existing file". **Fixed:** every fixed script runs
+      behind `launch.FIXED_RESET` (`unset -f cat cd chmod cp find mkdir printf sort; set +C +o
+      pipefail`; `unset` and `set` are POSIX special builtins, which no function can replace there).
+      `scripts.script_argv` and the delegate transfer build it through `launch.fixed_argv`;
+      `FIXED_SCRIPTS` keeps the composable constants, and `scripts.script_of(argv)` is the
+      registry check the tool tests use.
+    - `CDPATH`, `POSIXLY_CORRECT`: already harmless (a relative cwd gains `./`, a start is absolute;
+      `set +o posix` also unsets `POSIXLY_CORRECT`); now pinned with the rest.
+    - Left as found, recorded: a profile that disables builtins (`enable -n`) or exports a function
+      named `[` (a POSIX-mode bash prints, on stderr, that it cannot import it) joins the recorded
+      limit of functions named after `unset`, `unalias`, `builtin` or `set`. A profile that
+      reassigns `HOME` moves the start and `~` with it, as it does for the user's own shell; raised
+      for the foreman's ruling, not changed. The prologue's `unset IFS` is defence in depth once the
+      export no longer splits: a mutant that drops it alone is equivalent, so none is planted.
+    - Pins: `test_profile_state_does_not_reach_the_launcher[<local|ssh-bash|ssh-zsh>-<state>]` (the
+      home reached through a symlink; red first: every `ifs-*`, `glob-options`, `keyword` and
+      `physical` row), `test_a_profile_cannot_change_a_fixed_script[<mode>]` (overwrite,
+      `create_dirs`, a job script; red first in all three modes), and the hijack row `read-function`
+      (the export now uses `read`, so `read` joins the prologue's `unset -f` list and `[`, no longer
+      used, leaves it).
+  - **Class 4, no POSIX stage reads a startup file.** Bash built with `SSH_SOURCE_BASHRC` (RHEL's
+    5.1.8 and macOS's 3.2 both are) sources `~/.bashrc` for a non-login, non-interactive `-c` shell
+    at shell level 1 when `SSH_CLIENT` or `SSH2_CLIENT` is set or stdin is a socket, POSIX mode or
+    not; `exec` keeps the level, so every stage the chain reaches qualifies. `--norc` is the one
+    switch that path honours (measured: clearing `SSH_CLIENT` leaves `SSH2_CLIENT` and the socket
+    test). **Fixed:** `--norc` on every bash the launcher starts but the login one: the local and
+    delegated stage and the SSH bootstrap's stage (`launch.POSIX_STAGE`), a `run_command` script's
+    bash (`SCRIPT`), and every fixed script (`fixed_argv`). The size limit moves with the bootstrap:
+    the largest `ssh` program is now 98,166 bytes (AGENTS §2). Pin:
+    `test_no_stage_reads_a_startup_file_under_sshd[<local|ssh-sh|ssh-bash|ssh-zsh>-<argv|script|
+    fixed-script>]`, `SSH_CLIENT`/`SSH_CONNECTION` set, each stage reached by `exec` (a bash login
+    shell reads it once itself, as under sshd); red first locally in all twelve rows (1–3 reads).
+    The loopback server's environment now carries both variables, as sshd's does. **Bash 5
+    red/green, by hand** (a Gautschi login node, `GNU bash, version 5.1.8(1)-release`, as `<user>`,
+    within the dogfood class): each built argv from HEAD b32778d and from this change, NUL-separated
+    and base64-encoded, run from a throwaway tree under the literal path
+    `/scratch/<cluster>/<user>/<dev-dir>/se-c4-probe/` with `env -i HOME=<fresh home there>
+    PATH=/usr/bin:/bin SSH_CLIENT=… SSH_CONNECTION=…`, the home's `.bashrc` appending a line to a
+    marker; then `rm -rf` of that tree and an `ls`
+    confirming it gone. `.bashrc` reads, HEAD → now: local stage, argv 1 → 0; script 2 → 0; fixed
+    script 2 → 0; `bash -c <exec string>` (bash as login shell) 2 → 1 (its own); `zsh -c <exec
+    string>` 1 → 0; every row printed its sentinel and `ran`, exit 0. The class-3 rows, same run:
+    a `.bash_profile` exporting a `cat` function and `noclobber` in `SHELLOPTS`, a fixed-script
+    overwrite of `old` with `new`: HEAD exit 1, "cannot overwrite existing file", file `old` → now
+    exit 0, file `new`; `set -k` with `printf %s\\n b=c x`: HEAD `x` → now `b=c\nx`; `IFS=:` and
+    `failglob` with a function `mod?x`, script `greet`: HEAD exit 1, the function list as an
+    `export` error → now `greeted`, exit 0.
+  - **Class 5, spec ids stay out of source and tests.** `tests/test_startup.py`'s two docstrings
+    now say "the reported startup failure". `test_no_spec_ids_in_the_package_or_the_suite`
+    (`tests/test_hygiene.py`) scans the imported package and `tests/*.py` for
+    `\b[RP][0-9]{1,2}\b` (red first on HEAD's two lines), with planted controls; AGENTS §
+    Conventions points at it.
+  - **Class 6, every timeout escalation is pinned.** `test_a_timeout_escalates_to_sigkill` (a
+    command that ignores SIGTERM ends within `0.5 + 2·GRACE + 2` s and its job is gone) and
+    `test_a_timeout_sends_term_first_and_keeps_what_follows` (a command that traps SIGTERM keeps
+    `stopping`).
+  - **Mutants.** Re-planted where the anchor moved: `interpreter-from-shell-env`,
+    `stage-reads-bash-env`, `startup-traps-kept`, `not-started-exit-zero`,
+    `timeout-partial-output-dropped`, `timeout-completed-misreported` (now the held return),
+    `exit-not-noticed`, `drain-waits-for-holders`, `ssh-timeout-raises`, `ssh-timeout-no-drain`,
+    `ssh-exit-status-dropped`, `backend-separation-skipped`, `stdin-rule-unstated`;
+    `prologue-bracket-function-kept` retired with the `[` it protected, `prologue-read-function-kept`
+    in its place. New, by class: (1) `ssh-returns-at-exit-status`, `ssh-idle-grace-zero`,
+    `ssh-fixed-grace-from-exit` (the cycle-2 regression itself), `ssh-held-stop-silent`,
+    `ssh-holder-past-the-timeout`, `ssh-late-stop-silent`, `local-returns-at-exit`,
+    `local-idle-grace-zero`, `local-fixed-grace-from-exit`, `held-stop-silent`,
+    `separate-note-dropped`, `holder-past-the-timeout`, `late-stop-silent`; (2)
+    `ssh-stdin-wait-unbounded`; (3) `function-export-split`, `prologue-keyword-kept`,
+    `prologue-physical-kept`, `fixed-reset-dropped`; (4) `stage-reads-bashrc`,
+    `bootstrap-reads-bashrc`, `script-reads-bashrc`, `fixed-script-reads-bashrc`; (5)
+    `spec-id-in-source`; (6) `timeout-sigkill-dropped`, `timeout-sigterm-dropped`.
+  - **Unchanged on purpose.** `run_command`'s description still says what a timeout returns; a held
+    or late stop states itself in the result, so the served surface has no delta this round.
+- **Verify:** frontmatter `P2.verify`.
+- **Touches:** `src/rcac_mcp/executor/*`, `src/rcac_mcp/tools/shell.py` (docstring), `src/rcac_mcp/__init__.py` (`APP_HELP` only), `tests/{harness,conftest,ssh_server,test_ssh_exec,test_ssh_smoke,test_executors,test_hygiene,mutants,test_mutations}.py`, `tests/fixtures/served_surface.json`, `AGENTS.md`, `README.md`, `SECURITY.md`, `issues/`, `ROADMAP.md`.
+
+## Phase P3 — Startup: a failed SSH connect is answered, in both eras
+**Satisfies:** R9 · **Depends on:** P2
+**Goal:** `rcac-mcp --ssh-host <unreachable>` prints `cannot connect to <host>: <cause>` on stderr,
+answers every stdio request with that message as a −32603 error until EOF, and exits 5.
+
+- [x] `src/rcac_mcp/startup.py` (stack-free): `answer_until_eof(stdin, stdout, message)`,
+      `StartupFailure(RuntimeError)`, `connect_failure_message(host, exc)` with the cause classes
+      (PLAN §2.5).
+- [x] `executor/ssh.py`: default `connect_timeout`, `banner_timeout`, `auth_timeout` (15 s) through
+      Fabric's config, an ssh_config `ConnectTimeout` still winning.
+- [x] `src/rcac_mcp/__init__.py`: wrap only `SSHExecutor(ssh_host)`; log once, answer on `stdio`,
+      raise `StartupFailure`; `StartupFailure` first in `exceptions`, mapped to
+      `exit_status.runtime_error` with no second log line. The ladder and the missing-host
+      `ValueError` are untouched.
+- [x] `tests/harness.py`: verb `stdio_refusal(argv, era)` → `Refused(code, message)`; refuses an
+      argv not starting with `SANDBOX`; raises if the connect succeeds. Add it to AGENTS.md's harness
+      verb list.
+- [x] `tests/test_startup.py`: `startup_refusal_violations` over in-memory streams with planted
+      negatives (first request only, a notification answered, wrong id, extra stdout, wrong code);
+      the raw wire through `[SANDBOX, CLI, '--ssh-host', '127.0.0.1:<closed port>']` (bind port 0,
+      close, use it): `server/discover` + notification + `initialize` in → two error lines with ids
+      1 and 2, the message on stderr naming `127.0.0.1:<port>`, exit 5, nothing else on stdout;
+      `test_startup_failure_is_answered[legacy|modern]`, each era pinned on its own row whatever the
+      run selects; a loopback listener that never sends a banner → answered "timed out" within the
+      bound; a unit row per cause class with a stubbed `Connection` (unknown host, refused,
+      authentication, timeout) asserting the host and the class appear.
+- [x] Plant `startup-answers-first-only`, `startup-host-unnamed`, `startup-exit-zero`,
+      `startup-stdout-noise`, `startup-no-connect-timeout`.
+- [x] `AGENTS.md`: § Testing entries; §4's note that a failed connect is answered (no ladder change);
+      `README.md` troubleshooting line.
+- **Build amendment (2026-10-17).** Paramiko reports a key exchange cut off by the connect
+  timeout as `SSHException('No existing session')` (its `start_client` stops waiting without
+  raising), and a banner wait that runs out as `Error reading SSH protocol banner` raised while
+  handling a socket timeout; both are classed `timed out` (the cause chain is read, the first by its
+  exact text). The silent-banner row runs in-process through `MCPServerApp.main` with
+  `CONNECT_TIMEOUT` lowered to 1 s and an 8 s deadline: Paramiko's own banner wait is 15 s, so at
+  the real bound a missing default would still be answered "timed out" at about the same time and
+  the row could not fail; the closed-port, raw-wire and era rows use the CLI as planned. The
+  defaults also reach the connect arguments when a caller passes its own `connect_kwargs` (Fabric
+  then ignores the config's), and a `timeout` already among them is left alone. One addition, no
+  contract change: the responder reads nothing from a terminal (a person running the command at a
+  prompt sees the stderr line and the exit, not a hang), pinned by a unit row. Extra unit rows:
+  `-t http` exits 5 without reading stdin, and a failure of no known class is named by its own
+  text. The repo map gains `startup.py`; the `ssh.py` footgun gains the connect bound.
+- **Remediation amendment 3 (2026-10-18, review cycle 2).** Reopened with P1, P2 and P4 and landed
+  in one commit with them; the classes, the choices, the pins and the gate retune are in P2's third
+  note.
+- **Verify:** frontmatter `P3.verify`.
+- **Touches:** `src/rcac_mcp/{startup,__init__}.py`, `src/rcac_mcp/executor/ssh.py`, `tests/{harness,test_startup,mutants}.py`, `AGENTS.md`, `README.md`.
+
+## Phase P4 — Filesystem, transfer and resource callers on argv; byte-exact writes
+**Satisfies:** R1, R2, R3, R4, R5 (the filesystem half) · **Depends on:** P2
+**Goal:** `list_directory`, `read_file`, `write_file`, `upload_file`, `download_file` and
+`resources.py` call the executor with argvs only; `write_file` is byte-exact and takes `encoding`.
+
+- [x] `tools/filesystem.py` per PLAN §2.4: `read_file` → `['cat', '--', UserPath(p)]` /
+      `['head', '-c', str(n), '--', UserPath(p)]`; `list_directory` → the one fixed-script call
+      (relative path gains `./`; `-a` its own element; the entries returned are those
+      `ls -l [-a] DIR` lists today, absolute paths from the printed `$PWD`); `write_file` → validate
+      and encode first (base64: ASCII whitespace removed, then strict), then the fixed script with
+      `stdin=` bytes and, for `create_dirs`, the parent computed in Python as `$2`;
+      `encoding: Literal['utf-8', 'base64'] = 'utf-8'`. Every fixed script is a constant in
+      `FIXED_SCRIPTS` (PLAN §2.4).
+- [x] `tools/transfer.py`: return what `put`/`get` return (no extra `readlink` call, no local
+      `os.path`).
+- [x] `resources.py`: the constant listing script and `['cat', '--', path]`; glob, order and header
+      unchanged (§8).
+- [x] `tests/test_tools.py`: responders read argvs; `tool_violations` gains `passed a command string`
+      (any non-`run_command` tool whose recorded command is a `str`) and `unregistered script` (an
+      argv whose element after `-c` is not in `FIXED_SCRIPTS`), each with a control; the
+      `write_file` row reaches the executor through `stdin`.
+- [x] `tests/test_writes.py` (`integration`, three modes: `executes` for local and delegate, the
+      loopback server for ssh): sha256 of the file equals sha256 of the bytes sent for no final
+      newline, empty, a line `RCAC_MCP_EOF`, CRLF, NUL, 1 MiB, invalid-UTF-8 binary via base64; in
+      overwrite and append (append to a missing file creates it); `create_dirs` with `~/new dir/x`
+      and with a directory whose name ends in a newline; R5: base64 wrapped with space, tab, CR and LF is accepted and byte-exact; invalid base64, a vertical
+      tab or form feed, URL-safe characters,
+      bad padding, an unknown `encoding` (schema), a lone surrogate in `utf-8` content → an error
+      naming the parameter and **the target unchanged** (hash before == hash after, or still
+      absent); GNU-wrapped base64 (76 columns, final newline) is accepted and byte-exact. No element
+      of any recorded argv contains the content (unit row).
+- [x] Fixture (PLAN risk 2): `write_file.description` and `write_file.properties.encoding` only.
+- [x] Plant `tool-command-string` (read_file back to an f-string), `fixed-script-interpolated` (a
+      value formatted into a fixed script), `write-final-newline`, `content-in-argv`,
+      `append-overwrites`, `create-dirs-dirname-subst` (`$(dirname …)` back), `base64-unvalidated`,
+      `write-before-validate`, `read-file-no-dashdash`; re-check `transfer-local-fallback`.
+- [x] Deferral: `issues/list-directory-parsing.md` (names with newlines, symlink arrows, device
+      sizes) + ROADMAP entry.
+- **Build amendment (2026-10-17).** `FIXED_SCRIPTS` lives in a new leaf module,
+  `src/rcac_mcp/scripts.py` (`fixed()` registers a module-level constant, `script_argv()` builds
+  `[/bin/bash, --posix, -c, SCRIPT, NAME, *values]`, POSIX mode per P2's amendment); the repo map
+  gains it. The `passed a command string` pin exempts the Slurm and site tools
+  (`test_tools.PASSES_A_SCRIPT`) until P5 moves them to argvs; P5 shrinks the set to `run_command`.
+  The harness fence accepts `executes`: the fixture now also replaces the global `Popen` with a
+  launcher that refuses any argv not starting with `bin/sandbox.sh` (the loopback SSH server's
+  launches do), pinned by `test_executes_opens_the_fence_only_to_sandboxed_launches`.
+  `RecordingExecutor.put`/`get` return `<name>:<destination>`, so a transfer's result is traced to
+  the executor. `read-file-no-dashdash` is killed by the exact-argv pin
+  (`test_filesystem_argvs[read-cat]`): a relative `UserPath` already gains `./`, so no path can
+  reach `cat` starting with `-`, and no behavioural row can see a dropped `--`. `list_directory` now
+  changes into the directory: a symlink to a directory lists the target's entries, a path naming a
+  file is an error ("Not a directory") instead of a one-entry listing, and `show_hidden` works
+  (today's `long-isoa` was rejected). The context listing stays the constant
+  `find … 2>/dev/null | sort` pipeline (PLAN §2.4), not research 04's `-print0`. The unknown
+  `encoding` is refused by the schema (`literal_error` naming `encoding`), before the tool runs.
+  `test_writes`' ssh leg uses a bash login shell; the login-shell matrix is `test_ssh_exec`'s.
+- **Remediation amendment 3 (2026-10-18, review cycle 2).** Reopened with P1, P2 and P3 and landed
+  in one commit with them; the classes, the choices, the pins and the gate retune are in P2's third
+  note.
+- **Verify:** frontmatter `P4.verify`.
+- **Touches:** `src/rcac_mcp/tools/{filesystem,transfer}.py`, `src/rcac_mcp/resources.py`, `src/rcac_mcp/scripts.py` (new), `tests/{test_tools,test_writes,mutants,test_mutations,conftest,harness,test_hygiene,test_surface}.py`, `tests/fixtures/served_surface.json`, `README.md`, `AGENTS.md` (§ Testing, §9 deltas), `issues/`, `ROADMAP.md`.
+
+## Phase P5 — Slurm and site tools on argv; sbatch args and list extra_args
+**Satisfies:** R1, R2, R4 (`script_content`), R6 · **Depends on:** P4
+**Goal:** every tool in `tools/slurm.py` and `tools/rcac.py` calls the executor with an argv;
+`sbatch` takes `args` and list `extra_args`; `script_content` is written byte-exactly.
+
+- [x] `tools/slurm.py` per research 04's table: option values as separate elements; `--` before
+      `sbatch`'s script path and `scontrol show node`'s name; `sbatch(args: list[str] | None,
+      extra_args: list[str] | None)`, the tool's own options first, `extra_args` last before `--`, an
+      element `--` refused, the script path a `UserPath` (never starts with `-`); `script_content` through
+      the `write_file` path plus `chmod +x`; the filename part sanitised (`-J` literal). `sacct`'s
+      `whoami` → `['whoami']`.
+- [x] `extra_args` on `squeue`, `scancel`, `sacct`, `sinfo` becomes `list[str] | None` (GOAL
+      Clarifications, PLAN/TECH gate): each element one literal argument, after the tool's own
+      options, an element `--` refused; a string refused by schema validation naming the type
+      (`tests/test_extra_args.py`, both eras on their own rows).
+- [x] `tools/rcac.py`: argvs; `average_wait` uses `--partition` and `-A` (PLAN §2.4).
+- [x] `tests/test_sbatch.py`: `args` after the script path, `extra_args` before `--`, a string
+      `extra_args` refused by schema validation with an error naming the array type (both eras on
+      their own rows); `script_path='-x y'` reaches `sbatch` as one element after `--` (as `./-x y`),
+      also when `extra_args=['-J']` swallows the `--`.
+- [x] `tests/test_writes.py`: `sbatch.script_content` rows (byte-exact, three modes; `sbatch` is an
+      argv-echo shim).
+- [x] `tests/test_tools.py`: rows for `args` and list `extra_args`; `PASSES_A_SCRIPT` shrinks to
+      `run_command` (P4 amendment).
+- [x] Fixture (scripted hand-edit, deltas listed in the commit body, named in § Testing and §9):
+      `sbatch.description`, `sbatch.properties.args`, `sbatch.properties.extra_args`, and
+      `properties.extra_args` (plus each tool's description if its `Args:` line changes) on
+      `squeue`, `scancel`, `sacct`, `sinfo`; README tool lines.
+- [x] Re-plant `tool-builds-local-executor`, `tool-builds-ssh-executor`; plant `sbatch-args-joined`,
+      `extra-args-accepts-str`, `extra-args-swallow-dashdash` (script path rendered without `./`), `option-value-joined`, `script-content-newline`,
+      `scontrol-node-positional`.
+- [x] Deferral: `issues/sbatch-script-name-collision.md` (one-second timestamps) + ROADMAP entry.
+- **Build amendment (2026-10-17).** The job script's fixed script is `mkdir -p -- "$2" && cat >"$1"
+  && chmod -- +x "$1"` (`slurm.WRITE_JOB_SCRIPT`, built from `write_file`'s `MKDIR` and `WRITE`):
+  PLAN §2.4's `chmod +x -- "$1"` fails on BSD `chmod`, whose option parsing stops at the mode, so
+  the `--` after it is read as a file (`chmod: --: No such file or directory` in `local` mode on
+  macOS); `--` before the mode is read as the end of options by both GNU and BSD. **Empty
+  optional option values (foreman's ruling):** an optional scalar string whose only use is an
+  option's value (`squeue`: `user`, `account`, `partition`, `state`; `scancel`: those and `name`;
+  `sacct`: `user`, `account`, `name`, `state`, `starttime`, `endtime`, `format`; `sinfo`:
+  `partition`, `nodes`, `state`, `format`; `sbatch`: `job_name`, `account`, `partition`, `qos`,
+  `time`, `mem`, `gpus`, `constraint`, `output`, `error`; `average_wait`: `partition`, `account`)
+  means "not given" when it is `''`, as for `None`, so the tool's default applies
+  (`squeue(user='')` sends `--me`). R2's value classes do not include the empty string, and some
+  clients send `''` for an unset optional. Every list element (`args`, `extra_args`) stays literal,
+  `''` included. *(Amended at P6, foreman's ruling: the rule covers optional scalars, option values
+  and optional positionals alike, so `scontrol_show_node`'s `node` and `sbatch`'s `script_path`
+  mean "not given" when `''` too; required parameters and list elements stay literal.)* Pinned by `test_empty_optional_scalars_mean_not_given`
+  with `test_empty_rows_cover_every_optional_scalar_option`, and the mutant
+  `empty-optional-passed-literally`, added to the gate; PLAN §2.6's oracle is corrected, so P6's
+  matrix expects the default argv for `''` on these. The schema's refusal of a string list reads `Input should be a valid list` (pydantic's
+  `list_type`, the schema's `array`), with the parameter's name; the rows assert both.
+  `script_content` with a lone surrogate is refused naming it, before any executor call, and an
+  `extra_args` element `--` is refused before anything runs, including the script write. The
+  argv-echo stand-ins live in a helper, `tests/argv_echo.py` (`install`, `calls`: one file per
+  call under the home, prepended to a login bash's `PATH` through `.bash_profile`), which P6's
+  matrix can reuse. `test_slurm_and_site_argvs` pins every Slurm and site tool's exact argv, with
+  `test_slurm_argvs_cover_the_slurm_and_site_tools`; `option-value-joined` is planted in the
+  shared `_options` helper and `scontrol-node-positional` is killed by that pin, as P4's
+  `read-file-no-dashdash` is. `extra-args-accepts-str` widens `sbatch` and `squeue` to accept a
+  string and split it. The fixture deltas are `description` and `properties.extra_args` on each of
+  `sbatch`, `squeue`, `scancel`, `sacct` and `sinfo`, and `sbatch.properties.args`.
+- **Remediation amendment (2026-10-18, review cycle 1, class 6).** `average_wait`'s `--partition`
+  (this phase's change from `-p`, which `REVIEW.md` found unverified) is kept: the site script
+  accepts it. Evidence, read-only as `<user>`, within the dogfood class, on
+  Gautschi and Negishi: the site's `average_wait` is a bash script whose argument loop takes only
+  `--raw`/`--raw-wait`, `-v`/`--verbose`, `--quiet` and `-h`/`--help`, and passes every other
+  argument verbatim to one `sacct` call, as its own usage text says (the loop is identical on both
+  clusters). `sacct --help` there (Slurm 26.05.4) lists `-r, --partition` and `-p, --parsable`, so
+  `-p cpu` would reach `sacct` as `--parsable` and a stray `cpu`, while `--partition cpu` filters by
+  partition. `-A` is `sacct`'s `--account`. No code changes; the new mutant
+  `average-wait-short-partition` (`--partition` back to `-p`) is killed by the exact-argv row
+  `test_slurm_and_site_argvs[average-wait]`. The gate is retuned to P7's, the latest done phase's
+  (Step 1.3), whose sweep runs every planted case.
+- **Verify:** frontmatter `P5.verify`.
+- **Touches:** `src/rcac_mcp/tools/{slurm,rcac}.py`, `tests/{test_tools,test_writes,test_sbatch,test_extra_args,argv_echo,test_surface,mutants}.py`, `tests/fixtures/served_surface.json`, `README.md`, `AGENTS.md`, `issues/`, `ROADMAP.md`.
+
+## Phase P6 — Literal-argument matrix: every string parameter, all three modes
+**Satisfies:** R1, R2, R3, R4 (the proof) · **Depends on:** P5
+**Goal:** `tests/test_literal_args.py` drives every string parameter of every tool with the hostile
+value set in `local`, `delegate` and `ssh` against a fixture tree, through the served schema
+(`in_memory(shared_server(executor))`), and proves its own coverage.
+
+- [x] Fixture tree under the test's home: files and directories named exactly each value; argv-echo
+      shims (`printf '%s\0' "$0" "$@"` to a log) for `sbatch squeue scancel sacct sinfo scontrol ls
+      jobinfo jobcmd jobenv jobscript myquota findscratch showpartitions slist sfeatures
+      average_wait whoami`; real `cat head mkdir readlink cp chmod`.
+- [x] Value set and crossings exactly as PLAN §2.6 (including `~`, `~/x`, `~//x`, `~name/x` for every
+      parameter, a component ending in a newline, empty, `--`, `+x`, a lone surrogate refused naming
+      the parameter); each string parameter crossed with the bool/optional parameters that select a
+      different script.
+- [x] Oracles (PLAN §2.6): path → effect on the file named by the value; option value → exactly one
+      log element equal to the value, right after its option; content → sha256; `~` on a path → the
+      mode's home (the mapped home in delegate), on any other parameter → literal; `~name/x` →
+      literal; a leading `-` never acts as an option (the `-n`/`--help` file is the one read or
+      written). The `ls` shim records argv and cwd and prints a canned GNU long-iso listing with a
+      name containing spaces, which `list_directory` must parse.
+- [x] `test_literal_matrix_covers_every_string_param`: walking `anyOf`, `items` and `enum` in the
+      live served schema (`served_tools`, never the fixture), every (mode, tool, parameter) whose type
+      includes `string` or an array of `string`, minus `run_command.command`, has a row; planted
+      controls (an extra `Optional[str]`, an extra `list[str]`, a missing mode) fail it.
+- [x] Row ids `<mode>-<tool>-<param>`, stable for mutant targets; the phase's mutants are killed by
+      matrix rows as well as their unit rows.
+- [x] If either era's run exceeds ~90 s, merge value classes (never modes) and record it.
+- **Build amendment (2026-10-17).** The matrix as built, and what it found:
+  - **Value classes merged** (PLAN risk 10): one value carries a leading `-n`, space, quotes,
+    `$( )`, backticks, globs, `;|&<>(){}!#\` and a newline; `--help`, `+x`, `--`, `''`, `~`,
+    `~/x y`, `~//x`, `~name/x` and `nl\n/x` stay apart, as their meaning depends on how they start
+    or on being exactly that; the lone surrogate is `\udc80`, the one a local path would turn into
+    byte `0x80`. A row's calls run concurrently (the first alone over SSH, so the connection is
+    open). The matrix takes about 30 s per era; modes are never merged. The full suite already took
+    about 89 s per era before it (about 122 s with it), so the ~90 s ceiling is read against the
+    matrix's own step.
+  - **Rows and oracles.** 52 parameters × 3 modes = 156 rows, `test_literal_argument[<mode>-<tool>-<param>]`.
+    Coverage reads `served_surface` (the live server's schema; `served_tools` returns names only),
+    never the fixture. The stand-ins are the matrix's own (one record file per process, with the
+    cwd, so concurrent calls never collide) for `sbatch squeue scancel sacct sinfo scontrol
+    average_wait ls`, the programs a string parameter reaches; `whoami` stays real (it is `sacct`'s
+    default user), and the site tools with no string parameter have no row. The option oracle is
+    the exact argv each call must produce, compared as a multiset; `~` on `read_file` and
+    `write_file` expects the program's error naming the home (BSD `head` says "Error reading", not
+    "Is a directory"). `executes.local_cwd` lets a `local` launch start in the server's home, so a
+    relative path means the home in all three modes; the server process runs from its own HOME,
+    apart from the mapped and remote homes.
+  - **The `''` class** (foreman's ruling): an optional scalar expects the tool's default call; a
+    list element or required parameter is one literal empty argument, which the program refuses
+    (`No such file`); an empty transfer path is refused naming the parameter (below).
+  - **Defects found in P1–P5 code, fixed here.** (a) A lone surrogate reached the launcher, which
+    refused it as "argument N is not valid UTF-8 text", naming no parameter; in `local` mode a
+    transfer path carrying `\udc80` reached the filesystem as byte `0x80`. `@mcp_tool` now wraps
+    every tool so a string argument, or string list element, holding a lone surrogate is refused
+    naming the parameter before the tool runs (§7 says so; the served schema is unchanged).
+    (b) An empty transfer path: BSD `cp` reads `''` as `.`, so a `delegate` upload or download to
+    `''` copied into the mapped home and reported success, and an SFTP server may resolve `''` to
+    the login home (the loopback's did). `upload_file` and `download_file` refuse an empty path
+    naming the parameter. Seen red first: `delegate-upload_file-remote_path`,
+    `ssh-upload_file-remote_path`, `delegate-download_file-local_path`. (c) Per the foreman's
+    ruling, `scontrol_show_node(node='')` shows every node (`if node:`, as on origin/develop), and
+    `sbatch(script_path='')` is "not given" (the other optional positional in the Slurm tools; with
+    no `script_content` it is refused as a call with no script). Ruling 3 makes the matrix expect
+    the default for every optional scalar, so `list_directory(path='')` lists `.` and
+    `run_command(cwd='')` passes no cwd, explicitly rather than by how bash runs `cd ''`.
+    `script_content=''` stays an empty job script (R4). `test_empty_optional_scalars_mean_not_given`
+    gains `scontrol-node`, `sbatch-script-path` (a refusal row: no call), `list-directory`,
+    `read-file-encoding` and `run-command-cwd`; its coverage test now holds every optional string
+    of every tool to a row, but enums and `script_content`.
+  - **Mutants.** Matrix rows join the targets of `tool-command-string`, `option-value-joined`,
+    `scontrol-node-positional`, `launcher-arg-unquoted`, `delegate-tilde-server-home` and
+    `empty-optional-passed-literally`. New: `empty-positional-passed-literally` (node and script
+    path, killed by the new unit rows and the matrix), `empty-list-path-passed-literally`,
+    `empty-cwd-passed-literally`, `transfer-empty-path-passed`, `surrogate-unnamed`.
+    `transfer-local-fallback` is re-planted: the line it edits now refuses empty paths. All join
+    the gate.
+  - **Exempt from "killed by matrix rows as well"** (foreman's ruling 1: behaviour-equivalent
+    defence in depth, pinned by exact-call unit rows): `read-file-no-dashdash` (a relative
+    `UserPath` already gains `./`, so no path reaches `cat` with a leading `-`);
+    `empty-list-path-passed-literally` (bash runs `cd ''` as staying put, so listing `''` lists the
+    same directory as `.`); `empty-cwd-passed-literally` (the launcher already drops an empty cwd).
+- **Verify:** frontmatter `P6.verify`.
+- **Touches:** `tests/{test_literal_args,conftest,mutants,test_tools}.py`, `src/rcac_mcp/tools/{__init__,slurm,filesystem,shell,transfer}.py`, `AGENTS.md` (§ Testing, §7), `PLAN.md` (§2.6's empty-string line).
+
+## Phase P7 — Sweep: retired texts, every mutant, deferral ledger
+**Satisfies:** R10 (the sweep), R7 (the `module` evidence, orchestrator-graded) · **Depends on:** P6
+**Goal:** nothing outside the retained records describes the old interpreter, the old timeout
+contract or the heredoc writes; every planted violation is killed; every deferral is recorded.
+
+- [x] `sh spec/safe-execution/verify/sweep.sh` green: no string-literal command at any `run(` call
+      (AST scan; the runtime pins are P4's `passed a command string` and `unregistered script`), the
+      retired phrases absent from `src/`, `AGENTS.md`, `README.md`, `SECURITY.md`, the new contract
+      texts present, and the full mutation suite killed. The script was committed with the plan;
+      the phase does not edit it (a needed change is a TECH amendment, noted in the commit body).
+- [x] Re-read § Invariants §2, §3, §5 and the footguns against the code (the profile says the code is
+      ground truth).
+- [x] **R7's `module` half is an artifact deliverable:** `research/01-cluster-shell.md` (measured
+      2026-10-17, read-only, within the dogfood class) is the evidence. The orchestrator grades it;
+      the blind reviewer cannot see `spec/`. If build changed `BASH_ARGS`, the measurement is re-run
+      read-only and the brief updated.
+- [x] **Deferral ledger:** walk P1–P6 bodies for "defer", "known limitation", "follow-up",
+      "out of scope"; each has an `issues/{slug}.md` (KB `ISSUE.md` template, `status: unshaped`) and
+      a `ROADMAP.md` entry: `startup-background-jobs`, `ssh-reconnect-loop`, `timeout-process-cleanup` (measurement awaits
+      Geoffrey's approval), `list-directory-parsing`, `sbatch-script-name-collision`.
+- [x] Landing notes for publish: the surface changes — `sbatch.args`; `extra_args` becomes
+      `list[str]` on all five of `sbatch`, `squeue`, `scancel`, `sacct`, `sinfo`;
+      `write_file.encoding`; the `run_command` description — commands run in a login bash (≈0.25 s
+      each on the clusters) whose startup output never reaches a result, and `-1001` on timeout.
+- **Landing notes for publish** (the squash commit body and the release notes take these):
+  - **Surface changes** (the served schema; tool names and the install line are unchanged):
+    - `sbatch` gains `args: list[str]`, each element one argument to the job script, after its path.
+      `script_path` is one literal path: a caller that appended job arguments to it moves them to
+      `args`.
+    - `extra_args` becomes `list[str]` on `sbatch`, `squeue`, `scancel`, `sacct` and `sinfo`: each
+      element one literal argument after the tool's own options; a string is refused by schema
+      validation (`Input should be a valid list`, naming the parameter), and an element `--` is
+      refused.
+    - `write_file` gains `encoding` (`"utf-8"`, the default, or `"base64"`), and writes are
+      byte-exact: no final newline is added, so a caller that stripped one to compensate stops.
+      `sbatch.script_content` is written byte-exactly too.
+    - `run_command`'s description: commands run in a login bash (≈0.3 s each on the clusters,
+      re-measured at P7) whose startup output never reaches a result, but for one exception it
+      now states (over ssh, a background job the remote login shell's own rc file starts can write
+      into the result; remediation, 2026-10-18); on timeout `exit_code` is
+      −1001 with the output captured so far; −1002 means the command never started.
+  - **Behaviour changes a caller can see:**
+    - An optional scalar parameter sent as `''` means "not given", as `None` does, so the tool's
+      default applies (`squeue(user='')` lists the caller's own jobs; `scontrol_show_node(node='')`
+      shows every node; `list_directory(path='')` lists `.`, its default); list elements and required
+      parameters stay literal (foreman's rulings, P5 and P6).
+    - `list_directory` changes into the directory: a symlink to a directory lists the target's
+      contents, a path naming a file is an error (`Not a directory`) instead of a one-entry
+      listing, and `show_hidden` works (foreman's ruling, P4).
+    - Every value reaches its command as one literal argument; `~` and `~/` in a path are the home
+      of the user the command runs as (the mapped user in `delegate`); `~name`, `$VAR` and globs
+      are literal.
+    - Timeouts return a result in every mode (−1001), never an error; a wrong `--ssh-host` is
+      answered with `cannot connect to <host>: <cause>` on every request, exit 5.
+    - `module` and the site's job tools (`jobcmd`, `jobenv`, `jobscript`) now resolve for users
+      whose login shell is not bash; `average_wait` passes the partition as `--partition`,
+      which the site script hands to `sacct` (verified read-only, P5 remediation, 2026-10-18).
+    - A lone surrogate in any string, and an empty transfer path, are refused naming the
+      parameter.
+  - **Pages outside the repository** that name the tools or the install line (ROADMAP's release
+    0.1.2 entry): no tool is renamed and the install line is unchanged; a page that documents the
+    parameters of `sbatch`, `write_file` or an `extra_args` needs the changes above.
+- **Build amendment (2026-10-17, P7).**
+  - **R7 re-measured through the built launcher** (foreman's ruling: the build changed how bash
+    starts). Read-only, Gautschi and Negishi, as `<user>` (login shell zsh): `SSHExecutor.run`
+    over the real zsh login, the built exec string under `env -i` `bash -c`, `zsh -c`, `tcsh -c`
+    and `sh -c`, and the local/delegate wire. Module state is identical across every launcher on
+    each cluster; recorded in `research/01-cluster-shell.md` § Built-launcher re-measurement, with
+    the driver and raw output in `research/01-cluster-shell/built.{py,out}`.
+  - **§ Invariants re-read against the code.** §2, §3, §5 and the footguns match the code but for
+    one claim: `put` and `get` "return the absolute path they wrote, as that side names it
+    (symlinks unresolved)", while `SSHExecutor.put` returns `sftp.normalize(remote)` (PLAN §2.3),
+    the SFTP server's REALPATH, which OpenSSH resolves through symlinks (read-only on Gautschi:
+    `normalize('/bin/ls')` → `/usr/bin/ls`). The loopback SFTP server does not resolve, so no test
+    could see it. The code is ground truth (profile): §2 and the `put` docstrings in
+    `executor/base.py` and `executor/ssh.py` now say so. No code changed.
+  - **Deferral ledger.** P1–P6 and PLAN §5 hold five deferrals, each with a seed and a ROADMAP
+    entry, placed per the foreman's ruling: `ssh-reconnect-loop` and `sbatch-script-name-collision`
+    in Part 0 after this cycle (Part 0 now counts six cycles); `timeout-process-cleanup` in Part I
+    ahead of the tool families, and `list-directory-parsing` absorbed by `tool-surface` (Part I now
+    counts eight); `startup-background-jobs` stays in Part III. PLAN risk 9 (the context listing's
+    `sort` follows the login profile's locale) was left to `agents-d-instructions` with no line in
+    that seed; it now has one. P1's prologue limit (functions named `unset`, `unalias`, `builtin`,
+    `set`) is a recorded limit in § Testing, declined rather than deferred.
+- **Rebase amendment (2026-10-18, moved base onto 404580c).** `develop` moved from `2b006fa` to
+  `404580c`: release 0.1.1, `audit-uv-portability` (`bin/audit_lock.py`, `tests/test_audit.py`, the
+  uv floor), `ci-workflow` (`.github/workflows/`, `bin/sdist_hygiene.py`), the `ci-workflow` seed's
+  retirement, Part 0 closing with 0.1.2, and a release-recipe caveat. The cycle's commits were
+  replayed onto it; the tree differs from `404580c` only by the cycle's own changes.
+  - **Conflicts: `ROADMAP.md` only**, at the P2 and P7 replays. Part 0's opening takes `develop`'s
+    text (release 0.1.2, `ci-workflow` landed, its 2026-10-18 correction) and is recounted: five
+    cycles remain (this one, `ssh-reconnect-loop`, `sbatch-script-name-collision`,
+    `agents-d-instructions`, `resource-reads-without-executor`). Part III keeps `develop`'s
+    `sdist-hygiene-truncated-gzip` entry beside this cycle's `startup-background-jobs`;
+    `ssh-reconnect-loop` and `timeout-process-cleanup` leave Part III as P7 moved them. This
+    cycle's "ships in 0.1.1" (the `ssh-reconnect-loop` entry and its 2026-10-17 correction) and the
+    landing notes' "release 0.1.1 entry" now say 0.1.2, the release that closes Part 0.
+  - **`AGENTS.md` merged without conflict** and was re-read: `develop`'s CI, audit and uv-floor text
+    (the repository map's paths outside the package, § Testing's `test_audit.py`,
+    `test_sdist_hygiene.py` and `mutants.yml`, § Packaging, § Conventions, the profile's `ci` row,
+    the recipe's caveats) and this cycle's executor, launcher and startup text sit in separate
+    lines; neither contradicts the other.
+  - **Mutants:** every anchor still applies (`tests/test_mutations.py` green); none re-planted.
+    No spec id in the package or the suite, `develop`'s new tests included (`test_hygiene.py`'s
+    check reads every `tests/*.py`).
+  - **Gates:** P7's stored gate (shared by P1–P5) and P6's re-run green on the rebased tree.
+- **Redaction amendment (2026-10-18, foreman's ruling).** The repository is public, and the
+  cycle's records carried site-specific detail from the read-only probes and the by-hand bash 5
+  transcripts. Before the branch's first push, everything the cycle adds was redacted to the rule:
+  cluster names, bash and Lmod versions and the evidence facts stay; login node names become "a
+  Gautschi login node", the operator's account `<user>`, dev-scratch paths
+  `/scratch/<cluster>/<user>/<dev-dir>/…`, Lmod's install prefix `<lmod>/`, the site's scripts
+  directory `<site-scripts>/`. Copied text of site scripts and system files, and the account's own
+  startup files, are cut from the raw outputs to their section headings; one output that held only
+  a site script's text (probe F) is dropped. `research/01-cluster-shell.md` states what each
+  redacted section showed. Redaction only removed: no finding, number or verdict changed. The
+  branch is pushed as one commit on `develop`; its unredacted history stays in the local clone.
+- **Verify:** frontmatter `P7.verify`.
+- **Touches:** `AGENTS.md`, `issues/`, `ROADMAP.md`, any straggler text the sweep names.
+
+---
+
+## How `code-build` drives this
+
+1. `next_phase.py` prints the next actionable phase.
+2. Pre-flight: the worktree is clean, on `fix/safe-execution`, and `develop` is reachable.
+3. Execute every `[ ]` in the phase (PLAN.md and research/ for detail).
+4. Run the phase's `verify:` — never advance on a checkbox alone.
+5. Amend this file if reality diverges (`set_phase.py`; note it in the commit body). STOP and
+   escalate only on a `GOAL.md` contradiction.
+6. Mark the phase `done`, advance `current_phase`, `--touch`; one `[fix]` commit; stop and report.

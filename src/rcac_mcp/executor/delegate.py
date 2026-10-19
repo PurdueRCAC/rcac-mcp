@@ -5,20 +5,33 @@
 
 # Type annotations
 from __future__ import annotations
-from typing import Dict, Optional, Type
+from collections.abc import Sequence
+from typing import Dict, Final, Optional, Type
 from types import TracebackType
 
 # Standard libs
-import os
 import socket
-import subprocess
-import shlex
 
 # Internal libs
-from rcac_mcp.executor.base import CommandResult
+from rcac_mcp.executor import launch
+from rcac_mcp.executor.base import CommandResult, UserPath
 
 # Public interface
 __all__ = ['DelegatingExecutor', 'load_user_map']
+
+# The delegation prefix: non-interactive (there is no TTY to prompt on, so a missing sudoers rule is
+# an error, not a hang) and with the target user's own HOME; the local user follows.
+SUDO: Final = ('sudo', '-n', '-H', '-u')
+
+# A transfer, run as the mapped user: copy "$1" to "$2" (into it, under the source's name, when it
+# is a directory) and print the absolute path written, against $PWD and without resolving symlinks.
+# POSIX mode, so the bash that runs it reads no BASH_ENV a profile exported.
+TRANSFER: Final = ('src=$1 dst=$2\n'
+                   'if [ -d "$dst" ]; then dst=${dst%/}/${src##*/}; fi\n'
+                   'cp -- "$src" "$dst" || exit\n'
+                   'case $dst in ./*) dst=${dst#./} ;; esac\n'
+                   'case $dst in /*) ;; *) dst=${PWD%/}/$dst ;; esac\n'
+                   'printf %s "$dst"\n')
 
 
 def load_user_map(filepath: str) -> Dict[str, str]:
@@ -52,17 +65,18 @@ def load_user_map(filepath: str) -> Dict[str, str]:
 
 class DelegatingExecutor:
     """
-    Execute commands as another user via sudo -u.
+    Execute commands as another user via `sudo -n -H -u <local user>`.
 
-    Used when running the MCP server as root and delegating commands to
-    the authenticated user based on their JWT sub or OIDC email claim.
+    Used when running the MCP server as root (or a sudo-capable service account) and delegating
+    commands to the authenticated user based on their JWT sub or OIDC email claim. Every command
+    runs under the pinned login bash in the mapped user's own `$HOME`, and transfers run as that
+    user too: the server process touches no file on a caller's behalf.
     """
 
     _user_map: Dict[str, str]
     _identity: str
     _local_user: str
     _hostname: str
-    _shell: str
 
     def __init__(self, identity: str, user_map: Dict[str, str]) -> None:
         """
@@ -82,7 +96,6 @@ class DelegatingExecutor:
         self._user_map = user_map
         self._local_user = user_map[identity]
         self._hostname = socket.gethostname()
-        self._shell = os.environ.get('SHELL', '/bin/sh')
 
     @property
     def hostname(self) -> str:
@@ -104,101 +117,71 @@ class DelegatingExecutor:
 
     def run(
         self,
-        command: str,
+        command: Sequence[str] | str,
         cwd: str | None = None,
         timeout: float | None = None,
+        stdin: bytes | None = None,
     ) -> CommandResult:
         """
-        Execute a command as the delegated user via sudo.
+        Run a command as the delegated user, under the pinned login bash (see `Executor.run`).
+
+        The command starts in the mapped user's `$HOME`, whatever a startup file `cd`s to, so `~`
+        and relative paths are that user's, never the server process's.
 
         Args:
-            command: Shell command to execute.
-            cwd: Working directory for command execution.
-            timeout: Maximum time in seconds to wait for completion.
+            command: An argv (each element one literal argument) or a bash script.
+            cwd: Working directory; a leading `~` or `~/` is the mapped user's home.
+            timeout: Seconds to wait; at the deadline the result carries `TIMEOUT_EXIT_CODE`.
+            stdin: The exact bytes the command reads; None is an empty, closed stdin.
 
         Returns:
             CommandResult with stdout, stderr, exit_code, and hostname.
         """
-        # Build the sudo command
-        # Use sudo -u to run as the target user
-        # -n for non-interactive (no password prompt)
-        # -H to set HOME to target user's home
-        sudo_cmd = ['sudo', '-n', '-H', '-u', self._local_user]
+        prog, sentinel = launch.program(command, cwd, start='home')
+        argv = [*SUDO, self._local_user, *launch.bash_argv(prog)]
+        out, err, code, note = launch.run_process(argv, stdin, timeout)
+        out, err, code = launch.separate(out, err, code, sentinel, note)
+        return CommandResult(stdout=launch.decode(out), stderr=launch.decode(err), exit_code=code,
+                             hostname=self._hostname)
 
-        # If cwd is specified, we need to cd first within the shell
-        if cwd:
-            cwd = os.path.expanduser(cwd)
-            full_command = f'cd {shlex.quote(cwd)} && {command}'
-        else:
-            full_command = command
+    def _copy(self, source: str, destination: str) -> str:
+        """Copy `source` to `destination` as the mapped user; return the absolute path written."""
+        result = self.run(launch.fixed_argv(TRANSFER, 'cluster-mcp-transfer', UserPath(source), UserPath(destination)))
+        if result.exit_code != 0:
+            raise RuntimeError(f'copy as {self._local_user} failed (exit {result.exit_code}): {result.stderr}')
+        return result.stdout
 
-        sudo_cmd.extend([self._shell, '-c', full_command])
-
-        try:
-            result = subprocess.run(
-                sudo_cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            return CommandResult(
-                stdout=result.stdout,
-                stderr=result.stderr,
-                exit_code=result.returncode,
-                hostname=self._hostname,
-            )
-        except subprocess.TimeoutExpired as exc:
-            return CommandResult(
-                stdout=exc.stdout or '',
-                stderr=exc.stderr or f'Command timed out after {timeout}s',
-                exit_code=-1,
-                hostname=self._hostname,
-            )
-
-    def put(self, local_path: str, remote_path: str) -> None:
+    def put(self, local_path: str, remote_path: str) -> str:
         """
-        Copy a file to a location writable by the delegated user.
+        Copy a file as the delegated user and return the absolute path written.
 
-        Uses sudo to copy the file and set ownership.
+        Both paths are on this host and both are the mapped user's: `~` is that user's home, a
+        relative path starts there, and the copy has exactly that user's permissions.
 
         Args:
-            local_path: Source path (readable by root).
+            local_path: Source path.
             remote_path: Destination path.
+
+        Raises:
+            RuntimeError: The copy failed; the message carries its stderr.
         """
-        local_path = os.path.expanduser(local_path)
-        remote_path = os.path.expanduser(remote_path)
+        return self._copy(local_path, remote_path)
 
-        # Copy file then chown to target user
-        subprocess.run(
-            ['sudo', '-n', 'cp', local_path, remote_path],
-            check=True,
-        )
-        subprocess.run(
-            ['sudo', '-n', 'chown', self._local_user, remote_path],
-            check=True,
-        )
-
-    def get(self, remote_path: str, local_path: str) -> None:
+    def get(self, remote_path: str, local_path: str) -> str:
         """
-        Copy a file from a location owned by the delegated user.
+        Copy a file as the delegated user and return the absolute path written.
 
-        Uses sudo to read the file as the target user.
+        Both paths are on this host and both are the mapped user's: `~` is that user's home, a
+        relative path starts there, and the copy has exactly that user's permissions.
 
         Args:
-            remote_path: Source path (owned by delegated user).
+            remote_path: Source path.
             local_path: Destination path.
-        """
-        remote_path = os.path.expanduser(remote_path)
-        local_path = os.path.expanduser(local_path)
 
-        # Use sudo to cat the file and write to local path
-        result = subprocess.run(
-            ['sudo', '-n', '-u', self._local_user, 'cat', remote_path],
-            capture_output=True,
-            check=True,
-        )
-        with open(local_path, 'wb') as f:
-            f.write(result.stdout)
+        Raises:
+            RuntimeError: The copy failed; the message carries its stderr.
+        """
+        return self._copy(remote_path, local_path)
 
     def __enter__(self) -> DelegatingExecutor:
         """Context manager entry."""

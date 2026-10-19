@@ -19,7 +19,7 @@ from typing import Mapping, Sequence
 import pytest
 
 from harness import (Outcome, RecordingExecutor, Rendezvous, call, delegate_server, drive, http_client,
-                     in_memory, mint, serving, shared_server, user_map)
+                     in_memory, launched_script, mint, serving, shared_server, user_map)
 
 SECRET = 'isolation-test-secret-0123456789abcdef'
 USER_MAP = 'alice ualice\nbob ubob\n'
@@ -55,8 +55,8 @@ def isolation_violations(expected: Mapping[str, str], ran: Sequence[tuple[str, s
 
 
 def launched_as(argv: Sequence[str]) -> tuple[str, str]:
-    """The (local user, command line) of a recorded `sudo … -u <user> <shell> -c <command>` launch."""
-    return argv[list(argv).index('-u') + 1], argv[-1]
+    """The (local user, script) of a recorded `sudo … -u <user> /bin/bash … <program>` launch."""
+    return argv[list(argv).index('-u') + 1], str(launched_script(argv)[0])
 
 
 @pytest.mark.unit

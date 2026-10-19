@@ -5,14 +5,35 @@
 
 # Type annotations
 from __future__ import annotations
-from typing import List, Optional
+from typing import Final, List, Literal, Optional
 
 # Standard libs
+import base64
+import posixpath
 from dataclasses import dataclass
 
 # Internal libs
 from rcac_mcp.tools import mcp_tool
 from rcac_mcp.context import get_executor
+from rcac_mcp.executor import UserPath
+from rcac_mcp.scripts import fixed, script_argv
+
+# List a directory in one call: change into it, print its absolute path (logical, as `cd` reached
+# it) and a NUL, then the long listing of `.`; any further arguments are `ls` options.
+LIST: Final = fixed('cd -- "$1" && printf \'%s\\0\' "$PWD" && shift && exec ls -l --time-style=long-iso "$@" .')
+
+# Write stdin to "$1", exactly: overwrite or append, after creating the parent "$2" when asked. The
+# parent is computed by the caller, never with `$(dirname …)`, which strips a trailing newline from
+# a directory name.
+MKDIR: Final = 'mkdir -p -- "$2" && '
+WRITE: Final = fixed('cat >"$1"')
+APPEND: Final = fixed('cat >>"$1"')
+WRITE_IN_DIR: Final = fixed(MKDIR + WRITE)
+APPEND_IN_DIR: Final = fixed(MKDIR + APPEND)
+
+# The whitespace a base64 `content` may carry (RFC 2045 line breaks: GNU `base64` wraps at 76
+# columns and ends with a newline); every other byte outside the alphabet is an error.
+BASE64_WHITESPACE: Final = {ord(c): None for c in ' \t\r\n'}
 
 
 @dataclass
@@ -50,22 +71,18 @@ def list_directory(
         list_directory("/tmp", show_hidden=True)
     """
     executor = get_executor()
-
-    # Use ls with consistent output format
-    # -l for long format, -a for all (if show_hidden), --time-style for consistent date
-    flags = '-l --time-style=long-iso'
-    if show_hidden:
-        flags += 'a'
-
-    result = executor.run(f'ls {flags} {path}')
+    # An empty path was not given: the default, the current directory.
+    path = path or '.'
+    options = ['-a'] if show_hidden else []
+    result = executor.run(script_argv(LIST, 'list_directory', UserPath(path), *options))
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to list directory: {result.stderr}')
 
+    directory, _, listing = result.stdout.partition('\0')
     entries: List[FileInfo] = []
-    lines = result.stdout.strip().split('\n')
 
-    for line in lines:
+    for line in listing.strip().split('\n'):
         # Skip the "total" line and empty lines
         if not line or line.startswith('total'):
             continue
@@ -77,33 +94,10 @@ def list_directory(
 
         perms, _, owner, group, size_str, date, time, name = parts
 
-        # Determine if directory from permissions
-        is_dir = perms.startswith('d')
-
-        # Build absolute path
-        # First resolve ~ in the input path
-        if path.startswith('~'):
-            # Get home directory from remote
-            home_result = executor.run('echo $HOME')
-            home = home_result.stdout.strip()
-            resolved_path = path.replace('~', home, 1)
-        else:
-            resolved_path = path
-
-        # Make absolute if not already
-        if not resolved_path.startswith('/'):
-            pwd_result = executor.run('pwd')
-            pwd = pwd_result.stdout.strip()
-            resolved_path = f'{pwd}/{resolved_path}'
-
-        # Clean up path
-        resolved_path = resolved_path.rstrip('/')
-        full_path = f'{resolved_path}/{name}'
-
         entries.append(FileInfo(
             name=name,
-            path=full_path,
-            is_dir=is_dir,
+            path=f'{directory.rstrip("/")}/{name}',
+            is_dir=perms.startswith('d'),
             size=int(size_str),
             permissions=perms,
             owner=owner,
@@ -140,14 +134,29 @@ def read_file(
 
     if max_size:
         # Use head to limit bytes read
-        result = executor.run(f'head -c {max_size} {path}')
+        result = executor.run(['head', '-c', str(max_size), '--', UserPath(path)])
     else:
-        result = executor.run(f'cat {path}')
+        result = executor.run(['cat', '--', UserPath(path)])
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to read file: {result.stderr}')
 
     return result.stdout
+
+
+def _content_bytes(content: str, encoding: str) -> bytes:
+    """The exact bytes `content` stands for under `encoding`, or a ValueError naming the parameter."""
+    if encoding == 'base64':
+        try:
+            return base64.b64decode(content.translate(BASE64_WHITESPACE), validate=True)
+        except ValueError as exc:
+            raise ValueError(f'content is not valid base64 (encoding="base64"): {exc}') from None
+    if encoding != 'utf-8':
+        raise ValueError(f'encoding must be "utf-8" or "base64", not {encoding!r}')
+    try:
+        return content.encode('utf-8')
+    except UnicodeEncodeError:
+        raise ValueError('content is not valid UTF-8 text: it contains a lone surrogate') from None
 
 
 @mcp_tool
@@ -156,37 +165,42 @@ def write_file(
     content: str,
     append: bool = False,
     create_dirs: bool = False,
+    encoding: Literal['utf-8', 'base64'] = 'utf-8',
 ) -> None:
     """
-    Write content to a file.
+    Write content to a file, byte for byte.
+
+    The file receives exactly the bytes sent: no newline is added, and empty content creates an
+    empty file (or empties one). Invalid content is refused before the file is touched.
 
     Args:
         path: Path to the file (supports ~ expansion).
-        content: Content to write.
+        content: Content to write: text, or base64 when encoding is "base64".
         append: If True, append to file instead of overwriting.
         create_dirs: If True, create parent directories if they don't exist.
+        encoding: How content is given: "utf-8" (default; the text is written as its UTF-8 bytes)
+            or "base64" (decoded, and the decoded bytes written; use it for binary content). Under
+            "base64", spaces, tabs and line breaks are ignored; any other character outside the
+            base64 alphabet, or bad padding, is an error.
 
     Examples:
         write_file("~/output.txt", "Hello, World!")
         write_file("~/log.txt", "New entry\\n", append=True)
         write_file("~/new/path/file.txt", "content", create_dirs=True)
+        write_file("~/data.bin", "AAEC/w==", encoding="base64")
     """
+    # Validated and encoded before any executor call: nothing touches the target until it passes.
+    data = _content_bytes(content, encoding)
     executor = get_executor()
 
-    if create_dirs:
-        # Create parent directories
-        result = executor.run(f'mkdir -p "$(dirname {path})"')
-        if result.exit_code != 0:
-            raise RuntimeError(f'Failed to create directories: {result.stderr}')
+    parent = posixpath.dirname(path) if create_dirs else ''
+    if parent:
+        argv = script_argv(APPEND_IN_DIR if append else WRITE_IN_DIR, 'write_file', UserPath(path), UserPath(parent))
+    else:
+        argv = script_argv(APPEND if append else WRITE, 'write_file', UserPath(path))
 
-    # Use cat with heredoc to write content safely
-    # This handles special characters better than echo
-    operator = '>>' if append else '>'
-    # Escape any EOF in the content
-    safe_content = content.replace("'", "'\"'\"'")
-    cmd = f"cat {operator} {path} << 'RCAC_MCP_EOF'\n{content}\nRCAC_MCP_EOF"
-
-    result = executor.run(cmd)
+    # The content travels on stdin only, never in the argv.
+    result = executor.run(argv, stdin=data)
 
     if result.exit_code != 0:
-        raise RuntimeError(f'Failed to write file: {result.stderr}')
+        raise RuntimeError(f'Failed to write file (exit {result.exit_code}): {result.stderr}')

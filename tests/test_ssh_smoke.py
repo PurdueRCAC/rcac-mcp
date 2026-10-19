@@ -3,20 +3,22 @@
 
 """The `ssh` executor runs a command over the locked Fabric and Paramiko, against a loopback server.
 
-`SSHExecutor` drives the recommended deployment, and nothing else in the suite runs it. Here it
-connects to an in-process Paramiko server bound to 127.0.0.1, with keys generated for the test,
-which answers each exec request with canned output and a non-zero exit status; no process is
-launched and nothing leaves the machine. The test is isolated from the developer's SSH setup:
-`HOME` is under `tmp_path`, `SSH_AUTH_SOCK` is unset, the client neither looks for keys nor asks an
-agent, and Fabric is handed an empty SSH config, so no `~/.ssh/config` or `/etc/ssh/ssh_config` is
-read.
+`SSHExecutor` drives the recommended deployment. Here it connects to an in-process Paramiko server
+bound to 127.0.0.1, with keys generated for the test, which decodes each exec request (the
+launcher's fixed bootstrap carrying the program as one base64 word), records the command the
+program runs, and answers with the program's sentinel, canned output and a non-zero exit status;
+no process is launched and nothing leaves the machine. (`test_ssh_exec.py` runs the programs for
+real, against a loopback server that executes them.) The test is isolated from the developer's SSH
+setup: `HOME` is under `tmp_path`, `SSH_AUTH_SOCK` is unset, the client neither looks for keys nor
+asks an agent, and Fabric is handed an empty SSH config, so no `~/.ssh/config` or
+`/etc/ssh/ssh_config` is read. The process's own stdin is left as pytest's, which refuses reads: the
+executor never forwards it.
 """
 
 from __future__ import annotations
 
-import os
+import base64
 import socket
-import sys
 import threading
 import time
 from pathlib import Path
@@ -26,6 +28,8 @@ import paramiko
 import pytest
 from fabric import Config
 
+from harness import launched_script
+from rcac_mcp.executor import launch
 from rcac_mcp.executor.base import CommandResult
 from rcac_mcp.executor.ssh import SSHExecutor
 
@@ -36,7 +40,11 @@ COMMAND = 'echo hi'
 
 def smoke_violations(result: CommandResult, received: list[str], command: str, host: str,
                      exit_status: int) -> list[str]:
-    """Every way `result` and the commands the server `received` differ from one exec of `command`."""
+    """Every way `result` and the commands the server `received` differ from one exec of `command`.
+
+    `received` holds, per exec request, the command the decoded program runs, or the raw exec string
+    when it was not the launcher's bootstrap.
+    """
     violations: list[str] = []
     if received != [command]:
         violations.append(f'the server received {received!r}, expected [{command!r}]')
@@ -49,8 +57,19 @@ def smoke_violations(result: CommandResult, received: list[str], command: str, h
     return violations
 
 
+def decoded(wire: str) -> tuple[str, bytes]:
+    """The command a bootstrap exec string's program runs, and its sentinel; the raw string otherwise."""
+    if not wire.startswith(launch.BOOTSTRAP):
+        return wire, b''
+    try:
+        command, sentinel = launched_script([base64.b64decode(wire[len(launch.BOOTSTRAP):]).decode()])
+    except ValueError:
+        return wire, b''
+    return (command if isinstance(command, str) else ' '.join(command)), sentinel
+
+
 class _Server(paramiko.ServerInterface):
-    """Accept the one client key; answer every exec with `smoke:<command>` and EXIT_STATUS."""
+    """Accept the one client key; answer every exec with its sentinel, `smoke:<command>` and EXIT_STATUS."""
 
     def __init__(self, client_key: paramiko.PKey, received: list[str]) -> None:
         self.client_key = client_key
@@ -70,13 +89,15 @@ class _Server(paramiko.ServerInterface):
         return True
 
     def check_channel_exec_request(self, channel: paramiko.Channel, command: bytes) -> bool:
-        self.received.append(command.decode())
+        ran, sentinel = decoded(command.decode())
+        self.received.append(ran)
 
         def reply() -> None:
             # Paramiko confirms the exec request after this method returns; answering before that
             # confirmation reaches the client closes the channel under it.
             time.sleep(0.2)
-            channel.sendall(b'smoke:' + command)
+            channel.sendall(sentinel + b'smoke:' + ran.encode())
+            channel.sendall_stderr(sentinel)
             channel.send_exit_status(EXIT_STATUS)
             channel.close()
 
@@ -88,9 +109,6 @@ class _Server(paramiko.ServerInterface):
 def test_ssh_executor_runs_over_a_loopback_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('HOME', str(tmp_path))
     monkeypatch.delenv('SSH_AUTH_SOCK', raising=False)
-    # Invoke forwards the local stdin to the remote command; pytest's captured stdin refuses reads.
-    stdin = open(os.devnull)
-    monkeypatch.setattr(sys, 'stdin', stdin)
     host_key = paramiko.RSAKey.generate(2048)
     client_key = paramiko.RSAKey.generate(2048)
     received: list[str] = []
@@ -121,7 +139,6 @@ def test_ssh_executor_runs_over_a_loopback_server(tmp_path: Path, monkeypatch: p
             server.join(timeout=5)
             for transport in transports:
                 transport.close()
-            stdin.close()
 
     violations = smoke_violations(result, received, COMMAND, LOOPBACK, EXIT_STATUS)
     assert violations == [], '\n'.join(violations)
