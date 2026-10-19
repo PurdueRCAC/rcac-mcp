@@ -25,10 +25,10 @@ phases:
   hill: uphill
   verify: sh spec/sdist-hygiene-truncated-gzip/verify/gate.sh P1
 review:
-  last_reviewed_commit: ''
-  verdict: none
+  last_reviewed_commit: 89d06ba274cfcede668ed82cd77aa12500a4e671
+  verdict: approved
   blocked_reason: ''
-  cycle: 0
+  cycle: 1
 ---
 
 # TECH.md — An unreadable sdist is named, never a traceback
