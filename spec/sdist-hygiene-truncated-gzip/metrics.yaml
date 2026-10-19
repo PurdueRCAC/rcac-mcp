@@ -1,0 +1,18 @@
+# Written only by $KB/bin/factory/metrics.py. Observation, never state: nothing routes on it.
+slug: sdist-hygiene-truncated-gzip
+escaped_from: ci-workflow
+planned: {date: '2026-10-19', phases: 1}
+landed: {date: '2026-10-19', phases: 1, failed_verifies: 0}
+open: null
+runs:
+- {step: feature, start: '2026-10-19T04:10:48-04:00', stop: '2026-10-19T04:12:43-04:00', seconds: 115, end: gate, agent: claude-opus-5-5}
+- {step: plan, start: '2026-10-19T04:12:43-04:00', stop: '2026-10-19T04:39:28-04:00', seconds: 1605, end: gate, agent: claude-opus-5-5}
+- {step: 'build:P1', start: '2026-10-19T04:39:37-04:00', stop: '2026-10-19T04:43:27-04:00', seconds: 230, end: gate, agent: claude-opus-5-5}
+- {step: review, start: '2026-10-19T04:44:06-04:00', stop: '2026-10-19T04:57:45-04:00', seconds: 819, end: gate, agent: claude-opus-5-5}
+- {step: publish, start: '2026-10-19T04:57:55-04:00', stop: '2026-10-19T04:57:55-04:00', seconds: 0, end: done, agent: claude-opus-5-5}
+reviews:
+- cycle: 1
+  date: '2026-10-19'
+  verdict: approved
+  confirmed: {critical: 0, high: 0, medium: 0, low: 0}
+  plausible: 0

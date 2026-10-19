@@ -3,7 +3,7 @@ slug: sdist-hygiene-truncated-gzip
 title: An unreadable sdist is named, never a traceback
 kind: fix
 appetite: small
-status: in_review
+status: done
 branch: fix/sdist-hygiene-truncated-gzip
 base: develop
 current_phase: done
