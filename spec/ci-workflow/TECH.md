@@ -6,7 +6,7 @@ appetite: small
 status: in_progress
 branch: ci/ci-workflow
 base: develop
-current_phase: P4
+current_phase: P5
 last_updated: '2026-10-18'
 phases:
 - id: P1
@@ -52,7 +52,7 @@ phases:
   verify: sh spec/ci-workflow/verify/gate.sh P3
 - id: P4
   name: 'Outward: a green gate run on the cycle branch head'
-  status: in_progress
+  status: done
   satisfies:
   - R9
   depends_on:
@@ -240,14 +240,14 @@ re-checked live by the gate. **R9 is graded by the orchestrator** (its evidence 
 green, and its id is recorded.
 
 - [x] `sh spec/ci-workflow/verify/gate.sh prepush` prints `gate[prepush]: ok`.
-- [ ] **Push 1 (Geoffrey's go, obtained by the foreman):** `git push -u origin ci/ci-workflow`.
-- [ ] Read: `gh run list -R purduercac/rcac-mcp --workflow ci.yml --commit "$(git rev-parse HEAD)" -e push --json databaseId,attempt,url,status,conclusion,headSha`
+- [x] **Push 1 (Geoffrey's go, obtained by the foreman):** `git push -u origin ci/ci-workflow`.
+- [x] Read: `gh run list -R purduercac/rcac-mcp --workflow ci.yml --commit "$(git rev-parse HEAD)" -e push --json databaseId,attempt,url,status,conclusion,headSha`
       (re-read until listed), then `gh run watch <id> -R purduercac/rcac-mcp --exit-status`.
-- [ ] If red: `gh run view <id> -R purduercac/rcac-mcp --log-failed`. A Linux-only failure in
+- [x] (Not needed: green on attempt 1.) If red: `gh run view <id> -R purduercac/rcac-mcp --log-failed`. A Linux-only failure in
       `tests/` is fixed there, committed as `[ci] Build ci-workflow P4: …`, re-gated with
       `prepush`, and pushed again. **Each re-push is a new go.** A cause in `src/` is a STOP and a
       GOAL clarification (non-goal).
-- [ ] Extend `verify/evidence.py` with mode `green`. It reads the run recorded under
+- [x] Extend `verify/evidence.py` with mode `green`. It reads the run recorded under
       `## Green run` (`run:`, `commit:`) with `gh run view <id> --json
       attempt,status,conclusion,event,headBranch,headSha,path,jobs`. It requires
       `completed`/`success`, event `push`, branch `ci/ci-workflow`, path
@@ -255,14 +255,22 @@ green, and its id is recorded.
       re-run listed in `EVIDENCE.md` with its reason), and a job `gate` whose steps include `Run <cmd>` with `success` for
       each of the nine commands. It also requires the recorded commit to be an ancestor of HEAD,
       with `git diff --name-only <commit> HEAD` touching only `spec/ci-workflow/`.
-- [ ] Record `## Green run` in `EVIDENCE.md`: run id, attempt, URL, commit (X below), branch, date.
-- [ ] Write `verify/evidence.py`'s `landing` mode: the profile ci row's read for HEAD
+- [x] Record `## Green run` in `EVIDENCE.md`: run id, attempt, URL, commit (X below), branch, date.
+- [x] Write `verify/evidence.py`'s `landing` mode: the profile ci row's read for HEAD
       (`gh run list --workflow ci.yml --commit <HEAD> -e push --json databaseId,attempt,status,conclusion`),
       requiring at least one run, all `completed`/`success`. `gate.sh landing` runs it.
 - **Verify:** `sh spec/ci-workflow/verify/gate.sh P4`, which runs `evidence.py local green` (reads
   only).
 - **Touches:** `spec/ci-workflow/EVIDENCE.md`, `spec/ci-workflow/verify/evidence.py`, and
   `tests/` only if a Linux-only failure needs a fix.
+- **Amendment (2026-10-18, run B):** X = `ffb03b5`, the state-only run-A commit pushed as the
+  branch's first push (foreman's ruling: accepted). Run `39188588571`, attempt 1, event `push`,
+  completed/success, job `gate` and all nine `Run <cmd>` steps `success`. `gh run view --json` has
+  no `path` field, so `green` reads the workflow path from the same run's REST record (`gh api
+  repos/purduercac/rcac-mcp/actions/runs/<id>`). A re-run is listed in `## Green run` as
+  `- re-run N: <reason>`. **Known gap (foreman's ruling, routed by the foreman):** the profile
+  defines no site-private scan command, so the pre-push scan over commit messages (code-build
+  Step 6) has no stored command to run in this cycle; build checks messages by reading them.
 
 ## Phase P5 — Outward: a red gate run on a throwaway branch, its removal, and the deferral ledger
 **Satisfies:** R9 (c) and its throwaway clause · **Depends on:** P4

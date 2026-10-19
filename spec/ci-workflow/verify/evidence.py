@@ -16,13 +16,22 @@ Modes:
           an `ok` line for every earlier step, and a log line naming the text; then one `killed`
           line per hygiene_mutants plant, with its test ids, and no other killed or FAILED line.
           Each section carries a `Recorded: YYYY-MM-DD` line no later than today.
+  green   `## Green run` (`- run:`, `- commit:`): GitHub's record of that run is completed/success,
+          event push, branch ci/ci-workflow, workflow file ci.yml, at the recorded commit, in
+          attempt 1 (or each later attempt listed as `- re-run N: <reason>`), with a job `gate`
+          whose `Run <cmd>` step succeeded for every run step of ci.yml's gate job. The recorded
+          commit is an ancestor of HEAD, and HEAD differs from it only under spec/ci-workflow/.
+  landing The profile ci row's read for HEAD: at least one push run of ci.yml, every one, in its
+          latest attempt, completed/success.
 """
 
 from __future__ import annotations
 
 import datetime
+import json
 import re
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -34,6 +43,9 @@ HERE = Path(__file__).parent
 RECORD = HERE.parent / 'EVIDENCE.md'
 GATE = HERE / 'gate.sh'
 WORKFLOWS = f'{static.CI} {static.MUTANTS}'
+GH_REPO = 'purduercac/rcac-mcp'
+BRANCH = 'ci/ci-workflow'
+SPEC = 'spec/ci-workflow/'
 
 
 def sections(text: str) -> dict[str, list[str]]:
@@ -196,7 +208,91 @@ def local(record: dict[str, list[str] | None], gate: str, bad: list[str]) -> Non
     check_mutants(record['Local reds'], bad)
 
 
-MODES = {'local': local}
+def run(*cmd: str) -> str:
+    done = subprocess.run(cmd, capture_output=True, text=True)
+    if done.returncode != 0:
+        sys.exit(f'evidence: {" ".join(cmd)} failed (exit {done.returncode}): {done.stderr.strip()}')
+    return done.stdout
+
+
+def gh_json(*args: str):
+    return json.loads(run('gh', *args))
+
+
+def fields(lines: list[str]) -> dict[str, list[str]]:
+    """Each `- key: value` line of a section, by key (a key may repeat)."""
+    found: dict[str, list[str]] = {}
+    for line in lines:
+        if m := re.fullmatch(r'- ([\w -]+?): (.+)', line.strip()):
+            found.setdefault(m.group(1), []).append(m.group(2).strip().strip('`'))
+    return found
+
+
+def one(name: str, record: dict[str, list[str]], key: str, pattern: str, bad: list[str]) -> str | None:
+    values = record.get(key, [])
+    if len(values) != 1 or not re.fullmatch(pattern, values[0]):
+        bad.append(f'{name}: needs exactly one "- {key}:" line matching {pattern}, found {values}')
+        return None
+    return values[0]
+
+
+def green(record: dict[str, list[str] | None], gate: str, bad: list[str]) -> None:
+    lines = record.get('Green run', [])
+    if lines is None or 'Green run' not in record:
+        bad.append('needs exactly one "## Green run" section')
+        return
+    recorded('Green run', lines, bad)
+    kv = fields(lines)
+    run_id = one('Green run', kv, 'run', r'\d+', bad)
+    commit = one('Green run', kv, 'commit', r'[0-9a-f]{40}', bad)
+    if run_id is None or commit is None:
+        return
+    view = gh_json('run', 'view', run_id, '-R', GH_REPO, '--json',
+                   'attempt,status,conclusion,event,headBranch,headSha,jobs')
+    # `gh run view` has no workflow-path field; the REST record of the same run carries it.
+    path = gh_json('api', f'repos/{GH_REPO}/actions/runs/{run_id}')['path']
+    want = {'status': 'completed', 'conclusion': 'success', 'event': 'push', 'headBranch': BRANCH,
+            'headSha': commit}
+    for key, value in want.items():
+        if view.get(key) != value:
+            bad.append(f'Green run: run {run_id} has {key} {view.get(key)!r}, want {value!r}')
+    if path != static.CI:
+        bad.append(f'Green run: run {run_id} ran {path!r}, want {static.CI!r}')
+    attempt = view.get('attempt')
+    reruns = {int(m.group(1)) for key in kv if (m := re.fullmatch(r're-run (\d+)', key))}
+    if not isinstance(attempt, int) or attempt < 1 or reruns != set(range(2, attempt + 1)):
+        bad.append(f'Green run: attempt {attempt!r}, re-runs listed {sorted(reruns)}; each attempt after 1 needs a "- re-run N:" line')
+    jobs = [j for j in view.get('jobs', []) if j.get('name') == 'gate']
+    if len(jobs) != 1 or jobs[0].get('conclusion') != 'success':
+        bad.append(f'Green run: needs one job "gate" with conclusion success, found {[(j.get("name"), j.get("conclusion")) for j in jobs]}')
+        return
+    steps = {s['name']: s.get('conclusion') for s in jobs[0].get('steps', [])}
+    expected = [f'Run {cmd.splitlines()[0]}' for cmd in static.job_steps(static.load(Path.cwd()), 'gate')]
+    if not expected:
+        bad.append('Green run: ci.yml has no gate run steps to look for')
+    for name in expected:
+        if steps.get(name) != 'success':
+            bad.append(f'Green run: step {name!r} is {steps.get(name)!r}, want success')
+    if subprocess.run(['git', 'merge-base', '--is-ancestor', commit, 'HEAD']).returncode != 0:
+        bad.append(f'Green run: {commit} is not an ancestor of HEAD')
+        return
+    moved = [p for p in run('git', 'diff', '--name-only', commit, 'HEAD').splitlines() if not p.startswith(SPEC)]
+    if moved:
+        bad.append(f'Green run: HEAD differs from {commit[:10]} outside {SPEC}: {moved}')
+
+
+def landing(record: dict[str, list[str] | None], gate: str, bad: list[str]) -> None:
+    head = run('git', 'rev-parse', 'HEAD').strip()
+    runs = gh_json('run', 'list', '-R', GH_REPO, '--workflow', 'ci.yml', '--commit', head, '-e', 'push',
+                   '--json', 'databaseId,attempt,status,conclusion')
+    if not runs:
+        bad.append(f'no push run of ci.yml for HEAD {head[:10]}')
+    for r in runs:
+        if (r.get('status'), r.get('conclusion')) != ('completed', 'success'):
+            bad.append(f'run {r.get("databaseId")} attempt {r.get("attempt")} is {r.get("status")}/{r.get("conclusion")}, not completed/success')
+
+
+MODES = {'local': local, 'green': green, 'landing': landing}
 
 
 def main() -> int:

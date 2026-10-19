@@ -140,3 +140,29 @@ hygiene-mutants: killed dotdot-allowed (test_parent_reference_is_named)
 hygiene-mutants: killed root-from-first-member (test_root_is_the_tarball_name)
 exit 0
 ```
+
+## Green run
+
+R9(b), and R1 and R2 observed on GitHub: the first push of `ci/ci-workflow` ran `ci.yml`'s `gate`
+job green, every step `success`, on the first attempt. Commit X below is the pushed head; every
+later commit on the branch touches only `spec/ci-workflow/` (`verify/evidence.py green` checks
+both, and re-reads the run from GitHub).
+
+Recorded: 2026-10-18
+
+- run: 39188588571
+- attempt: 1
+- url: https://github.com/PurdueRCAC/rcac-mcp/actions/runs/39188588571
+- commit: ffb03b51e6b549f7143267d2c202914b6d2eed4a
+- branch: ci/ci-workflow
+- date: 2026-10-18 (completed 2026-10-19T02:10:27Z)
+
+```
+$ gh run list -R purduercac/rcac-mcp --workflow ci.yml --commit ffb03b51e6b549f7143267d2c202914b6d2eed4a -e push --json databaseId,attempt,url,status,conclusion,headSha
+[{"attempt":1,"conclusion":"success","databaseId":39188588571,"headSha":"ffb03b51e6b549f7143267d2c202914b6d2eed4a","status":"completed","url":"https://github.com/PurdueRCAC/rcac-mcp/actions/runs/39188588571"}]
+```
+
+Job `gate`, conclusion `success`; its run steps, each `success`: `uv sync --locked`, `uv lock
+--check`, `uv run pytest -q`, `CLUSTER_MCP_TEST_ERA=modern uv run pytest -q`, `bin/sandbox.sh uv
+run rcac-mcp --help`, `uv run python bin/audit_lock.py`, `uv build -o dist/`, `uvx twine check
+--strict dist/*`, `uv run python bin/sdist_hygiene.py dist/`.
