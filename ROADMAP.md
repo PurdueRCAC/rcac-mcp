@@ -283,7 +283,7 @@ untracked versus tracked) fixes the message. Found by the `strip-docs-subsystem`
 2026-10-16.
 
 *Horizon: later · Depends on: — · Refs: split out of `restore-test-coverage`*
-**Seed:** [`issues/absence-check-leftover-classification.md`](issues/absence-check-leftover-classification.md) · *status: unshaped*
+**Seed:** [`issues/absence-check-leftover-classification.md`](issues/absence-check-leftover-classification.md) · *status: adopted:absence-check-leftover-classification*
 
 ## The surface pin cannot follow a deliberate surface change
 

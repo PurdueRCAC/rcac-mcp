@@ -1,5 +1,5 @@
 ---
-status: unshaped
+status: adopted:absence-check-leftover-classification
 kind: test
 appetite: small
 lane: public
