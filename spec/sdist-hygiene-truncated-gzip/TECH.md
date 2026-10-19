@@ -3,15 +3,15 @@ slug: sdist-hygiene-truncated-gzip
 title: An unreadable sdist is named, never a traceback
 kind: fix
 appetite: small
-status: in_progress
+status: in_review
 branch: fix/sdist-hygiene-truncated-gzip
 base: develop
-current_phase: P1
+current_phase: done
 last_updated: '2026-10-19'
 phases:
 - id: P1
   name: Read each sdist in full and name every unreadable one in one line
-  status: pending
+  status: done
   satisfies:
   - R1
   - R2
@@ -105,19 +105,19 @@ cannot read in a single `<tarball>: cannot be read (…)` line, keeps checking t
 a traceback and never calls an unreadable sdist clean; readable sdists are judged byte for byte as
 on `5153e47`. This is the whole change and the last phase.
 
-- [ ] Apply the prototype: `git apply spec/sdist-hygiene-truncated-gzip/research/prototype.diff`.
+- [x] Apply the prototype: `git apply spec/sdist-hygiene-truncated-gzip/research/prototype.diff`.
       It adds `member_names`, `check_streams` and the broad, one-line handler to `bin/sdist_hygiene.py` (PLAN §2),
       the new tests to `tests/test_sdist_hygiene.py`, and the § Testing entry's new sentences to
       `AGENTS.md`. Read each hunk against PLAN §2 before committing; reword freely, but a changed
       line that a `verify/mutants.py` anchor names moves that anchor in the same commit.
-- [ ] Leave `FURNITURE`, `SDIST_SUFFIX`, `member_violations`, `main`, the release recipe's step and
+- [x] Leave `FURNITURE`, `SDIST_SUFFIX`, `member_violations`, `main`, the release recipe's step and
       `.github/workflows/ci.yml` untouched (`static.py` checks each against `5153e47`).
-- [ ] Every new test is `@mark.unit`, and every test id in the module is listed in
+- [x] Every new test is `@mark.unit`, and every test id in the module is listed in
       `verify/ids.txt`; a test added or renamed changes that file in the same commit.
-- [ ] Comments and docstrings are declarative and carry no spec ids (§ Conventions).
-- [ ] Run the profile's full `verify` once before the commit:
+- [x] Comments and docstrings are declarative and carry no spec ids (§ Conventions).
+- [x] Run the profile's full `verify` once before the commit:
       `uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run pytest -q && bin/sandbox.sh uv run rcac-mcp --help`.
-- [ ] **Deferral ledger.** Walk this phase and PLAN §5 for "defer", "follow-up", "known limitation",
+- [x] **Deferral ledger.** Walk this phase and PLAN §5 for "defer", "follow-up", "known limitation",
       "do not fix here" and "out of scope". Each one has an `issues/{slug}.md` (from the KB's
       `ISSUE.md` template, `status: unshaped`) and a `ROADMAP.md` entry, or `.security/` when it
       describes an unremediated weakness (AGENTS.md § Factory, Where deferred work goes). None is
