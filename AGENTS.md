@@ -1339,7 +1339,9 @@ What each mode means:
 - **CI mirrors the gate.** `.github/workflows/ci.yml`'s `gate` job runs the profile's `setup`, then
   each command of its `verify`, then each release-recipe `gate` step that `verify` lacks: one step
   per command, verbatim, in that order. A change to any of the three lists changes the workflow in
-  the same commit, and the reverse. The sdist furniture set lives only in `bin/sdist_hygiene.py`,
+  the same commit, and the reverse. Before them, one provisioning step installs the login shells the suite
+  drives (`zsh`, `tcsh`, `ksh`, `csh`) and nothing else: the runner lacks them, and without them
+  those tests skip on Linux. It has no local counterpart, since macOS ships them. The sdist furniture set lives only in `bin/sdist_hygiene.py`,
   which the recipe and CI both run. The workflow's `python-version` is the floor of
   `requires-python` and moves with it. Every `uses:` in `.github/workflows/` names a full commit
   SHA, the version in a trailing comment; the token stays `permissions: contents: read`, and no
