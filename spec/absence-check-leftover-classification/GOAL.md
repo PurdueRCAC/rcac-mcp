@@ -94,6 +94,10 @@ today's. Whether the test fails never changes.
   `safe-execution` cycle (in flight) adds a hygiene test allowing exactly one such helper,
   `need_shell`, and it will admit this one, `need_git`, at its rebase. The fallback control
   (today's message, no git) never skips. (Foreman, GOAL gate, 2026-10-19.)
+- **Q:** May `test_docs_modules_absent` move from `unit` to `integration`, since the unit guard
+  forbids starting git? — **A:** Yes. R6's "pass/fail unchanged" is read against the unfiltered
+  suite, which `verify` and CI run; the test's ids, body and verdict stay as they are, and only a
+  `-m unit` selection stops running it. (Foreman, PLAN/TECH gate, 2026-10-22.)
 
 ## Related materials
 
