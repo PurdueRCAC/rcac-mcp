@@ -396,6 +396,8 @@ server-owned session. Found by `safe-execution`'s focused review, 2026-10-17.
   exited, in all three modes); the SSH rc-file case remains, stated as the documented exception.
 - 2026-10-18 (review cycle 2): the first case now stops once nothing has arrived for the grace,
   not a fixed grace after the exit, and the result carries a note saying so.
+- 2026-10-22: the first case has no timing rule any more: the call returns at the command's end
+  records on both streams; the SSH rc-file case remains for what such a job writes before them.
 
 It stays here because no release waits on it: neither case shows with the clusters' default
 startup files (`safe-execution` research 01), and the fix is a different launch (a PTY, or a

@@ -3,11 +3,11 @@ slug: safe-execution
 title: Every tool passes exactly what it was given, under one interpreter
 kind: fix
 appetite: big
-status: blocked
+status: in_review
 branch: fix/safe-execution
 base: develop
 current_phase: done
-last_updated: '2026-10-19'
+last_updated: '2026-10-22'
 phases:
 - id: P1
   name: 'Launcher: one bash program per command, one wire per backend'
@@ -20,9 +20,7 @@ phases:
   parallel: false
   hammerable: false
   hill: uphill
-  verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run
-    pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp
-    --help
+  verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp --help
 - id: P2
   name: 'Protocol: argv, stdin and one timeout contract in all three backends'
   status: done
@@ -36,9 +34,7 @@ phases:
   parallel: false
   hammerable: false
   hill: uphill
-  verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run
-    pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp
-    --help
+  verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp --help
 - id: P3
   name: 'Startup: a failed SSH connect is answered, in both eras'
   status: done
@@ -49,9 +45,7 @@ phases:
   parallel: false
   hammerable: false
   hill: uphill
-  verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run
-    pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp
-    --help
+  verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp --help
 - id: P4
   name: Filesystem, transfer and resource callers on argv; byte-exact writes
   status: done
@@ -66,9 +60,7 @@ phases:
   parallel: false
   hammerable: false
   hill: uphill
-  verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run
-    pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp
-    --help
+  verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp --help
 - id: P5
   name: Slurm and site tools on argv; sbatch args and list extra_args
   status: done
@@ -82,9 +74,7 @@ phases:
   parallel: false
   hammerable: false
   hill: uphill
-  verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run
-    pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp
-    --help
+  verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp --help
 - id: P6
   name: 'Literal-argument matrix: every string parameter, all three modes'
   status: done
@@ -99,13 +89,7 @@ phases:
   hammerable: false
   hill: uphill
   attempts: 1
-  verify: uv lock --check && uv run pytest -q tests/test_literal_args.py && CLUSTER_MCP_TEST_ERA=modern
-    uv run pytest -q tests/test_literal_args.py && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern
-    uv run pytest -q && uv run python tests/mutants.py --self-check tool-command-string
-    read-file-no-dashdash option-value-joined scontrol-node-positional launcher-arg-unquoted
-    delegate-tilde-server-home empty-optional-passed-literally empty-positional-passed-literally
-    empty-list-path-passed-literally empty-cwd-passed-literally transfer-empty-path-passed
-    surrogate-unnamed transfer-local-fallback && bin/sandbox.sh uv run rcac-mcp --help
+  verify: uv lock --check && uv run pytest -q tests/test_literal_args.py && CLUSTER_MCP_TEST_ERA=modern uv run pytest -q tests/test_literal_args.py && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run pytest -q && uv run python tests/mutants.py --self-check tool-command-string read-file-no-dashdash option-value-joined scontrol-node-positional launcher-arg-unquoted delegate-tilde-server-home empty-optional-passed-literally empty-positional-passed-literally empty-list-path-passed-literally empty-cwd-passed-literally transfer-empty-path-passed surrogate-unnamed transfer-local-fallback && bin/sandbox.sh uv run rcac-mcp --help
 - id: P7
   name: 'Sweep: retired texts, every mutant, deferral ledger'
   status: done
@@ -117,14 +101,12 @@ phases:
   parallel: false
   hammerable: false
   hill: uphill
-  verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run
-    pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp
-    --help
+  attempts: 1
+  verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp --help
 review:
   last_reviewed_commit: 8a13f06fc5eb15dc38b5a5d6a30ece8f6bdfb791
   verdict: changes-requested
-  blocked_reason: 'Review bound reached (cycle 3: CRITICAL truncation on stalled links,
-    MEDIUM zsh rc reads stdin); escalated to Geoffrey'
+  blocked_reason: 'Review bound reached (cycle 3: CRITICAL truncation on stalled links, MEDIUM zsh rc reads stdin); escalated to Geoffrey'
   cycle: 3
 ---
 
@@ -256,6 +238,9 @@ by execution under every local login shell; nothing calls it yet.
 - **Linux CI amendment (2026-10-19).** The first build amendment's reading of `exec 58>file` held
   only for bash 3.2: bash 5 lets a profile take the parked descriptor, and the program now refuses
   to run on a broken restore. The decision and its pins are in P7's Linux CI note.
+- **Remediation amendment 4 (2026-10-22, Geoffrey's ruling after review cycle 3).** Reopened with
+  P2, P4, P5, P6 and P7 and landed in one commit with them; the end record, the SFTP route, the pins, the
+  measurements and the mutants are in P2's fourth note.
 - **Verify:** frontmatter `P1.verify`.
 - **Touches:** `src/rcac_mcp/executor/{base,launch,__init__}.py`, `tests/{test_launch,conftest,test_hygiene,mutants,test_mutations}.py`, `AGENTS.md` (§3, § Testing, high-blast-radius list: add `src/rcac_mcp/executor/launch.py`).
 
@@ -635,6 +620,182 @@ land in `base.py` and in **all three** backends in one commit (§2); every comma
     `spec-id-in-source`; (6) `timeout-sigkill-dropped`, `timeout-sigterm-dropped`.
   - **Unchanged on purpose.** `run_command`'s description still says what a timeout returns; a held
     or late stop states itself in the result, so the served surface has no delta this round.
+- **Remediation amendment 4 (2026-10-22, Geoffrey's ruling after review cycle 3).** `REVIEW.md`
+  cycle 3 reached the review bound; Geoffrey ruled (`GOAL.md`, newest Clarification): an
+  end-of-output marker instead of any timing rule, SFTP for content over ssh, the racy holder test
+  fixed, every class closed whole. P1, P2, P4, P5, P6 and P7 reopen and land in one commit: the
+  launcher's program and wire (P1), the protocol, the three backends and every text that describes
+  them (P2, R10), the two tools that write content (P4, P5), the matrix's recording executor (P6)
+  and the sweep's mutants and texts (P7) change together, and AGENTS §2, §3, §5 and the footguns
+  move with the code. P3 is untouched. No gate is retuned: P1–P5 and P7 run the stored P7 gate
+  (the full suite in both eras, the sweep with every planted case, the sandboxed `--help`), P6 its
+  own; the review fields are left as cycle 3 wrote them.
+  - **The end record (ruling 1).** `launch.program` now runs the command in a subshell that changes
+    to its start and `exec`s it (`( command cd -- … || exit` / `exec 'a' 'b'` / `) 2>&59 59>&-`),
+    so `exec` semantics hold (a program from `PATH`, never a profile function or a builtin) while
+    the program outlives the command. After it the program prints, on stdout and on stderr, an end
+    record: a second per-call nonce (`secrets.token_hex(16)`, printed in two halves like the start
+    sentinel, so it is never whole in the program text), then `x<N>` for an exit status or `s<N>` for
+    a signal death, then a full stop (`launch.record`, `RECORD_TAIL`). The program's own stderr is
+    `/dev/null` from the start sentinel on (`QUIET`; the caller's stays on 59 for the subshell and
+    the record), because bash reports a child killed by a signal on its own stderr ("line 4: 123
+    Hangup …", measured on 3.2), which is not the command's output. **Signal death:** bash reports a
+    signal death and an exit of 128+N alike, so the program reads a status of 128+N whose
+    `kill -l` name is a terminating signal (`TERMINATING`: stops, continues and ignored signals
+    excluded, and the platform-specific IO, POLL, PWR, EMT, LOST and STKFLT left out) as that
+    signal: it records `s<N>`, then re-raises it on itself (`ulimit -c 0`, the trap reset, `kill -s`),
+    and keeps the status with `(exit "$cluster_mcp_s")` if it lives on (a signal ignored on entry);
+    `exit` in a subshell never runs `~/.bash_logout` (measured on 3.2, and bash resets `login_shell`
+    in a subshell). **Decision, in the ruling's spirit:** the record, not the wire, is the result's
+    status in every mode. Paramiko has no `exit-signal` (a signal death reads as a lost status, and
+    only once the channel closes), and the exit-status message races the records on the link, so
+    over ssh the record is the only status that arrives with the output; local and delegate see the
+    same through Popen, which the re-raise makes match. Consequence, stated in §3, base.py and the
+    `run_command` description: a signal death is `-N` in every mode (over ssh it was `-1`), and so
+    is an exit of 128+N for a terminating N (`exit 130` reads `-2`; `exit 200` and `exit 255` stay).
+    **Completion:** `separate(out, err, code, marks, note)` cuts each stream after the start
+    sentinel and before the first record after it, and takes the code from the record; a timeout
+    stays a timeout whatever arrived; a started stream without a record (a launch killed before its
+    end) keeps the wire's code and says so (`UNFINISHED_NOTE`). `run_process` is now a selector loop
+    over non-blocking pipes (stdin fed in pieces, then closed): it is complete once each stream has
+    carried its record (or ended), or at the launch's exit, after reading everything the pipes hold
+    (an exited process has nothing more to write, so this is not a timing rule); a stream closed
+    early waits for the exit. Over ssh `_collect` is complete at both records, or at the channel's
+    end, and never at the exit status; at the deadline a command whose exit status arrived ends as a
+    timeout with `LATE_NOTE` naming it (kept, reworded: "the command exited N, but not all of its
+    output had arrived at the timeout"), otherwise TERM, the `GRACE` drain and a timeout. `GRACE`
+    now bounds only the TERM and KILL drains and the reap after the records. Removed in every mode:
+    the idle cutoff, `HELD_NOTE`, the late-output rule past the deadline, `START_TIMEOUT` and the
+    stdin gating behind the sentinel. **Recorded limits** (AGENTS §3): over ssh, a launch killed
+    before its records while something it started still holds the channel, or a program that never
+    starts behind an rc file that leaves such a job, is held until the timeout (as on `develop`,
+    which waited for EOF); a profile that makes `cluster_mcp_s`, `cluster_mcp_k` or `cluster_mcp_r`
+    read-only joins the pathological configurations of P1's first amendment.
+  - **SFTP content (ruling 2). Decision, in the ruling's spirit: one route for content.** The
+    protocol loses `run`'s `stdin` (no caller but the two writes used it, and over ssh it may carry
+    nothing) and gains a ninth member, `write(path, data, append=False, parent=None,
+    executable=False) -> CommandResult`, in all three backends (§2). `write_file` and `sbatch`
+    `script_content` call it; `sbatch` passes `parent='~/jobs'` and `executable=True`. In `local` and
+    `delegate` it runs a fixed script (`launch.write_argv`: `cat >"$1"`, `cat >>"$1"`, `mkdir -p --
+    "$2" &&` first, `&& chmod -- +x "$1"` after) with the bytes on the stdin the launch parks: no
+    startup file reaches them, which `test_a_profile_cannot_read_a_writes_content[local|delegate]`
+    pins with a profile that reads stdin in the foreground and from a background `head -c 1 &`
+    (160,000 bytes, exact; both readers saw nothing). Over ssh: the channel's stdin carries no byte
+    and its end goes at once (the loopback server now counts the bytes each exec received). `write`
+    stats over SFTP (a parent that is already a directory needs no `mkdir -p` run); follows a
+    symbolic link to the file it names (`normalize`, which OpenSSH resolves); refuses a directory
+    and an empty path (`OSError`, which the tools report as a failed write); makes a fresh directory
+    `.cluster-mcp-<16 hex>` of mode 0700 beside the target (so on its filesystem); creates `content`
+    in it exclusively, makes it 0600 before any byte, writes the bytes; then runs one fixed program
+    (`ssh.PLACE`: `chmod -- "$3" "$1" && mv -f -- "$1" "$2"`, `$3` the target's own permission bits
+    from its `stat`, or `=rw`, which the umask narrows as `cat >` would): the target is replaced by
+    a rename, whole or not at all. An append runs `cat -- "$1" >>"$2"` instead, and
+    `executable` adds `chmod -- +x "$2"`. The staging file and directory are removed in a `finally`,
+    whatever happened. **Decisions:** a target that is not a regular file (a FIFO, a device) is
+    written through (`cat -- "$1" >"$2"`, staged in the login home), since a rename would replace
+    the node; a regular file in a directory closed to new entries (EACCES or EPERM making the
+    staging directory) is written through the same way, as `develop` could write it. Recorded limits
+    of the move (AGENTS §2): hard links keep the old content, and the new file is owned by its
+    writer, without the old one's ACL. The loopback SFTP server now honours requested permissions,
+    implements `mkdir`, `rmdir`, `remove` and `chattr`, and resolves links in `canonicalize`, as
+    OpenSSH's sftp-server does.
+  - **Edge cases, each pinned.** A command that exits while a background child keeps writing:
+    the call ends at the records, the child's later output is not kept, no note
+    (`test_the_call_ends_at_its_records[<5 wires>]`, `test_a_background_writer_does_not_hold_the_call`
+    and `test_output_after_the_end_is_not_kept` in local and delegate, the ssh writer row). A link
+    that stalls for seconds mid-result or after the exit status, and a 32 KiB-packet link at 6,000
+    and 24,000 B/s with a 1.6 s stall after the exit status:
+    `test_a_stalling_link_returns_the_whole_file[stall-1.6s-after-exit|stall-1.2s-after-exit|stall-5s-mid-result|packets-6000Bps|packets-24000Bps]`
+    (`ThrottledSSH` gained `piece`, `stall_after_exit` and `stall_at`). A late start sentinel:
+    `test_a_late_sentinel_still_counts_as_started[zshenv|bashrc]` (now with a write behind the 1 MiB
+    rc instead of stdin). The `sbatch` double-submit case:
+    `test_a_job_that_ran_is_never_reported_as_not_started` (40 KB `.bashrc`, 6,000 B/s, 32 KiB
+    packets, 1.6 s stall: the job id, `sbatch` called once). A signal death:
+    `test_a_signal_death_is_reported_and_reraised[<local|ssh-sh|ssh-bash|ssh-zsh|ssh-tcsh>-<hup|term|kill|script-kill|exit-3|exit-130|exit-200|exit-255>]`
+    (the result's code and the launch's own status, read by a parent outside the sandbox's shell,
+    which reports a signal as 128+N), `test_a_signal_death_is_reported[bash|zsh]` over the loopback.
+    The timeout before the records: `test_a_timeout_before_the_records_names_the_status` (64 KiB/s,
+    1 MiB, `timeout=2`: `-1001`, a prefix, `LATE_NOTE`), and the fake-channel units
+    `test_one_record_is_not_the_end`, `test_a_command_whose_records_have_not_come_by_the_deadline_is_a_timeout`,
+    `test_the_read_ends_at_both_records`. Marker-like output: `test_a_command_printing_record_lookalikes_keeps_them`
+    (a zero nonce, another call's, `deadbeef`×4, a bare `x0.`) and the start-sentinel row. The zsh
+    `.zshenv` `head -c 1 &` case and its bash twin, byte-exact:
+    `test_a_remote_rc_never_reads_a_writes_content[zshenv|bashrc]` (160,000 bytes through
+    `write_file` as base64 and an 80,000-byte job script through `sbatch`; the rc files read nothing,
+    no channel carried stdin). The writes: `test_an_ssh_write_replaces_the_file_whole_and_keeps_its_mode`,
+    `test_an_ssh_write_stages_its_content_privately`, `test_an_ssh_write_follows_a_link`,
+    `test_an_ssh_write_into_a_closed_directory_writes_through`, `test_a_failed_ssh_write_leaves_nothing_behind`;
+    and the texts: `test_content_texts_state_the_sftp_route` (AGENTS §2, the README, `Executor.write`).
+  - **The reviewers' cases, bytes returned before (the tree at 3598bfe) → now**, measured with this
+    commit's `ThrottledSSH` model through `read_file` and `sbatch` over `in_memory`:
+    1.6 s stall after the exit status, 512 KiB/s, 1,048,576 bytes: 8,192 → 1,048,576; 1.2 s stall:
+    32,768 → 1,048,576; 5 s stall mid-result: 262,144 → 1,048,576; 32 KiB packets at 6,000 B/s,
+    49,152 bytes: 32,768 → 49,152; at 24,000 B/s, 262,144 bytes: 32,768 → 262,144, all
+    `is_error=False` before; `sbatch` behind a 40 KB `.bashrc` at 6,000 B/s: "Failed to submit job:
+    … did not start (exit 0)" with the stand-in called once → the job id, called once.
+    The zsh `.zshenv` `head -c 1 > "$HOME/rc-took" &` case, `write_file` of 160,000 bytes over
+    the loopback: 143,616 bytes on disk, a different file, `is_error=False`, the job holding one
+    byte → 160,000 bytes, exact, the job holding none; its bash `.bashrc` twin was exact before
+    (bash gives a background job `/dev/null`) and is exact now.
+  - **The racy holder test (ruling 3).** `test_a_holder_that_keeps_writing_ends_at_the_timeout`
+    asserted `done` before the first `tick`, which a background job may print first. Its successor,
+    `test_a_background_writer_does_not_hold_the_call` (local, delegate, ssh under bash and zsh),
+    asserts what holds in any order: the call returns within 2 s at the command's status, with
+    `done` once and nothing but `tick` lines beside it.
+  - **Mutants.** New: `ssh-one-record-is-the-end`,
+    `end-record-one-stream` (marker on one stream only), `end-record-without-nonce`,
+    `command-exec-in-place` (exec instead of a child), `signal-death-not-reraised`,
+    `signal-death-unreported`, `record-status-ignored`, `content-on-stdin-over-ssh`,
+    `staging-not-cleaned` (temp file not cleaned), `move-not-atomic`, `mode-not-kept`,
+    `staging-not-private`, `staged-file-not-private`, `staging-not-beside-target`, `link-replaced`,
+    `ssh-append-overwrites`, `ssh-write-renamed`, `content-route-unstated` (18). Re-planted where the
+    anchor moved: `ssh-returns-at-exit-status` (return at the exit status, before the records; killed
+    by the slow-link, stall, packet, late-sentinel and double-submit rows), `cwd-unquoted`, `delegate-tilde-server-home`, `delegate-server-cwd`,
+    `ssh-timeout-raises`, `ssh-stdin-not-closed` (now the EOF sent at once),
+    `backend-separation-skipped`, `ssh-start-not-home`, `ssh-timeout-no-drain`,
+    `ssh-late-stop-silent`, `separation-exception-unstated`, `launcher-cwd-cdpath`,
+    `stdin-not-parked`, `prologue-read-function-kept`, `startup-output-kept`,
+    `timeout-partial-output-dropped`, `timeout-completed-misreported` (an exited launch read as a
+    timeout), `exit-not-noticed`, `local-start-dropped`, `local-start-positional`,
+    `separate-note-dropped`, `write-final-newline`, `content-in-argv`, `append-overwrites`,
+    `create-dirs-dirname-subst` (now in `launch.WRITE_MKDIR`), `write-before-validate`,
+    `script-content-newline`. Retired with the mechanism they mutated: `ssh-stdin-before-start`,
+    `ssh-stdin-wait-unbounded`, `stdin-rule-unstated` (no stdin is held or sent),
+    `ssh-drain-waits-for-holders`, `ssh-idle-grace-zero`, `ssh-fixed-grace-from-exit`,
+    `ssh-held-stop-silent`, `ssh-holder-past-the-timeout`, `drain-waits-for-holders`,
+    `local-returns-at-exit`, `local-idle-grace-zero`, `local-fixed-grace-from-exit`,
+    `held-stop-silent`, `holder-past-the-timeout`, `late-stop-silent` (no idle cutoff, no held note,
+    no late-output rule). An equivalent left unplanted: dropping the local wire's record check
+    changes nothing a test can see, since a launch exits right after its records and the exit path
+    reads the same bytes. The sweep's count goes from 165 to 168 cases. **The first P7 gate run went
+    red on three survivors (P7 attempt 1)**, each a pin the end record had made hollow, now
+    re-targeted: `ssh-exit-status-dropped` (the smoke server's record now carries the status, so the
+    channel's status matters only when no record comes: pinned by
+    `test_ssh_exec.py::test_a_profile_that_exits_is_not_started`, "did not start (exit 7)");
+    `startup-not-parked` (the chatty profile's background writer prints 0.2 s in, after a quick
+    command's records, so it was no longer read: a separation case `slow`, `sleep 1; echo slow`,
+    gives it the time, in all three modes); `script-in-login-shell` (a script's `exit` now runs in
+    the subshell, which never runs `~/.bash_logout`, so the remaining difference is `$$`: pinned by
+    `test_a_signal_death_is_reported_and_reraised[<local|ssh-bash>-script-kill]`, where a script in
+    the login shell kills the launch before its record).
+  - **Texts (R10, same commit).** AGENTS §2 (nine members, `run` without `stdin`, `write` and its
+    limits), §3 (signal deaths, `-1001` before the records, the separation's end, no startup file
+    reading a write's content, completeness at the end records and its limit), §5 (writes as the
+    mapped user), the `launch.py` and `ssh.py` footguns, the repository map line for the tools and
+    § Testing's entries for the tool, write, executor, launcher, smoke and ssh tests; the README's
+    execution paragraph; the `Executor`, `run` and new `write` docstrings in `base.py`; the module
+    and function docstrings in `launch.py`, `ssh.py`, `shell.py` and `delegate.py`; and the
+    `run_command` description, whose served-surface delta (`run_command.description`, already a
+    named delta) follows by the scripted hand-edit: its text copied from the served surface into
+    `tests/fixtures/served_surface.json`, nothing else changed. `issues/startup-background-jobs.md`
+    and its `ROADMAP.md` entry gain dated lines. PLAN §2.2 and §2.2a are records and stay as written.
+  - **Gates.** Local, macOS (bash 3.2), on the tree of this commit. The P7 gate (shared by P1–P5 and P7), first
+    run: both eras 1530 passed, then the sweep red on the three survivors above (attempt 1,
+    recorded); after the re-targeting, run again: `1538 passed` in each era, 0 skipped; the sweep
+    green, 168 of 168 cases killed and both controls reporting correctly; sandboxed `--help` exit 0;
+    13 min 56 s. P6's stored gate: the matrix `162 passed` in each era, the suite `1538 passed` in
+    each, its 13 named mutants killed, both controls correct, `--help` exit 0; 8 min 15 s. Linux,
+    bash 5: CI on the pushed head (below).
 - **Verify:** frontmatter `P2.verify`.
 - **Touches:** `src/rcac_mcp/executor/*`, `src/rcac_mcp/tools/shell.py` (docstring), `src/rcac_mcp/__init__.py` (`APP_HELP` only), `tests/{harness,conftest,ssh_server,test_ssh_exec,test_ssh_smoke,test_executors,test_hygiene,mutants,test_mutations}.py`, `tests/fixtures/served_surface.json`, `AGENTS.md`, `README.md`, `SECURITY.md`, `issues/`, `ROADMAP.md`.
 
@@ -747,6 +908,9 @@ answers every stdio request with that message as a −32603 error until EOF, and
 - **Remediation amendment 3 (2026-10-18, review cycle 2).** Reopened with P1, P2 and P3 and landed
   in one commit with them; the classes, the choices, the pins and the gate retune are in P2's third
   note.
+- **Remediation amendment 4 (2026-10-22, Geoffrey's ruling after review cycle 3).** Reopened with
+  P1, P2, P5, P6 and P7 and landed in one commit with them; the end record, the SFTP route, the pins, the
+  measurements and the mutants are in P2's fourth note.
 - **Verify:** frontmatter `P4.verify`.
 - **Touches:** `src/rcac_mcp/tools/{filesystem,transfer}.py`, `src/rcac_mcp/resources.py`, `src/rcac_mcp/scripts.py` (new), `tests/{test_tools,test_writes,mutants,test_mutations,conftest,harness,test_hygiene,test_surface}.py`, `tests/fixtures/served_surface.json`, `README.md`, `AGENTS.md` (§ Testing, §9 deltas), `issues/`, `ROADMAP.md`.
 
@@ -824,6 +988,9 @@ answers every stdio request with that message as a −32603 error until EOF, and
   `average-wait-short-partition` (`--partition` back to `-p`) is killed by the exact-argv row
   `test_slurm_and_site_argvs[average-wait]`. The gate is retuned to P7's, the latest done phase's
   (Step 1.3), whose sweep runs every planted case.
+- **Remediation amendment 4 (2026-10-22, Geoffrey's ruling after review cycle 3).** Reopened with
+  P1, P2, P4, P6 and P7 and landed in one commit with them; the end record, the SFTP route, the pins, the
+  measurements and the mutants are in P2's fourth note.
 - **Verify:** frontmatter `P5.verify`.
 - **Touches:** `src/rcac_mcp/tools/{slurm,rcac}.py`, `tests/{test_tools,test_writes,test_sbatch,test_extra_args,argv_echo,test_surface,mutants}.py`, `tests/fixtures/served_surface.json`, `README.md`, `AGENTS.md`, `issues/`, `ROADMAP.md`.
 
@@ -908,6 +1075,9 @@ value set in `local`, `delegate` and `ssh` against a fixture tree, through the s
     `UserPath` already gains `./`, so no path reaches `cat` with a leading `-`);
     `empty-list-path-passed-literally` (bash runs `cd ''` as staying put, so listing `''` lists the
     same directory as `.`); `empty-cwd-passed-literally` (the launcher already drops an empty cwd).
+- **Remediation amendment 4 (2026-10-22, Geoffrey's ruling after review cycle 3).** Reopened with
+  P1, P2, P4, P5 and P7 and landed in one commit with them; the end record, the SFTP route, the pins, the
+  measurements and the mutants are in P2's fourth note.
 - **Verify:** frontmatter `P6.verify`.
 - **Touches:** `tests/{test_literal_args,conftest,mutants,test_tools}.py`, `src/rcac_mcp/tools/{__init__,slurm,filesystem,shell,transfer}.py`, `AGENTS.md` (§ Testing, §7), `PLAN.md` (§2.6's empty-string line).
 
@@ -1128,6 +1298,9 @@ contract or the heredoc writes; every planted violation is killed; every deferra
     `SSH_CLIENT` set). The rc texts are now valid in both shells (`printf` for `print -rn`, `&` for
     `&!`). The mutants `ssh-stdin-before-start`, `ssh-fixed-grace-from-exit` and
     `ssh-stdin-wait-unbounded` now target both twins, and each kills both.
+- **Remediation amendment 4 (2026-10-22, Geoffrey's ruling after review cycle 3).** Reopened with
+  P1, P2, P4, P5 and P6 and landed in one commit with them; the end record, the SFTP route, the pins, the
+  measurements and the mutants are in P2's fourth note.
 - **Verify:** frontmatter `P7.verify`.
 - **Touches:** `AGENTS.md`, `issues/`, `ROADMAP.md`, any straggler text the sweep names.
 

@@ -100,6 +100,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from mcp import MCPError
 
+from rcac_mcp.executor import launch
 from rcac_mcp.executor.base import CommandResult, Executor
 from rcac_mcp.middleware import AuthExecutorMiddleware, SharedExecutorMiddleware
 from rcac_mcp.server import create_mcp_server
@@ -543,16 +544,18 @@ def user_map(tmp_path: Path, text: str) -> str:
     return str(path)
 
 
-# The launcher's program, as `launch.program` renders it: the prologue, then the sentinel printed in
-# two halves on both streams, then (in delegate mode) a change to $HOME and any cwd, then the body:
-# an `exec` of the argv, or the script run by a fresh bash.
-_SENTINEL_LINE = re.compile(r'printf %s%s ([0-9a-f]{16}) ([0-9a-f]{16}); printf %s%s \1 \2 >&2\n')
+# The launcher's program, as `launch.program` renders it: the prologue, then the start sentinel
+# printed in two halves on both streams, then a subshell that changes to the start and any cwd and
+# runs the body (an `exec` of the argv, or the script run by a fresh bash), then the status and the
+# end record, its nonce in two halves, on both streams.
+_SENTINEL_LINE = re.compile(r'printf %s%s ([0-9a-f]{16}) ([0-9a-f]{16}); printf %s%s \1 \2 >&2')
+_END_LINE = re.compile(r'printf %s%s%s\. ([0-9a-f]{16}) ([0-9a-f]{16}) "\$cluster_mcp_r"')
 _SCRIPT_PREFIX = ('while IFS= read -r cluster_mcp_fn; do export -f -- "$cluster_mcp_fn"; '
                   'done < <(compgen -A function); unset cluster_mcp_fn; BASH_ENV= ENV= exec /bin/bash --norc -c -- ')
 
 
-def launched_script(argv: Sequence[str]) -> tuple[str | list[str], bytes]:
-    """The command a recorded launch runs, and the sentinel its program prints first.
+def launched_script(argv: Sequence[str]) -> tuple[str | list[str], launch.Marks]:
+    """The command a recorded launch runs, and the nonces its program prints (`launch.Marks`).
 
     `argv` is any launch whose last element is a launcher program (`sudo … /bin/bash … <program>`,
     `/bin/bash … <program>`, or `[<program>]` for one an SSH server decoded). The command is the
@@ -561,29 +564,30 @@ def launched_script(argv: Sequence[str]) -> tuple[str | list[str], bytes]:
     """
     prog = argv[-1] if argv else ''
     line = _SENTINEL_LINE.search(prog) if isinstance(prog, str) and prog.startswith('\\unalias -a\n') else None
-    if line is None:
+    end = _END_LINE.search(prog) if line else None
+    if line is None or end is None:
         raise ValueError(f'not a launcher program: {prog!r:.120}')
-    sentinel = (line[1] + line[2]).encode('ascii')
-    body = prog[line.end():]
+    marks = launch.Marks((line[1] + line[2]).encode('ascii'), (end[1] + end[2]).encode('ascii'))
+    body = prog[line.end():end.start()]
     if _SCRIPT_PREFIX in body:
-        words = shlex.split(body[body.index(_SCRIPT_PREFIX) + len(_SCRIPT_PREFIX):])
+        words = shlex.split(body[body.index(_SCRIPT_PREFIX) + len(_SCRIPT_PREFIX):].partition('\n')[0])
         if len(words) != 1:
             raise ValueError(f'the script is not one word: {words!r:.120}')
-        return words[0], sentinel
-    # The argv line is the one starting `exec `; the cd lines before it end `|| exec /usr/bin/false`.
-    at = 0 if body.startswith('exec ') else body.find('\nexec ') + 1
-    if at == 0 and not body.startswith('exec '):
+        return words[0], marks
+    # The argv line is the subshell's line starting `exec `; the cd lines before it end `|| exit`.
+    at = body.find('\nexec ')
+    if at < 0:
         raise ValueError(f'no command in the program: {body!r:.120}')
-    return shlex.split(body[at + len('exec '):]), sentinel
+    return shlex.split(body[at + len('\nexec '):].partition('\n')[0]), marks
 
 
 @dataclass
 class RecordingExecutor:
     """An `Executor` that records every call and answers `<name>|<command>` unless given a responder.
 
-    A call is recorded as given: `('run', command, cwd, timeout, stdin)`, with the command a list
-    for an argv and a `str` for a script; `put` and `get` return `<name>:<destination>`, so a path a
-    tool returns can be traced to this executor.
+    A call is recorded as given: `('run', command, cwd, timeout)`, with the command a list for an
+    argv and a `str` for a script, and `('write', path, data, append, parent, executable)`; `put`
+    and `get` return `<name>:<destination>`, so a path a tool returns can be traced to this executor.
     """
 
     name: str
@@ -594,11 +598,15 @@ class RecordingExecutor:
     def hostname(self) -> str:
         return f'{self.name}.invalid'
 
-    def run(self, command: Sequence[str] | str, cwd: str | None = None, timeout: float | None = None,
-            stdin: bytes | None = None) -> CommandResult:
-        self.calls.append(('run', command if isinstance(command, str) else list(command), cwd, timeout, stdin))
+    def run(self, command: Sequence[str] | str, cwd: str | None = None, timeout: float | None = None) -> CommandResult:
+        self.calls.append(('run', command if isinstance(command, str) else list(command), cwd, timeout))
         stdout = self.responder(command) if self.responder else f'{self.name}|{command}'
         return CommandResult(stdout=stdout, stderr='', exit_code=0, hostname=self.hostname)
+
+    def write(self, path: str, data: bytes, append: bool = False, parent: str | None = None,
+              executable: bool = False) -> CommandResult:
+        self.calls.append(('write', path, data, append, parent, executable))
+        return CommandResult(stdout='', stderr='', exit_code=0, hostname=self.hostname)
 
     def put(self, local_path: str, remote_path: str) -> str:
         self.calls.append(('put', local_path, remote_path))

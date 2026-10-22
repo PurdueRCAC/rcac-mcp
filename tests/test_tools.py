@@ -92,15 +92,15 @@ class ToolCase:
 
     `reaches` is a fragment some recorded executor call must carry (the tool's own argument, or the
     command it wraps); `expect` must appear in the result text, or is None for a tool that returns
-    nothing; `stdin`, when given, is what some call must carry on stdin. `TMP` in either stands for
-    the test's tmp_path.
+    nothing; `content`, when given, is what some executor `write` must carry. `TMP` in either stands
+    for the test's tmp_path.
     """
 
     args: dict[str, Any]
     reaches: str
     expect: str | None = ANSWER
     responder: Callable[[Sequence[str] | str], str] = field(default=answer)
-    stdin: bytes | None = None
+    content: bytes | None = None
 
     def arguments(self, tmp_path: Path) -> dict[str, Any]:
         """The call's arguments with `TMP` resolved to `tmp_path`."""
@@ -139,20 +139,20 @@ TOOL_CASES: dict[str, ToolCase] = {
     'upload_file': ToolCase({'local_path': '/data/upload-in.csv', 'remote_path': '/remote/upload-out.csv'},
                             '/remote/upload-out.csv', expect='installed:/remote/upload-out.csv'),
     'write_file': ToolCase({'path': '/data/written.txt', 'content': 'written-by-the-tool'}, '/data/written.txt',
-                           expect=None, stdin=b'written-by-the-tool'),
+                           expect=None, content=b'written-by-the-tool'),
 }
 
 
 def tool_violations(outcome: Outcome, calls: Sequence[tuple[Any, ...]], refused: Sequence[Any],
                     expect: str | None, reaches: str | None = None, scripts_allowed: bool = False,
-                    stdin: bytes | None = None) -> list[str]:
+                    content: bytes | None = None) -> list[str]:
     """Return every way a tool call bypassed or ignored its installed executor; empty means it did not.
 
     `calls` is what the installed executor recorded, `refused` what the unit guard refused (a
     process or connection made anywhere else), `expect` a fragment the client's result must carry
     (None for a tool that returns nothing), `reaches` a fragment some recorded call must carry, and
-    `stdin` the bytes some call must carry on stdin. Unless `scripts_allowed`, every command must be
-    an argv; in any case a shell argv must run a registered fixed script.
+    `content` the bytes some `write` must carry. Unless `scripts_allowed`, every command must be an
+    argv; in any case a shell argv must run a registered fixed script.
     """
     violations: list[str] = []
     if outcome.is_error:
@@ -172,8 +172,8 @@ def tool_violations(outcome: Outcome, calls: Sequence[tuple[Any, ...]], refused:
             if script_of(command) is None:
                 violations.append(f'unregistered script: the shell argv runs {script!r:.200}, '
                                   'which is not in FIXED_SCRIPTS behind the reset')
-    if stdin is not None and not any(c[4] == stdin for c in runs):
-        violations.append(f'no executor call carried {stdin!r} on stdin: {list(calls)!r:.300}')
+    if content is not None and not any(c[0] == 'write' and c[2] == content for c in calls):
+        violations.append(f'no executor write carried {content!r}: {list(calls)!r:.300}')
     for attempt in refused:
         violations.append(f'launched outside the executor: {attempt!r}')
     if expect is not None and expect not in outcome.text:
@@ -194,7 +194,7 @@ def test_tool_reaches_only_the_installed_executor(tool: str, tmp_path: Path, gua
 
     outcome = drive(scenario())
     violations = tool_violations(outcome, executor.calls, guard.refused, case.expected(tmp_path), case.reaches,
-                                 scripts_allowed=tool in PASSES_A_SCRIPT, stdin=case.stdin)
+                                 scripts_allowed=tool in PASSES_A_SCRIPT, content=case.content)
     # A joined string, not the list: pytest abbreviates a long list's repr, which can cut a
     # violation out of the failure text.
     assert violations == [], '\n'.join(violations)
@@ -207,8 +207,8 @@ def test_tool_cases_cover_expected_tools() -> None:
 
 
 GOOD = Outcome(False, f'{ANSWER} for sinfo')
-CALLS = [('run', ['sinfo', '-p', 'gpu'], None, None, None)]
-REGISTERED = script_argv(filesystem.WRITE, 'write_file', '/data/out')
+CALLS = [('run', ['sinfo', '-p', 'gpu'], None, None)]
+REGISTERED = script_argv(filesystem.LIST, 'list_directory', '/data/out')
 
 
 @pytest.mark.unit
@@ -229,29 +229,32 @@ def test_tool_check_catches_bypass(outcome: Outcome, calls: list[tuple[Any, ...]
 
 @pytest.mark.unit
 def test_tool_check_requires_the_tool_argument_at_the_executor() -> None:
-    violations = tool_violations(GOOD, [('run', ['sinfo'], None, None, None)], [], ANSWER, 'gpu')
+    violations = tool_violations(GOOD, [('run', ['sinfo'], None, None)], [], ANSWER, 'gpu')
     assert any('never reached the executor' in v for v in violations), violations
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize(('calls', 'kwargs', 'fragment'), [
-    pytest.param([('run', 'sinfo -p gpu', None, None, None)], {}, 'passed a command string', id='command-string'),
-    pytest.param([('run', ['/bin/bash', '--posix', '-c', 'cat >"/data/gpu"', 'write_file'], None, None, b'x')], {},
+    pytest.param([('run', 'sinfo -p gpu', None, None)], {}, 'passed a command string', id='command-string'),
+    pytest.param([('run', ['/bin/bash', '--posix', '-c', 'cat >"/data/gpu"', 'write_file'], None, None)], {},
                  'unregistered script', id='interpolated-script'),
-    pytest.param([('run', ['sh', '-c', 'sinfo -p gpu'], None, None, None)], {}, 'unregistered script',
+    pytest.param([('run', ['sh', '-c', 'sinfo -p gpu'], None, None)], {}, 'unregistered script',
                  id='plain-shell'),
-    pytest.param([('run', ['bash', 'job-gpu.sh'], None, None, None)], {}, 'unregistered script', id='shell-no-c'),
-    pytest.param([('run', [*REGISTERED, 'gpu'], None, None, b'other')], {'stdin': b'gpu'}, 'on stdin',
-                 id='stdin-missing'),
+    pytest.param([('run', ['bash', 'job-gpu.sh'], None, None)], {}, 'unregistered script', id='shell-no-c'),
+    pytest.param([('write', '/data/gpu', b'other', False, None, False)], {'content': b'gpu'}, 'no executor write',
+                 id='content-missing'),
+    pytest.param([('run', [*REGISTERED, 'gpu'], None, None)], {'content': b'gpu'}, 'no executor write',
+                 id='content-not-written'),
 ])
 def test_tool_check_catches_strings_and_scripts(calls: list[tuple[Any, ...]], kwargs: dict[str, Any],
                                                 fragment: str) -> None:
-    # Controls: an argv, a registered script with its stdin, `head -c` (not a shell), and a string
-    # where scripts are allowed all pass.
-    assert tool_violations(GOOD, [('run', [*REGISTERED, 'gpu'], None, None, b'gpu')], [], ANSWER, 'gpu',
-                           stdin=b'gpu') == []
-    assert tool_violations(GOOD, [('run', ['head', '-c', '9', '--', 'gpu'], None, None, None)], [], ANSWER, 'gpu') == []
-    assert tool_violations(GOOD, [('run', 'sinfo -p gpu', None, None, None)], [], ANSWER, 'gpu',
+    # Controls: an argv, a registered script, a write carrying the content, `head -c` (not a shell),
+    # and a string where scripts are allowed all pass.
+    assert tool_violations(GOOD, [('run', [*REGISTERED, 'gpu'], None, None)], [], ANSWER, 'gpu') == []
+    assert tool_violations(GOOD, [('write', '/data/gpu', b'gpu', False, None, False)], [], ANSWER, 'gpu',
+                           content=b'gpu') == []
+    assert tool_violations(GOOD, [('run', ['head', '-c', '9', '--', 'gpu'], None, None)], [], ANSWER, 'gpu') == []
+    assert tool_violations(GOOD, [('run', 'sinfo -p gpu', None, None)], [], ANSWER, 'gpu',
                            scripts_allowed=True) == []
     violations = tool_violations(GOOD, calls, [], ANSWER, 'gpu', **kwargs)
     assert any(fragment in v for v in violations), violations
@@ -269,8 +272,13 @@ def argv_violations(calls: Sequence[tuple[Any, ...]], expected: Sequence[tuple[A
     return violations
 
 
-def _run(command: list[str], stdin: bytes | None = None) -> tuple[Any, ...]:
-    return ('run', command, None, None, stdin)
+def _run(command: list[str]) -> tuple[Any, ...]:
+    return ('run', command, None, None)
+
+
+def _write(path: str, data: bytes, append: bool = False, parent: str | None = None,
+           executable: bool = False) -> tuple[Any, ...]:
+    return ('write', path, data, append, parent, executable)
 
 
 FILESYSTEM_ARGVS = {
@@ -279,17 +287,14 @@ FILESYSTEM_ARGVS = {
                   [(0, 4)]),
     'list': ('list_directory', {'path': '~/d d', 'show_hidden': True},
              [_run(script_argv(filesystem.LIST, 'list_directory', '~/d d', '-a'))], [(0, 6)]),
-    'write': ('write_file', {'path': 'out', 'content': 'c'},
-              [_run(script_argv(filesystem.WRITE, 'write_file', 'out'), b'c')], [(0, 6)]),
-    'append': ('write_file', {'path': 'out', 'content': 'c', 'append': True},
-               [_run(script_argv(filesystem.APPEND, 'write_file', 'out'), b'c')], [(0, 6)]),
+    'write': ('write_file', {'path': 'out', 'content': 'c'}, [_write('out', b'c')], []),
+    'append': ('write_file', {'path': 'out', 'content': 'c', 'append': True}, [_write('out', b'c', True)], []),
     'write-in-dir': ('write_file', {'path': '~/a b/out', 'content': '', 'create_dirs': True},
-                     [_run(script_argv(filesystem.WRITE_IN_DIR, 'write_file', '~/a b/out', '~/a b'), b'')],
-                     [(0, 6), (0, 7)]),
+                     [_write('~/a b/out', b'', parent='~/a b')], []),
     'append-in-dir': ('write_file', {'path': '/x/y', 'content': 'c', 'append': True, 'create_dirs': True},
-                      [_run(script_argv(filesystem.APPEND_IN_DIR, 'write_file', '/x/y', '/x'), b'c')], [(0, 6), (0, 7)]),
+                      [_write('/x/y', b'c', True, '/x')], []),
     'create-dirs-no-parent': ('write_file', {'path': 'out', 'content': 'c', 'create_dirs': True},
-                              [_run(script_argv(filesystem.WRITE, 'write_file', 'out'), b'c')], [(0, 6)]),
+                              [_write('out', b'c')], []),
     'upload': ('upload_file', {'local_path': '~/in', 'remote_path': '~/out'}, [('put', '~/in', '~/out')], []),
     'download': ('download_file', {'remote_path': '~/in', 'local_path': '~/out'}, [('get', '~/in', '~/out')], []),
 }
@@ -400,7 +405,7 @@ EMPTY_OPTIONALS = {
     'list-directory': ('list_directory', _empty('path'), [_run(script_argv(filesystem.LIST, 'list_directory', '.'))],
                        None),
     'read-file-encoding': ('read_file', {'path': '/f', **_empty('encoding')}, [_run(['cat', '--', '/f'])], None),
-    'run-command-cwd': ('run_command', {'command': 'pwd', **_empty('cwd')}, [('run', 'pwd', None, None, None)], None),
+    'run-command-cwd': ('run_command', {'command': 'pwd', **_empty('cwd')}, [('run', 'pwd', None, None)], None),
 }
 
 # Optional string parameters whose empty value is a value, not "not given": `script_content` is

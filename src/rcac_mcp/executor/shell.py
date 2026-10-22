@@ -54,7 +54,6 @@ class LocalShellExecutor:
         command: Sequence[str] | str,
         cwd: str | None = None,
         timeout: float | None = None,
-        stdin: bytes | None = None,
     ) -> CommandResult:
         """
         Run a command locally under the pinned login bash (see `Executor.run`).
@@ -63,17 +62,30 @@ class LocalShellExecutor:
             command: An argv (each element one literal argument) or a bash script.
             cwd: Working directory; a leading `~` or `~/` is this user's home.
             timeout: Seconds to wait; at the deadline the result carries `TIMEOUT_EXIT_CODE`.
-            stdin: The exact bytes the command reads; None is an empty, closed stdin.
 
         Returns:
             CommandResult with stdout, stderr, exit_code, and hostname.
         """
+        return self._run(command, cwd, timeout, None)
+
+    def _run(self, command: Sequence[str] | str, cwd: str | None, timeout: float | None,
+             stdin: bytes | None) -> CommandResult:
         # The working directory goes into the program text, where no startup file can change it.
-        prog, sentinel = launch.program(command, cwd, start=os.getcwd())
-        out, err, code, note = launch.run_process(launch.bash_argv(prog), stdin, timeout)
-        out, err, code = launch.separate(out, err, code, sentinel, note)
+        prog, marks = launch.program(command, cwd, start=os.getcwd())
+        out, err, code, note = launch.run_process(launch.bash_argv(prog), stdin, timeout, marks.end)
+        out, err, code = launch.separate(out, err, code, marks, note)
         return CommandResult(stdout=launch.decode(out), stderr=launch.decode(err), exit_code=code,
                              hostname=self._hostname)
+
+    def write(self, path: str, data: bytes, append: bool = False, parent: str | None = None,
+              executable: bool = False) -> CommandResult:
+        """
+        Write `data` to `path`, exactly (see `Executor.write`).
+
+        The bytes reach a fixed script's stdin, which the launch keeps parked while the login shell
+        initialises, so no startup file can read them; the script writes them to the file in place.
+        """
+        return self._run(launch.write_argv(path, append, parent, executable), None, None, data)
 
     def put(self, local_path: str, remote_path: str) -> str:
         """

@@ -120,7 +120,6 @@ class DelegatingExecutor:
         command: Sequence[str] | str,
         cwd: str | None = None,
         timeout: float | None = None,
-        stdin: bytes | None = None,
     ) -> CommandResult:
         """
         Run a command as the delegated user, under the pinned login bash (see `Executor.run`).
@@ -132,17 +131,31 @@ class DelegatingExecutor:
             command: An argv (each element one literal argument) or a bash script.
             cwd: Working directory; a leading `~` or `~/` is the mapped user's home.
             timeout: Seconds to wait; at the deadline the result carries `TIMEOUT_EXIT_CODE`.
-            stdin: The exact bytes the command reads; None is an empty, closed stdin.
 
         Returns:
             CommandResult with stdout, stderr, exit_code, and hostname.
         """
-        prog, sentinel = launch.program(command, cwd, start='home')
+        return self._run(command, cwd, timeout, None)
+
+    def _run(self, command: Sequence[str] | str, cwd: str | None, timeout: float | None,
+             stdin: bytes | None) -> CommandResult:
+        prog, marks = launch.program(command, cwd, start='home')
         argv = [*SUDO, self._local_user, *launch.bash_argv(prog)]
-        out, err, code, note = launch.run_process(argv, stdin, timeout)
-        out, err, code = launch.separate(out, err, code, sentinel, note)
+        out, err, code, note = launch.run_process(argv, stdin, timeout, marks.end)
+        out, err, code = launch.separate(out, err, code, marks, note)
         return CommandResult(stdout=launch.decode(out), stderr=launch.decode(err), exit_code=code,
                              hostname=self._hostname)
+
+    def write(self, path: str, data: bytes, append: bool = False, parent: str | None = None,
+              executable: bool = False) -> CommandResult:
+        """
+        Write `data` to `path` as the delegated user, exactly (see `Executor.write`).
+
+        The bytes reach a fixed script's stdin, which the launch keeps parked while the login shell
+        initialises, so no startup file can read them; the script, run as the mapped user, writes
+        them to the file in place. `~` and relative paths are the mapped user's.
+        """
+        return self._run(launch.write_argv(path, append, parent, executable), None, None, data)
 
     def _copy(self, source: str, destination: str) -> str:
         """Copy `source` to `destination` as the mapped user; return the absolute path written."""

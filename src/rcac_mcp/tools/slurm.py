@@ -13,7 +13,7 @@ program as exactly one literal argument, and a positional value follows `--`.
 
 # Type annotations
 from __future__ import annotations
-from typing import Final, Optional, List
+from typing import Optional, List
 import re
 from datetime import datetime
 
@@ -21,17 +21,10 @@ from datetime import datetime
 from rcac_mcp.tools import mcp_tool
 from rcac_mcp.context import get_executor
 from rcac_mcp.executor import UserPath
-from rcac_mcp.scripts import fixed, script_argv
-from rcac_mcp.tools.filesystem import MKDIR, WRITE
 
 
 # Default directory for job scripts
 DEFAULT_JOBS_DIR = '~/jobs'
-
-# Write stdin to the job script "$1" exactly, as write_file does, after creating its directory
-# "$2", then make it executable. `--` comes before the mode: BSD chmod stops reading options at the
-# mode, so a `--` after it would be taken as a file.
-WRITE_JOB_SCRIPT: Final = fixed(MKDIR + WRITE + ' && chmod -- +x "$1"')
 
 # The characters a job script's filename keeps from the job name; any other becomes `_`.
 UNSAFE_NAME = re.compile(r'[^A-Za-z0-9._-]')
@@ -159,9 +152,12 @@ def sbatch(
 
     if data is not None:
         path = _job_script_path(job_name)
-        # The content travels on stdin only, so the script holds exactly the bytes sent.
-        written = executor.run(script_argv(WRITE_JOB_SCRIPT, 'sbatch', path, UserPath(DEFAULT_JOBS_DIR)),
-                               stdin=data)
+        # The content goes through the executor's write, as write_file's does, so the script holds
+        # exactly the bytes sent; then it is made executable.
+        try:
+            written = executor.write(path, data, parent=DEFAULT_JOBS_DIR, executable=True)
+        except OSError as exc:
+            raise RuntimeError(f'Failed to write job script: {exc}') from None
         if written.exit_code != 0:
             raise RuntimeError(f'Failed to write job script (exit {written.exit_code}): {written.stderr}')
     else:

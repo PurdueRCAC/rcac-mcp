@@ -166,9 +166,10 @@ class RecordedPopen:
     It answers stdout with `<user>|<command>`, where the user follows `-u` (or is the program name
     when there is none), so a tool result can be traced to the exact launch. For a launcher program
     (the last element of every backend's launch) the command is the script or argv the program runs,
-    and both streams start with the program's sentinel, as a real launch's do, so the backend's
-    `separate` keeps the answer; for any other argv it is the last element. It exits with
-    `answer_code`.
+    and both streams carry the program's start sentinel first and its end record last, as a real
+    launch's do, so the backend's `separate` keeps the answer; for any other argv it is the last
+    element. It exits with `answer_code`, and its record reports the same (a signal death as one).
+    Its answer waits in pipes of its own, already closed for writing; its stdin is the null device.
     """
 
     test_fence = True
@@ -184,22 +185,25 @@ class RecordedPopen:
         # Far outside any real pid range, so a stray signal to it reaches nothing.
         self.pid = 2_147_483_100
         self.returncode = self.answer_code
-        self._text = bool(kwargs.get('text') or kwargs.get('universal_newlines')
-                          or kwargs.get('encoding') or kwargs.get('errors'))
-        self._pipes = (kwargs.get('stdout') == subprocess.PIPE, kwargs.get('stderr') == subprocess.PIPE)
         user = argv[argv.index('-u') + 1] if '-u' in argv[:-1] else argv[0]
         try:
-            command, sentinel = launched_script(argv)
+            command, marks = launched_script(argv)
+            code = self.answer_code
+            end = marks.end + (b's%d.' % -code if code < 0 else b'x%d.' % code)
+            start = marks.start
         except ValueError:
-            command, sentinel = argv[-1], b''
+            command, start, end = argv[-1], b'', b''
         shown = command if isinstance(command, str) else ' '.join(command)
-        self._out = sentinel + f'{user}|{shown}'.encode()
-        self._err = sentinel
+        self.stdout = self._pipe(start + f'{user}|{shown}'.encode() + end)
+        self.stderr = self._pipe(start + end)
+        self.stdin = open(os.devnull, 'wb')
 
-    def communicate(self, input: Any = None, timeout: float | None = None) -> tuple[Any, Any]:
-        out: Any = self._out.decode() if self._text else self._out
-        err: Any = self._err.decode() if self._text else self._err
-        return (out if self._pipes[0] else None, err if self._pipes[1] else None)
+    @staticmethod
+    def _pipe(data: bytes) -> Any:
+        read, write = os.pipe()
+        os.write(write, data)
+        os.close(write)
+        return os.fdopen(read, 'rb')
 
     def poll(self) -> int:
         return self.returncode

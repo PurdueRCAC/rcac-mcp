@@ -24,12 +24,18 @@ remain outside what the server can separate without a PTY:
     and stops once nothing has arrived for `launch.GRACE`; a silent background job a startup file
     left running adds at most that second and a note in the result saying reading stopped there
     (`AGENTS.md` §3, "A result is complete unless only holders remain").
+  - 2026-10-22: no timing rule any more. The program reports the command's end on both streams, and
+    the call returns at those end records, so a startup file's background job neither holds the call
+    nor adds a note (`AGENTS.md` §3, "A result is complete exactly when both end records have
+    arrived").
 - Over SSH, a background job started by the remote login shell's own rc file (`.zshenv`, `.cshrc`, a
   `.bashrc` that sshd sources), which runs before the bootstrap can park anything, can still write
   into the channel after the sentinel and so into the result.
   - 2026-10-18: still so, and now the one documented exception to the separation: `AGENTS.md` §3,
     the README, the `run_command` description and the `Executor` docstring state it, and
     `tests/test_ssh_exec.py` pins both that it still happens and that every one of those texts says so.
+  - 2026-10-22: still so for what such a job writes before the command's end record; what it writes
+    after the record is no longer read.
 
 A `run_command` script also runs in a fresh non-login bash, so a profile's unexported shell
 variables are not visible to it (exported variables and functions are).

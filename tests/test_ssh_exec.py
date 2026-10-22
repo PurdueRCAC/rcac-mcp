@@ -8,26 +8,32 @@ whatever the user's login shell (bash, zsh, sh or tcsh here), the command runs u
 login bash and the login shell parses no byte of it. The `integration` rows run it against
 `tests/ssh_server.py`, which executes each exec string as `<login shell> -c <string>` inside
 `bin/sandbox.sh`, from the user's home, with an sshd-like minimal environment, and serves SFTP over
-the same files: the interpreter probe passes for every login shell; stdin arrives byte for byte and
-its end is delivered; a timeout returns what was captured and `TIMEOUT_EXIT_CODE`, never an
-exception; hostile values arrive literally; nothing a startup file prints reaches a result; and
-`put`/`get` land exactly where named, with `~/` (and `~//`) meaning the login home and a local name
-taken literally. No startup file, the login bash's or the remote login shell's own, moves where a
-command starts, reads the caller's stdin (it is sent only once the program has started) or holds the
-call open; the one documented exception, a remote rc file's background job writing into a result,
-is pinned with the texts that state it. The server does not kill a process when its channel closes,
-as OpenSSH does not; it kills what is left when the test ends.
+the same files: the interpreter probe passes for every login shell; a command's stdin is empty and
+its end is delivered at once; a timeout returns what was captured and `TIMEOUT_EXIT_CODE`, never an
+exception; hostile values arrive literally; nothing a startup file prints reaches a result; a signal
+death is reported as one; and `put`/`get` land exactly where named, with `~/` (and `~//`) meaning
+the login home and a local name taken literally. A write's content goes by SFTP, never on a
+command's stdin, to a private temporary file beside the target that a program moves into place:
+byte-exact, atomic, the target's mode kept, a link followed, nothing left behind. No startup file,
+the login bash's or the remote login shell's own, moves where a command starts, reads a write's
+content or holds the call past the command's end records; the one documented exception, a remote
+rc file's background job writing into a result, is pinned with the texts that state it. On a slow
+or stalling link the call reads to the end records, however long they take (`ThrottledSSH`). The
+server does not kill a process when its channel closes, as OpenSSH does not; it kills what is left
+when the test ends.
 
 The `unit` rows drive the channel loop (`_collect`) with a fake channel: an exit status that arrives
-before the end of output is waited on, not spun on, a command that exited before the deadline keeps
-its own status, and what a command prints after the TERM at its deadline is read. An exec string
+before the end of output is waited on, not spun on, and decides nothing; the read ends at both end
+records; a command whose records have not come by the deadline is a timeout, naming its status if
+that has arrived; and what a command prints after the TERM at its deadline is read. An exec string
 over the per-argument limit is refused before connecting.
 """
 
 from __future__ import annotations
 
+import base64
 import os
-import threading
+import stat
 import time
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -44,7 +50,7 @@ from rcac_mcp.tools.shell import run_command
 from ssh_server import LoopbackSSH, ThrottledSSH
 from test_executors import (LOGIN_MARKER, PROBE, WRITER, held_violations, timed, timeout_violations,
                             writer_violations)
-from test_launch import HOSTILE, SEPARATION_CASES, chatty_home
+from test_launch import HOSTILE, LEAVES_A_WRITER, SEPARATION_CASES, chatty_home
 
 LOGIN_SHELLS = [pytest.param(shell, id=Path(shell).name) for shell in ('/bin/bash', '/bin/zsh', '/bin/sh', '/bin/tcsh')]
 
@@ -87,12 +93,35 @@ def test_bash_runs_whatever_the_login_shell(shell: str, serve: Callable[..., Loo
 
 @pytest.mark.integration
 @pytest.mark.parametrize('shell', LOGIN_SHELLS)
-def test_stdin_arrives_exactly_and_closes(shell: str, serve: Callable[..., LoopbackSSH]) -> None:
-    data = b'line one\r\nno final newline \x00 \xc3\xa9' * 5000
-    result = _run(serve(shell), ['cat'], stdin=data, timeout=8)
+def test_stdin_is_empty_and_ends_at_once(shell: str, serve: Callable[..., LoopbackSSH]) -> None:
+    server = serve(shell)
+    result = _run(server, ['cat'], timeout=8)
     if result.exit_code == TIMEOUT_EXIT_CODE:
-        pytest.fail(f'{shell}: cat did not return: the end of stdin (EOF) was not delivered: {result.stdout[:80]!r}')
-    assert (result.stdout.encode(), result.exit_code) == (data, 0), f'{shell}: cat read {result!r:.200}, not the stdin sent'
+        pytest.fail(f'{shell}: cat did not return: the end of stdin (EOF) was not delivered')
+    assert (result.stdout, result.exit_code) == ('', 0), f'{shell}: cat read {result!r:.200}: stdin was not empty'
+    assert server.stdin_bytes == [[0]], f'{shell}: the channel carried stdin bytes: {server.stdin_bytes!r}'
+
+
+# A program that never starts: the channel ends with no record, and its own status names the exit.
+@pytest.mark.integration
+def test_a_profile_that_exits_is_not_started(serve: Callable[..., LoopbackSSH]) -> None:
+    server = serve('/bin/bash')
+    (Path(server.home) / '.bash_profile').write_text('exit 7\n')
+    result = _run(server, 'echo ran', timeout=20)
+    note = 'cluster-mcp: the command did not start (exit 7); the server log has the details\n'
+    assert (result.stdout, result.stderr, result.exit_code) == ('', note, launch.NOT_STARTED_EXIT_CODE), \
+        f"the channel's status was not the one read: {result!r}"
+
+
+# A command killed by a signal, over ssh too: the end record reports the signal (Paramiko reports
+# only a lost status for a signal death), and the launch dies of it.
+@pytest.mark.integration
+@pytest.mark.parametrize('shell', ['/bin/bash', '/bin/zsh'])
+def test_a_signal_death_is_reported(shell: str, serve: Callable[..., LoopbackSSH]) -> None:
+    server = serve(shell)
+    got = [_run(server, command, timeout=20) for command in ('echo before; kill -s TERM $$', ['/bin/sh', '-c', 'kill -s HUP $$'])]
+    assert [(r.stdout, r.stderr, r.exit_code) for r in got] == [('before\n', '', -15), ('', '', -1)], \
+        f'{shell}: a signal death was not reported as one: {got!r}'
 
 
 @pytest.mark.integration
@@ -123,6 +152,7 @@ QUIET = {
     'exit': ('out\n', 'err\n', 4),
     'stdin': ('line one\nline two\n\0�', '', 0),
     'empty': ('', '', 0),
+    'slow': ('slow\n', '', 0),
 }
 
 
@@ -133,8 +163,17 @@ def test_startup_output_is_separated(shell: str, serve: Callable[..., LoopbackSS
     chatty_home(Path(chatty.home))
     violations = []
     for case, (command, stdin) in SEPARATION_CASES.items():
-        want = _run(quiet, command, stdin=stdin, timeout=20)
-        got = _run(chatty, command, stdin=stdin, timeout=20)
+        if stdin is not None:
+            # Content reaches a command only through a write; read it back.
+            command = ['cat', '--', UserPath('~/separated')]
+            for server in (quiet, chatty):
+                executor = server.executor()
+                try:
+                    executor.write('~/separated', stdin)
+                finally:
+                    executor.close()
+        want = _run(quiet, command, timeout=20)
+        got = _run(chatty, command, timeout=20)
         if case in QUIET and (want.stdout, want.stderr, want.exit_code) != QUIET[case]:
             violations.append(f'{case}: the result differs from the quiet home\'s known result: {want!r}')
         if (got.stdout, got.stderr, got.exit_code) != (want.stdout, want.stderr, want.exit_code):
@@ -175,44 +214,56 @@ REMOTE_RCS = {
     'bashrc': ('/bin/bash', '.bashrc'),
 }
 
-# The remote login shell's rc file runs before the bootstrap, on the channel's own stdin.
-RC_READS = 'read -r line; printf %s "$line" > "$HOME/rc-read"\n'
+# The remote login shell's rc file runs before the bootstrap, on the channel's own stdin: in the
+# foreground, and from a background job, which zsh, unlike bash, sh and ksh, starts on the real stdin.
+RC_READS = ('read -r line; printf %s "$line" > "$HOME/rc-read"\n'
+            'head -c 1 > "$HOME/rc-took" &\n')
+
+
+def _settled(path: Path, within: float = 5) -> None:
+    deadline = time.monotonic() + within
+    while not path.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
 
 
 @pytest.mark.integration
 @pytest.mark.parametrize('rc', list(REMOTE_RCS))
-def test_a_remote_rc_never_reads_the_callers_stdin(rc: str, serve: Callable[..., LoopbackSSH]) -> None:
+def test_a_remote_rc_never_reads_a_writes_content(rc: str, serve: Callable[..., LoopbackSSH], executes: Any) -> None:
     shell, name = REMOTE_RCS[rc]
     quiet, reader = serve(shell, 'quiet'), serve(shell, 'reader')
-    rc_read = Path(reader.home) / 'rc-read'
-    (Path(reader.home) / name).write_text(RC_READS)
+    home = Path(reader.home)
+    (home / name).write_text(RC_READS)
+    argv_echo.install(home, 'sbatch')
     violations = []
-    # With no stdin to send, its end goes at once: the rc file reads nothing and the command runs.
+    # A command's stdin is empty, its end sent at once: the rc file reads nothing and the command runs.
     for case in ('argv', 'exit', 'empty'):
         command, _ = SEPARATION_CASES[case]
         want, got = _run(quiet, command, timeout=20), _run(reader, command, timeout=20)
         if (got.stdout, got.stderr, got.exit_code) != (want.stdout, want.stderr, want.exit_code):
             violations.append(f'{case}: the result differs from the quiet home: {got!r} != {want!r}')
-    # With stdin to send, nothing goes before the program has started, so an rc file that reads
-    # stdin waits: the call ends at its timeout, no byte of the caller's stdin reached the rc file,
-    # and the command never ran, so it wrote nothing, not even once the rc file's read ended.
-    rc_read.unlink(missing_ok=True)
-    written = Path(reader.home) / 'written'
-    sent = b'line one\nline two\n'
-    got = _run(reader, ['/bin/sh', '-c', 'cat > "$HOME/written"'], stdin=sent, timeout=2)
-    if (got.stdout, got.stderr, got.exit_code) != ('', '', TIMEOUT_EXIT_CODE):
-        violations.append(f"the rc file consumed the caller's stdin: the write returned {got!r}, "
-                          'not a timeout with nothing sent')
-    deadline = time.monotonic() + 5
-    while not rc_read.exists() and time.monotonic() < deadline:
-        time.sleep(0.05)
-    time.sleep(1)
-    if rc_read.exists() and rc_read.read_bytes() != b'':
-        violations.append(f"the rc file consumed the caller's stdin: it read {rc_read.read_bytes()!r}")
-    if not rc_read.exists():
-        violations.append("the rc file's read never ended once the channel closed")
-    if written.exists():
-        violations.append(f'the timed-out call wrote partial content: {written.read_bytes()!r}')
+    # A write's content goes by SFTP: the file holds every byte, and the rc file read none of it.
+    sent = bytes(range(256)) * 625
+    script = '#!/bin/bash\necho hi\n' * 4000
+    executor = reader.executor()
+    try:
+        wrote = _tool(executor, 'write_file', {'path': '~/written', 'content': base64.b64encode(sent).decode(),
+                                               'encoding': 'base64'})
+        submitted = _tool(executor, 'sbatch', {'script_content': script, 'job_name': 'took'})
+    finally:
+        executor.close()
+    if wrote.is_error or (home / 'written').read_bytes() != sent:
+        violations.append(f'write_file: {wrote!r:.200}; the file holds {len((home / "written").read_bytes())} '
+                          f'of {len(sent)} bytes, or other bytes')
+    jobs = sorted((home / 'jobs').glob('took_*'))
+    if submitted.is_error or len(jobs) != 1 or jobs[0].read_bytes() != script.encode():
+        violations.append(f'sbatch: {submitted!r:.200}; job scripts {[j.name for j in jobs]!r}')
+    _settled(home / 'rc-took')
+    for seen in ('rc-read', 'rc-took'):
+        if (home / seen).exists() and (home / seen).read_bytes() != b'':
+            violations.append(f"the rc file read a write's content: {seen} holds {(home / seen).read_bytes()!r}")
+    carried = [n for (n,) in reader.stdin_bytes if n]
+    if carried:
+        violations.append(f'a channel carried {carried!r} bytes of stdin: content rode a command\'s stdin')
     assert violations == [], '\n'.join(violations)
 
 
@@ -261,25 +312,20 @@ def _section(text: str, start: str, end: str) -> str:
     return text[text.index(start):text.index(end)]
 
 
-# What a caller is told about stdin over ssh when the remote rc file reads it (the row above).
-STDIN_RULE = 'a call that sends stdin times out and never writes partial content'
+# What a caller is told about a write's content over ssh (the rows above and below).
+CONTENT_RULE = 'by SFTP to a private temporary file'
 
 
 @pytest.mark.unit
-def test_stdin_texts_state_the_rc_timeout() -> None:
+def test_content_texts_state_the_sftp_route() -> None:
     root = Path(__file__).resolve().parent.parent
     texts = {
         'AGENTS.md §2': _section((root / 'AGENTS.md').read_text(), '### 2. ', '### 3. '),
         'README.md': (root / 'README.md').read_text(),
-        'the Executor.run docstring': Executor.run.__doc__ or '',
+        'the Executor.write docstring': Executor.write.__doc__ or '',
     }
-    missing = [name for name, text in texts.items() if STDIN_RULE not in ' '.join(text.split())]
-    assert missing == [], f'a text describing stdin over ssh does not state the rc timeout ({STDIN_RULE!r}): {missing}'
-    # Each also states the bound on the wait for the start, as the code has it.
-    bound = f'{ssh.START_TIMEOUT:g} s'
-    unbounded = [name for name, text in texts.items()
-                 if bound not in text or 'with nothing arriving' not in ' '.join(text.split())]
-    assert unbounded == [], f'a text describing stdin over ssh does not state the start bound ({bound}): {unbounded}'
+    missing = [name for name, text in texts.items() if CONTENT_RULE not in ' '.join(text.split())]
+    assert missing == [], f'a text describing content over ssh does not state its route ({CONTENT_RULE!r}): {missing}'
 
 
 @pytest.mark.unit
@@ -342,15 +388,25 @@ def test_transfers_land_where_named(transfer: str, serve: Callable[..., Loopback
     assert violations == [], '\n'.join(violations)
 
 
-# A result is complete unless only holders remain. On a slow link sshd sends the exit status as soon
-# as the command exits, while up to a window of its output is still queued behind it: the call keeps
-# reading while that output arrives, and stops early only once nothing has arrived for the grace.
+# A result is complete exactly when both end records have arrived, however slow the link. On a slow
+# link sshd sends the exit status as soon as the command exits, while up to a window of its output
+# is still queued behind it: the status decides nothing, and the call reads on to the records.
 # Each rate: (bytes a second, bytes read). At the slowest the whole output is queued at the exit; at
 # 1 MiB/s a full window (2 MiB) is, two seconds of it; at 4 MiB/s the window drains within a second.
 SLOW_LINKS = {
     '256KiBps': (256 * 1024, 640 * 1024),
     '1MiBps': (1024 * 1024, 3 * 1024 * 1024),
     '4MiBps': (4 * 1024 * 1024, 6 * 1024 * 1024),
+}
+
+# Links that stall, and links that deliver whole 32 KiB packets slowly: (rate in bytes a second,
+# bytes read, packet size, a stall right after the exit status, a stall once so many bytes have gone).
+STALLING_LINKS = {
+    'stall-1.6s-after-exit': (512 * 1024, 1024 * 1024, 8192, 1.6, None),
+    'stall-1.2s-after-exit': (512 * 1024, 1024 * 1024, 8192, 1.2, None),
+    'stall-5s-mid-result': (512 * 1024, 1024 * 1024, 8192, 0.0, (256 * 1024, 5.0)),
+    'packets-6000Bps': (6000, 48 * 1024, 32 * 1024, 1.6, None),
+    'packets-24000Bps': (24000, 256 * 1024, 32 * 1024, 1.6, None),
 }
 
 
@@ -365,11 +421,11 @@ def slow(tmp_path: Path) -> Iterator[Callable[..., ThrottledSSH]]:
     """Start slow-link servers for the test (a home per name, under `tmp_path`); stop them after."""
     servers: list[ThrottledSSH] = []
 
-    def start(shell: str, rate: int, name: str = 'home') -> ThrottledSSH:
+    def start(shell: str, rate: int, name: str = 'home', **link: Any) -> ThrottledSSH:
         need_shell(shell)
         home = (tmp_path / name).resolve()
         home.mkdir(exist_ok=True)
-        servers.append(ThrottledSSH(home, shell, tmp_path, rate))
+        servers.append(ThrottledSSH(home, shell, tmp_path, rate, **link))
         return servers[-1]
 
     try:
@@ -401,7 +457,62 @@ def test_a_slow_link_returns_the_whole_file(link: str, slow: Callable[..., Throt
     got = outcome.text.encode()
     assert (outcome.is_error, len(got), got == data) == (False, size, True), \
         (f'{link}: read_file returned {len(got)} of {size} bytes (error: {outcome.is_error}): the result was cut '
-         f'while the output was still arriving; it ends {got[-40:]!r}')
+         f'before its end records, while the output was still arriving; it ends {got[-40:]!r}')
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('link', list(STALLING_LINKS))
+def test_a_stalling_link_returns_the_whole_file(link: str, slow: Callable[..., ThrottledSSH], executes: Any) -> None:
+    rate, size, piece, after_exit, stall_at = STALLING_LINKS[link]
+    server = slow('/bin/bash', rate, piece=piece, stall_after_exit=after_exit, stall_at=stall_at)
+    data = _numbered(size)
+    (Path(server.home) / 'big.txt').write_bytes(data)
+    executor = server.executor()
+    try:
+        outcome = _tool(executor, 'read_file', {'path': '~/big.txt'})
+    finally:
+        executor.close()
+    got = outcome.text.encode()
+    assert (outcome.is_error, len(got), got == data) == (False, size, True), \
+        (f'{link}: read_file returned {len(got)} of {size} bytes (error: {outcome.is_error}): the result was cut '
+         f'before its end records, on a link that stalled or delivered whole packets slowly; it ends {got[-40:]!r}')
+
+
+# The double-submit case: a chatty remote rc file (40 KB) ahead of the program on a slow link of
+# whole 32 KiB packets that stalls after the exit status. The sentinel arrives seconds after sshd
+# sent the exit status; a submission that ran must read as submitted, never as "did not start".
+@pytest.mark.integration
+def test_a_job_that_ran_is_never_reported_as_not_started(slow: Callable[..., ThrottledSSH], executes: Any) -> None:
+    server = slow('/bin/bash', 6000, piece=32 * 1024, stall_after_exit=1.6)
+    home = Path(server.home)
+    (home / '.bashrc').write_text("head -c 40000 /dev/zero | tr '\\0' z\n")
+    argv_echo.install(home, 'sbatch')
+    (home / 'job.sh').write_text('#!/bin/bash\necho hi\n')
+    executor = server.executor()
+    try:
+        outcome = _tool(executor, 'sbatch', {'script_path': '~/job.sh'})
+    finally:
+        executor.close()
+    calls = argv_echo.calls(home)
+    assert (outcome.is_error, outcome.text, len(calls)) == (False, argv_echo.JOB_ID, 1), \
+        (f'a submission that ran read as {outcome!r:.300}; sbatch was called {len(calls)} times: the result was cut '
+         'before its end records')
+
+
+# The timeout bounds a call whose records do not come: the command exited at once (its status is
+# in), but its output, and its end records behind it, are still queued on a slow link at the
+# deadline. The call is a timeout, with the output read so far and a note naming the status.
+@pytest.mark.integration
+def test_a_timeout_before_the_records_names_the_status(slow: Callable[..., ThrottledSSH]) -> None:
+    server = slow('/bin/bash', 64 * 1024)
+    data = _numbered(1024 * 1024)
+    (Path(server.home) / 'big.txt').write_bytes(data)
+    result = _run(server, ['cat', '--', UserPath('~/big.txt')], timeout=2)
+    got = result.stdout.encode()
+    assert result.exit_code == TIMEOUT_EXIT_CODE, f'the call ended {result.exit_code}, not as a timeout'
+    assert 0 < len(got) < len(data) and data.startswith(got), f'the output read so far was lost: {len(got)} bytes'
+    assert result.stderr.endswith(launch.LATE_NOTE.format(code=0)), \
+        f'the timeout does not name the status that had arrived: stderr {result.stderr[-200:]!r}'
 
 
 @pytest.mark.integration
@@ -413,7 +524,7 @@ def test_a_slow_link_returns_both_streams_whole(slow: Callable[..., ThrottledSSH
     result = _run(server, 'cat big.txt; echo DONE >&2', timeout=60)
     got = result.stdout.encode()
     assert (len(got), got == data, result.stderr, result.exit_code) == (size, True, 'DONE\n', 0), \
-        (f'the result was cut while the output was still arriving: stdout {len(got)} of {size} bytes, '
+        (f'the result was cut before its end records, while the output was still arriving: stdout {len(got)} of {size} bytes, '
          f'stderr {result.stderr!r}, exit code {result.exit_code}')
 
 
@@ -431,73 +542,177 @@ def test_a_late_sentinel_still_counts_as_started(rc: str, slow: Callable[..., Th
     (home / name).write_text(CHATTY_RC)
     ran = _run(server, ['touch', '--', UserPath('~/ran')], timeout=60)
     sent = b'line one\nline two\n\0\xff'
-    fed = _run(server, ['cat'], stdin=sent, timeout=60)
+    executor = server.executor()
+    try:
+        wrote = executor.write('~/written', sent)
+    finally:
+        executor.close()
     violations = []
     if (ran.stdout, ran.stderr, ran.exit_code) != ('', '', 0) or not (home / 'ran').exists():
         violations.append(f'a command that ran was reported as {ran!r} (~/ran exists: {(home / "ran").exists()})')
-    if (fed.stdout, fed.stderr, fed.exit_code) != (sent.decode('utf-8', 'replace'), '', 0):
-        violations.append(f'a late start lost the stdin sent: {fed!r}')
-    assert violations == [], ('a late sentinel was not counted as started (the read was cut before it arrived): '
+    if (wrote.stdout, wrote.stderr, wrote.exit_code) != ('', '', 0) or (home / 'written').read_bytes() != sent:
+        violations.append(f'a late start lost the write: {wrote!r}')
+    assert violations == [], ('a late sentinel was not counted as started (the result was cut before its end records): '
                               + '\n'.join(violations))
 
 
 @pytest.mark.integration
 @pytest.mark.parametrize('shell', ['/bin/bash', '/bin/zsh'])
-def test_a_holder_that_keeps_writing_ends_at_the_timeout(shell: str, serve: Callable[..., LoopbackSSH]) -> None:
+def test_a_background_writer_does_not_hold_the_call(shell: str, serve: Callable[..., LoopbackSSH]) -> None:
     server = serve(shell)
-    result, elapsed = timed(lambda: _run(server, WRITER, timeout=1.5))
-    violations = writer_violations('ssh', result, elapsed, 1.5)
+    result, elapsed = timed(lambda: _run(server, WRITER, timeout=10))
+    violations = writer_violations('ssh', result, elapsed)
+    later, later_s = timed(lambda: _run(server, LEAVES_A_WRITER, timeout=20))
+    if (later.stdout, later.stderr, later.exit_code) != ('now\n', '', 0) or later_s > 2:
+        violations.append(f'ssh: what a background job printed after the end reached the result, or held the call '
+                          f'{later_s:.1f} s: {later!r}')
     assert violations == [], '\n'.join(violations)
 
 
-# Every call that holds the caller's stdin has a bound: over ssh it is sent only once the program
-# has started, so an rc file that reads stdin would otherwise hold the call forever. The bound is
-# lowered for the test; the call carries no timeout of its own.
-START_BOUND = 1.5
+# Writes over ssh: the content goes by SFTP into a private directory beside the target, and a
+# program moves it into place.
+
+def _write(server: LoopbackSSH, *args: Any, **kwargs: Any) -> CommandResult:
+    executor = server.executor()
+    try:
+        return executor.write(*args, **kwargs)
+    finally:
+        executor.close()
 
 
-def _bounded_call(run: Callable[[], Any], within: float) -> tuple[Any, float]:
-    box: list[Any] = []
-    start = time.monotonic()
-    thread = threading.Thread(target=lambda: box.append(run()), daemon=True)
-    thread.start()
-    thread.join(within)
-    return (box[0] if box else None), time.monotonic() - start
+def _staging_left(*directories: Path) -> list[str]:
+    return [str(p) for d in directories for p in d.iterdir() if p.name.startswith(ssh.STAGE_PREFIX)]
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize('rc', list(REMOTE_RCS))
-@pytest.mark.parametrize('call_kind', ['run', 'write_file', 'sbatch'])
-def test_a_call_holding_stdin_is_bounded(call_kind: str, rc: str, serve: Callable[..., LoopbackSSH], executes: Any,
-                                         monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(ssh, 'START_TIMEOUT', START_BOUND, raising=False)
-    shell, name = REMOTE_RCS[rc]
-    server = serve(shell)
+def test_an_ssh_write_replaces_the_file_whole_and_keeps_its_mode(serve: Callable[..., LoopbackSSH]) -> None:
+    server = serve('/bin/bash')
     home = Path(server.home)
-    (home / name).write_text(RC_READS)
-    argv_echo.install(home, 'sbatch')
-    executor = server.executor()
-    calls = {
-        'run': lambda: executor.run(['/bin/sh', '-c', 'cat > "$HOME/written"'], stdin=b'line one\nline two\n'),
-        'write_file': lambda: _tool(executor, 'write_file', {'path': '~/written', 'content': 'line one\nline two\n'}),
-        'sbatch': lambda: _tool(executor, 'sbatch', {'script_content': '#!/bin/bash\necho hi\n', 'job_name': 'held'}),
-    }
-    try:
-        got, elapsed = _bounded_call(calls[call_kind], START_BOUND + 10)
-    finally:
-        executor.close()
+    target = home / 'kept.sh'
+    target.write_bytes(b'old content\n')
+    target.chmod(0o750)
+    before = target.stat().st_ino
+    with open(target, 'rb') as reader:
+        result = _write(server, '~/kept.sh', b'new content, no final newline')
+        old_view = reader.read()
     violations = []
-    if got is None:
-        violations.append(f'{call_kind}: a call holding stdin never returned ({elapsed:.1f} s): it has no bound')
-    elif isinstance(got, CommandResult) and (got.stdout, got.stderr, got.exit_code) != ('', '', TIMEOUT_EXIT_CODE):
-        violations.append(f'{call_kind}: returned {got!r}, not a timeout with nothing sent')
-    elif isinstance(got, Outcome) and not (got.is_error and str(TIMEOUT_EXIT_CODE) in got.text):
-        violations.append(f'{call_kind}: returned {got!r}, not a failure naming the timeout ({TIMEOUT_EXIT_CODE})')
-    written = [p.name for p in (home / 'written', *sorted((home / 'jobs').glob('held_*'))) if p.exists()]
-    if written:
-        violations.append(f'{call_kind}: the timed-out call wrote {written!r}')
-    if argv_echo.calls(home):
-        violations.append(f'{call_kind}: sbatch was called: {argv_echo.calls(home)!r}')
+    if (result.stdout, result.stderr, result.exit_code) != ('', '', 0):
+        violations.append(f'the write returned {result!r}')
+    if target.read_bytes() != b'new content, no final newline':
+        violations.append(f'the file holds {target.read_bytes()!r}')
+    if target.stat().st_ino == before or old_view != b'old content\n':
+        violations.append('the file was rewritten in place, not replaced whole: a reader saw '
+                          f'{old_view!r} through the old file')
+    if stat.S_IMODE(target.stat().st_mode) != 0o750:
+        violations.append(f'the file lost its mode: {stat.S_IMODE(target.stat().st_mode):o}, not 750')
+    umask = int(_run(server, 'umask', timeout=20).stdout, 8)
+    fresh = _write(server, '~/fresh', b'x')
+    if fresh.exit_code != 0 or stat.S_IMODE((home / 'fresh').stat().st_mode) != 0o666 & ~umask:
+        violations.append(f'a new file has mode {stat.S_IMODE((home / "fresh").stat().st_mode):o}, not what '
+                          f'`cat >` gives under umask {umask:o}: {fresh!r}')
+    if _staging_left(home):
+        violations.append(f'a write left its staging behind: {_staging_left(home)!r}')
+    assert violations == [], '\n'.join(violations)
+
+
+@pytest.mark.integration
+def test_an_ssh_write_stages_its_content_privately(serve: Callable[..., LoopbackSSH],
+                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    server = serve('/bin/bash')
+    home = Path(server.home)
+    (home / 'sub').mkdir()
+    seen: list[tuple[str, int, int, str]] = []
+    upload = ssh._upload
+
+    def watched(sftp: Any, staged: str, data: bytes) -> None:
+        upload(sftp, staged, data)
+        path = home / staged
+        seen.append((str(path.parent.parent), stat.S_IMODE(path.parent.stat().st_mode), stat.S_IMODE(path.stat().st_mode),
+                     path.parent.name))
+    monkeypatch.setattr(ssh, '_upload', watched)
+    first, second = _write(server, '~/sub/a', b'one'), _write(server, '~/sub/a', b'two')
+    assert (first.exit_code, second.exit_code, (home / 'sub' / 'a').read_bytes()) == (0, 0, b'two'), (first, second)
+    assert [(where, d, f) for where, d, f, _ in seen] == [(str(home / 'sub'), 0o700, 0o600)] * 2, \
+        f'the content was not staged privately beside the target: {seen!r}'
+    assert len({name for *_, name in seen}) == 2, f'two writes shared a staging name: {seen!r}'
+
+
+@pytest.mark.integration
+def test_an_ssh_write_follows_a_link(serve: Callable[..., LoopbackSSH]) -> None:
+    server = serve('/bin/bash')
+    home = Path(server.home)
+    (home / 'real').mkdir()
+    (home / 'real' / 'file').write_bytes(b'old\n')
+    (home / 'link').symlink_to(home / 'real' / 'file')
+    result = _write(server, '~/link', b'through the link\n')
+    assert result.exit_code == 0, result
+    assert (home / 'link').is_symlink() and (home / 'real' / 'file').read_bytes() == b'through the link\n', \
+        'the write replaced the link instead of writing the file it names'
+    assert _staging_left(home, home / 'real') == [], 'a write left its staging behind'
+
+
+@pytest.mark.integration
+def test_an_ssh_write_into_a_closed_directory_writes_through(serve: Callable[..., LoopbackSSH]) -> None:
+    server = serve('/bin/bash')
+    home = Path(server.home)
+    closed = home / 'closed'
+    closed.mkdir()
+    (closed / 'file').write_bytes(b'old\n')
+    (closed / 'file').chmod(0o640)
+    closed.chmod(0o555)
+    try:
+        result = _write(server, '~/closed/file', b'new\n')
+        appended = _write(server, '~/closed/file', b'more\n', append=True)
+        missing = None
+        try:
+            missing = _write(server, '~/closed/other', b'x')
+        except OSError as exc:
+            missing = exc
+    finally:
+        closed.chmod(0o755)
+    assert (result.exit_code, appended.exit_code) == (0, 0), (result, appended)
+    assert (closed / 'file').read_bytes() == b'new\nmore\n'
+    assert stat.S_IMODE((closed / 'file').stat().st_mode) == 0o640
+    assert isinstance(missing, PermissionError) and not (closed / 'other').exists(), missing
+    assert _staging_left(home, closed) == [], 'a write left its staging behind'
+
+
+@pytest.mark.integration
+def test_a_failed_ssh_write_leaves_nothing_behind(serve: Callable[..., LoopbackSSH],
+                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    server = serve('/bin/bash')
+    home = Path(server.home)
+    (home / 'a dir').mkdir()
+    (home / 'file').write_bytes(b'unchanged\n')
+    violations = []
+    # The target is a directory: refused before anything is staged.
+    try:
+        _write(server, '~/a dir', b'x')
+        violations.append('a write to a directory was not refused')
+    except IsADirectoryError:
+        pass
+    # The transfer fails part way.
+    upload = ssh._upload
+
+    def broken(sftp: Any, staged: str, data: bytes) -> None:
+        upload(sftp, staged, data[:3])
+        raise OSError('the link dropped')
+    monkeypatch.setattr(ssh, '_upload', broken)
+    try:
+        _write(server, '~/file', b'replacement')
+        violations.append('a failed transfer was not reported')
+    except OSError:
+        pass
+    monkeypatch.setattr(ssh, '_upload', upload)
+    # The placing program does not start (a profile that exits).
+    (home / '.bash_profile').write_text('exit 0\n')
+    result = _write(server, '~/file', b'replacement')
+    if result.exit_code != launch.NOT_STARTED_EXIT_CODE:
+        violations.append(f'a write whose program never started returned {result!r}')
+    if (home / 'file').read_bytes() != b'unchanged\n':
+        violations.append(f'a failed write changed the file: {(home / "file").read_bytes()!r}')
+    if _staging_left(home, home / 'a dir'):
+        violations.append(f'a failed write left its staging behind: {_staging_left(home, home / "a dir")!r}')
     assert violations == [], '\n'.join(violations)
 
 
@@ -507,10 +722,11 @@ def test_a_call_holding_stdin_is_bounded(call_kind: str, rc: str, serve: Callabl
 class FakeChannel:
     """A channel whose exit status, output and end of output arrive at set times after creation."""
 
-    def __init__(self, status: int, status_at: float, eof_at: float | None, data: bytes = b'out') -> None:
+    def __init__(self, status: int, status_at: float, eof_at: float | None, data: bytes = b'out',
+                 err: bytes = b'') -> None:
         self.start = time.monotonic()
         self.status, self.status_at, self.eof_at = status, status_at, eof_at
-        self.data = data
+        self.data, self.err = data, err
         self.polls = 0
         self.closed = False
 
@@ -530,10 +746,11 @@ class FakeChannel:
         return data
 
     def recv_stderr_ready(self) -> bool:
-        return False
+        return bool(self.err)
 
     def recv_stderr(self, n: int) -> bytes:
-        return b''
+        err, self.err = self.err[:n], self.err[n:]
+        return err
 
     def exit_status_ready(self) -> bool:
         return self._now() >= self.status_at
@@ -543,6 +760,12 @@ class FakeChannel:
 
     def fileno(self) -> int:
         raise AssertionError('the loop selected on a channel whose exit status had arrived')
+
+
+# A program's end nonce, and its records.
+END = b'0123456789abcdeffedcba9876543210'
+RECORD = END + b'x0.'
+
 
 
 @pytest.mark.unit
@@ -555,13 +778,36 @@ def test_drain_waits_instead_of_spinning() -> None:
 
 
 @pytest.mark.unit
-def test_a_completed_command_at_the_deadline_keeps_its_status() -> None:
-    # The command exited, but something still holds its output open past the deadline.
+def test_the_read_ends_at_both_records() -> None:
+    # Both records are in at once; the output never ends and no exit status comes: a background job
+    # holds the channel. The read ends at the records, at once.
+    channel = FakeChannel(0, 60.0, None, b'out' + RECORD + b'late', RECORD + b'late-err')
+    start = time.monotonic()
+    out, err, code, note = ssh._collect(channel, 30, END)
+    assert (out, err, note) == (b'out' + RECORD + b'late', RECORD + b'late-err', b''), (out, err, note)
+    assert time.monotonic() - start < 1, 'the read went on past both end records'
+    assert code == -1, f'with no exit status in, the status is unknown (-1), not {code}: the record carries it'
+
+
+@pytest.mark.unit
+def test_one_record_is_not_the_end() -> None:
+    # stdout's record is in and the exit status too; stderr's record never comes: the call reads on
+    # to its deadline, a timeout naming the status that arrived.
+    channel = FakeChannel(0, 0.0, None, b'out' + RECORD, b'err')
+    out, err, code, note = ssh._collect(channel, 0.5, END)
+    assert (out, err, code) == (b'out' + RECORD, b'err', TIMEOUT_EXIT_CODE), (out, err, code)
+    assert note == launch.LATE_NOTE.format(code=0).encode(), note
+
+
+@pytest.mark.unit
+def test_a_command_whose_records_have_not_come_by_the_deadline_is_a_timeout() -> None:
+    # The command exited (its status is in), but its records are still queued on the link at the
+    # deadline: a timeout, with the output read so far and a note naming the command's status.
     channel = FakeChannel(0, 0.0, None)
     start = time.monotonic()
-    out, err, code, note = ssh._collect(channel, 0.3)
-    assert code == 0, f'a command that exited before the deadline reported {code}'
-    assert (out, note) == (b'out', launch.HELD_NOTE) and time.monotonic() - start < 2, (out, note)
+    out, err, code, note = ssh._collect(channel, 0.3, END)
+    assert (out, code) == (b'out', TIMEOUT_EXIT_CODE), (out, code)
+    assert note == launch.LATE_NOTE.format(code=0).encode() and time.monotonic() - start < 2, note
 
 
 class TrickleChannel(FakeChannel):
@@ -581,10 +827,13 @@ class TrickleChannel(FakeChannel):
 
 @pytest.mark.unit
 def test_output_after_the_exit_status_is_read_to_the_end() -> None:
-    # The exit status arrives at once; the output follows a piece every 0.4 s for 2.4 s, then ends.
-    pieces = [b'%d\n' % i for i in range(6)]
+    # The exit status arrives at once; the output follows a piece every 0.4 s for 2.4 s, its record
+    # last; stderr's record is in at once. The channel's output never ends.
+    pieces = [b'%d\n' % i for i in range(6)] + [RECORD]
     channel = TrickleChannel(pieces, 0.4)
-    out, err, code, note = ssh._collect(channel, 30)
+    channel.eof_at = None
+    channel.err = RECORD
+    out, err, code, note = ssh._collect(channel, 30, END)
     assert (out, code, note) == (b''.join(pieces), 0, b''), \
         f'output arriving after the exit status was cut: {out!r} of {b"".join(pieces)!r}, note {note!r}'
 

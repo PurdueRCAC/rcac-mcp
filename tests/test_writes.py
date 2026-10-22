@@ -3,8 +3,10 @@
 
 """`write_file` writes exactly the bytes sent, and refuses invalid content before touching anything.
 
-The content travels on the executor's stdin, never in an argv, so no byte of it is ever parsed as
-shell and no newline is added. Under `encoding="utf-8"` the bytes are the text's UTF-8 encoding;
+The content goes through the executor's `write`, never in an argv, so no byte of it is ever parsed
+as shell and no newline is added: in `local` and `delegate` it reaches a fixed script on the stdin
+the launch keeps parked, and over `ssh` it goes by SFTP to a private temporary file that a program
+moves into place. Under `encoding="utf-8"` the bytes are the text's UTF-8 encoding;
 under `encoding="base64"` they are the decoded bytes, with ASCII space, tab, CR and LF ignored (RFC
 2045 line breaks, as GNU `base64` wraps) and every other character outside the alphabet, or bad
 padding, refused. A refusal names the parameter and leaves the target exactly as it was: the
@@ -21,7 +23,7 @@ creates a parent with spaces in its name, or one ending in a newline. A refused 
 existing target byte-identical and an absent one absent. `sbatch` writes `script_content` the same
 way: the job script it submits (to an argv-echo `sbatch`, `tests/argv_echo.py`) holds exactly the
 bytes sent, in all three modes, and is executable. The `unit` rows record the executor
-calls: the content reaches stdin exactly and no argv element, and a refused write reaches no
+calls: the content reaches one `write` exactly and no argv element, and a refused write reaches no
 executor at all.
 """
 
@@ -41,8 +43,8 @@ from harness import Outcome, RecordingExecutor, call, drive, in_memory, shared_s
 from rcac_mcp.executor import Executor
 from rcac_mcp.executor.delegate import DelegatingExecutor
 from rcac_mcp.executor.shell import LocalShellExecutor
-from rcac_mcp.scripts import script_argv, script_of
-from rcac_mcp.tools.filesystem import WRITE
+from rcac_mcp.scripts import script_argv
+from rcac_mcp.tools.filesystem import LIST
 from ssh_server import LoopbackSSH
 
 MODES = ('local', 'delegate', 'ssh')
@@ -149,28 +151,27 @@ def refusal_violations(name: str, outcome: Outcome, names: str, before: bytes | 
 
 
 def write_violations(calls: Sequence[tuple[Any, ...]], content: str, data: bytes) -> list[str]:
-    """Every way a recorded write did not carry `data` on stdin alone.
+    """Every way a recorded write did not carry `data` through the executor's `write` alone.
 
     `content` is what the tool was sent and `data` the bytes it stands for. Exactly one executor
-    call, an argv running a fixed script, with `data` on stdin and neither `content` nor `data` in
-    any argv element.
+    call, a `write` of exactly `data`, and neither `content` nor `data` in any argv element.
     """
-    runs = [c for c in calls if c[0] == 'run']
-    if len(runs) != 1:
-        return [f'expected one executor call, got {len(runs)}: {list(calls)!r:.300}']
-    _, command, _, _, stdin = runs[0]
+    if len(calls) != 1:
+        return [f'expected one executor call, got {len(calls)}: {list(calls)!r:.300}']
+    kind, command, *rest = calls[0]
     found = []
+    if kind == 'write':
+        if rest[0] != data:
+            found.append(f'the write does not carry the bytes sent: {rest[0]!r:.80} != {data!r:.80}')
+        return found
+    found.append(f'the content does not go through the executor\'s write: {calls[0]!r:.200}')
     if isinstance(command, str):
         found.append(f'the write is a command string, not an argv: {command!r:.200}')
         command = [command]
-    if stdin != data:
-        found.append(f'the content is not on stdin exactly: {stdin!r:.80} != {data!r:.80}')
     text = data.decode('utf-8', 'replace')
     for i, element in enumerate(command):
         if (content and content in element) or (text and text in element):
             found.append(f'content in argv element {i}: {element!r:.80}')
-    if script_of(command) is None:
-        found.append(f'not a fixed-script argv: {command!r:.200}')
     return found
 
 
@@ -220,21 +221,22 @@ def test_refused_writes_never_reach_the_executor(refusal: Refusal, guard) -> Non
     assert guard.refused == []
 
 
-ARGV = script_argv(WRITE, 'write_file', '/t')
+ARGV = script_argv(LIST, 'list_directory', '/t')
+WROTE = ('write', '/t', PAYLOAD.encode(), False, None, False)
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize(('calls', 'fragment'), [
-    pytest.param([('run', [*ARGV[:6], '/t', PAYLOAD], None, None, PAYLOAD.encode())], 'content in argv', id='in-argv'),
-    pytest.param([('run', ARGV, None, None, None)], 'not on stdin', id='no-stdin'),
-    pytest.param([('run', ARGV, None, None, PAYLOAD.encode() + b'\n')], 'not on stdin', id='newline-added'),
-    pytest.param([('run', f'cat >/t <<EOF\n{PAYLOAD}\nEOF', None, None, None)], 'command string', id='string'),
-    pytest.param([('run', [*ARGV[:4], 'cat >/t', 'write_file'], None, None, PAYLOAD.encode())],
-                 'not a fixed-script argv', id='unregistered'),
+    pytest.param([('run', [*ARGV[:6], '/t', PAYLOAD], None, None)], 'content in argv', id='in-argv'),
+    pytest.param([('run', ARGV, None, None)], "does not go through the executor's write", id='no-write'),
+    pytest.param([('write', '/t', PAYLOAD.encode() + b'\n', False, None, False)], 'does not carry the bytes sent',
+                 id='newline-added'),
+    pytest.param([('run', f'cat >/t <<EOF\n{PAYLOAD}\nEOF', None, None)], 'command string', id='string'),
+    pytest.param([WROTE, WROTE], 'expected one executor call', id='two-calls'),
     pytest.param([], 'expected one executor call', id='no-call'),
 ])
 def test_write_check_catches_planted_calls(calls: list[tuple[Any, ...]], fragment: str) -> None:
-    assert write_violations([('run', ARGV, None, None, PAYLOAD.encode())], PAYLOAD, PAYLOAD.encode()) == []
+    assert write_violations([WROTE], PAYLOAD, PAYLOAD.encode()) == []
     violations = write_violations(calls, PAYLOAD, PAYLOAD.encode())
     assert any(fragment in v for v in violations), violations
 

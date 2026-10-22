@@ -6,9 +6,11 @@
 Every value a tool passes reaches the command as exactly one literal argument; a `UserPath`'s
 leading `~`/`~/` resolves to the running user's home and nothing else expands; a `run_command`
 script runs as given under bash, whatever shell launched it. Nothing the login initialisation reads
-or prints reaches a result, a timeout returns what was captured with `TIMEOUT_EXIT_CODE`, a call
-ends a bounded grace after its command whatever it left running, and a program is refused when the
-bytes that carry it are over Linux's per-argument limit.
+or prints reaches a result; a call is complete exactly when the program's end record has arrived on
+both streams, which reports the command's status (a signal death as one, re-raised on the launch
+itself), and nothing left running holds it past them; a timeout returns what was captured with
+`TIMEOUT_EXIT_CODE`; and a program is refused when the bytes that carry it are over Linux's
+per-argument limit.
 
 `launch_violations`, `bootstrap_violations` and `separation_violations` are the pure checks; the
 `unit` rows feed them rendered programs and planted negatives. The `integration` rows execute the
@@ -48,7 +50,8 @@ SYSTEM_PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
 
 # The texts the plan fixes, written out here so a change to any of them fails a check.
 PROLOGUE = ('\\unalias -a\n'
-            'unset -f builtin command exec set printf trap cd export declare compgen read; unset IFS; '
+            'unset -f builtin command exec set printf trap cd export declare compgen read kill ulimit exit; '
+            'unset IFS; '
             'set +euxvTkP +o errtrace +o posix; trap - EXIT ERR DEBUG RETURN; '
             '[[ /dev/fd/57 -ef /dev/fd/47 && /dev/fd/58 -ef /dev/fd/48 && /dev/fd/59 -ef /dev/fd/49 ]] || '
             '[[ /dev/fd/57 -ef /dev/fd/47 && /dev/fd/58 -ef /dev/fd/48 && /dev/fd/59 -ef /dev/fd/49 ]] || '
@@ -56,14 +59,30 @@ PROLOGUE = ('\\unalias -a\n'
             '{ printf %s cluster-mcp:parked-descriptor-taken >&49; '
             'printf %s cluster-mcp:parked-descriptor-taken >&59; exec /usr/bin/false; }; '
             'exec 0<&57 1>&58 2>&59 47<&- 48>&- 49>&- 57<&- 58>&- 59>&-')
-SENTINEL_LINE = re.compile(r'printf %s%s ([0-9a-f]{16}) ([0-9a-f]{16}); printf %s%s \1 \2 >&2\n')
-HOME_LINE = 'command cd -- "${HOME:?HOME is not set}" || exec /usr/bin/false\n'
+SENTINEL_LINE = re.compile(r'printf %s%s ([0-9a-f]{16}) ([0-9a-f]{16}); printf %s%s \1 \2 >&2; '
+                           r'exec 59>&2 2>/dev/null\n')
+HOME_LINE = 'command cd -- "${HOME:?HOME is not set}" || exit\n'
 # A start of 'home' resolves through $HOME; any other is an absolute path written into the program.
-POSITIONAL_LINE = 'command cd -- "${1:?the start directory is not set}" || exec /usr/bin/false\n'
+POSITIONAL_LINE = 'command cd -- "${1:?the start directory is not set}" || exit\n'
+# The subshell that runs the command, so the program outlives it; then its status, its end record
+# on both streams, the signal re-raised and the command's status kept.
+SUBSHELL_OPEN = '(\n'
+SUBSHELL_CLOSE = '\n) 2>&59 59>&-\n'
+STATUS = ('cluster_mcp_s=$? cluster_mcp_k=\n'
+          '(( cluster_mcp_s > 128 )) && cluster_mcp_k=$(kill -l "$cluster_mcp_s")\n'
+          'case $cluster_mcp_k in HUP|INT|QUIT|ILL|TRAP|ABRT|BUS|FPE|KILL|USR1|SEGV|USR2|PIPE|ALRM|TERM|XCPU|XFSZ|'
+          'VTALRM|PROF|SYS|RTMIN*|RTMAX*) cluster_mcp_r=s$((cluster_mcp_s - 128)) ;; '
+          '*) cluster_mcp_k= cluster_mcp_r=x$cluster_mcp_s ;; esac\n')
+END_LINE = re.compile(r'printf %s%s%s\. ([0-9a-f]{16}) ([0-9a-f]{16}) "\$cluster_mcp_r"; '
+                      r'printf %s%s%s\. \1 \2 "\$cluster_mcp_r" >&59\n')
+RERAISE = ('[[ -z $cluster_mcp_k ]] || { ulimit -c 0; trap - "$cluster_mcp_k"; kill -s "$cluster_mcp_k" "$$"; }\n'
+           '(exit "$cluster_mcp_s")')
 
 
 def start_line(start: str) -> str:
-    return HOME_LINE if start == 'home' else f'command cd -- {shlex.quote(start)} || exec /usr/bin/false\n'
+    return HOME_LINE if start == 'home' else f'command cd -- {shlex.quote(start)} || exit\n'
+
+
 SCRIPT_PREFIX = ('while IFS= read -r cluster_mcp_fn; do export -f -- "$cluster_mcp_fn"; '
                  'done < <(compgen -A function); unset cluster_mcp_fn; BASH_ENV= ENV= exec /bin/bash --norc -c -- ')
 STAGE_ARGV = ['/bin/bash', '--norc', '--posix', '-c',
@@ -132,18 +151,23 @@ def _word_violations(what: str, arg: str, value: str, unquoted: set[str], into: 
 
 
 def launch_violations(command: list[str] | str, cwd: str | None, start: str | None, prog: str,
-                      sentinel: bytes) -> list[str]:
-    """Every way `prog` does not run `command` exactly, under the plan's prologue and sentinel."""
+                      marks: launch.Marks) -> list[str]:
+    """Every way `prog` does not run `command` exactly, under the plan's prologue, sentinel and record."""
     found: list[str] = []
-    if sentinel.decode() in prog:
+    if marks.start.decode() in prog:
         found.append('the sentinel appears whole in the program text')
+    if marks.end.decode() in prog:
+        found.append('the end nonce appears whole in the program text')
     if not prog.startswith(PROLOGUE + '\n'):
         return found + ['the program does not open with the prologue']
     at = len(PROLOGUE) + 1
     line = SENTINEL_LINE.match(prog, at)
-    if not line or (line[1] + line[2]).encode() != sentinel:
-        return found + ['the program does not print the sentinel, in two halves, on both streams']
+    if not line or (line[1] + line[2]).encode() != marks.start:
+        return found + ['the program does not print the sentinel, in two halves, on both streams, then quiet its own stderr']
     at = line.end()
+    if not prog.startswith(SUBSHELL_OPEN, at):
+        return found + ['the command does not run in a subshell: the program would not outlive it']
+    at += len(SUBSHELL_OPEN)
     if start is not None:
         line = start_line(start)
         if not prog.startswith(line, at):
@@ -154,15 +178,23 @@ def launch_violations(command: list[str] | str, cwd: str | None, start: str | No
             return found + [f'cwd {cwd!r} is not changed to with `command cd --`']
         value, unquoted, at = _read_word(prog, at + len('command cd -- '))
         found += _word_violations('cwd', UserPath(cwd), value, unquoted, 'cd')
-        if not prog.startswith(' || exec /usr/bin/false\n', at):
-            return found + [f'a failed cd to {cwd!r} does not stop the program']
-        at += len(' || exec /usr/bin/false\n')
-    body = prog[at:]
+        if not prog.startswith(' || exit\n', at):
+            return found + [f'a failed cd to {cwd!r} does not stop the command']
+        at += len(' || exit\n')
+    close = prog.find(SUBSHELL_CLOSE, at)
+    if close < 0:
+        return found + ['the subshell does not end, with the caller\'s stderr back, before the end record']
+    body, tail = prog[at:close], prog[close + len(SUBSHELL_CLOSE):]
+    end = END_LINE.match(tail, len(STATUS)) if tail.startswith(STATUS) else None
+    if end is None or (end[1] + end[2]).encode() != marks.end:
+        found.append('the program does not print the end record, its nonce in two halves, on both streams')
+    elif tail[end.end():] != RERAISE:
+        found.append('the program does not re-raise a signal death and keep the command\'s status')
     if isinstance(command, str):
         if not body.startswith(SCRIPT_PREFIX):
             return found + ['the script does not run in a fresh non-login bash']
-        value, unquoted, end = _read_word(body, len(SCRIPT_PREFIX))
-        if unquoted or end != len(body):
+        value, unquoted, end_at = _read_word(body, len(SCRIPT_PREFIX))
+        if unquoted or end_at != len(body):
             found.append(f'the script is not quoted as one word: bash acts on {body[len(SCRIPT_PREFIX):]!r}')
         elif value != command:
             found.append(f'the script reaches bash as {value!r}, not verbatim')
@@ -201,12 +233,28 @@ def _after(data: bytes, sentinel: bytes) -> bytes | None:
     return None if at < 0 else data[at + len(sentinel):]
 
 
-def separation_violations(raw: tuple[bytes, bytes, int], sentinel: bytes,
+RECORD = re.compile(rb'([xs])([0-9]{1,3})\.')
+
+UNFINISHED_NOTE = b"cluster-mcp: the launch ended before it reported the command's end, so its output may be incomplete\n"
+
+
+def _before_record(kept: bytes, end: bytes) -> tuple[bytes, int | None]:
+    """`kept` up to its first complete end record, and the record's status (None without one)."""
+    at = 0
+    while (found := kept.find(end, at)) >= 0:
+        tail = RECORD.match(kept, found + len(end))
+        if tail:
+            return kept[:found], (-int(tail[2]) if tail[1] == b's' else int(tail[2]))
+        at = found + 1
+    return kept, None
+
+
+def separation_violations(raw: tuple[bytes, bytes, int], marks: launch.Marks,
                           result: tuple[bytes, bytes, int]) -> list[str]:
     """Every way `result` is not the command's own output given the `raw` streams and exit code."""
     out, err, code = raw
     got_out, got_err, got_code = result
-    kept_out, kept_err = _after(out, sentinel), _after(err, sentinel)
+    kept_out, kept_err = _after(out, marks.start), _after(err, marks.start)
     found = []
     if kept_out is None and kept_err is None:
         if code == TIMEOUT_EXIT_CODE:
@@ -221,21 +269,37 @@ def separation_violations(raw: tuple[bytes, bytes, int], sentinel: bytes,
         if (got_out, got_err) != (b'', note):
             found.append(f'the command did not start, but the result carries {got_out!r}, {got_err!r}')
         return found
-    want_err = kept_err or b''
+    wants, statuses, notes = [], [], b''
     for stream, kept in (('stdout', kept_out), ('stderr', kept_err)):
         if kept is None:
-            want_err += f"cluster-mcp: the login initialisation redirected the command's {stream}; it was not captured\n".encode()
+            wants.append(b'')
+            notes += f"cluster-mcp: the login initialisation redirected the command's {stream}; it was not captured\n".encode()
             if stream.encode() not in got_err:
                 found.append(f'the {stream} sentinel is missing and no note names it')
-    for stream, got, want, before in (('stdout', got_out, kept_out or b'', out), ('stderr', got_err, want_err, err)):
+            continue
+        body, status = _before_record(kept, marks.end)
+        wants.append(body)
+        statuses.append(status)
+    want_code = code
+    if code != TIMEOUT_EXIT_CODE:
+        if None in statuses:
+            notes += UNFINISHED_NOTE
+            if UNFINISHED_NOTE not in got_err:
+                found.append('a stream has no end record, and no note says the output may be incomplete')
+        reported = [status for status in statuses if status is not None]
+        want_code = reported[0] if reported else code
+    want_out, want_err = wants[0], wants[1] + notes
+    for stream, got, want, before in (('stdout', got_out, want_out, out), ('stderr', got_err, want_err, err)):
         if got != want:
-            prefix = before[:before.find(sentinel)] if sentinel in before else b''
-            if sentinel in got or (prefix and got.startswith(prefix)):
+            prefix = before[:before.find(marks.start)] if marks.start in before else b''
+            if marks.start in got or (prefix and got.startswith(prefix)):
                 found.append(f'{stream} kept output from before the sentinel: {got[:80]!r}')
+            elif marks.end in got:
+                found.append(f'{stream} kept the end record, or what followed it: {got[-80:]!r}')
             else:
                 found.append(f'{stream} is {got[:80]!r}, not {want[:80]!r}')
-    if got_code != code:
-        found.append(f'the exit code is {got_code}, not the command\'s {code}')
+    if got_code != want_code:
+        found.append(f'the exit code is {got_code}, not the reported {want_code}')
     return found
 
 
@@ -259,30 +323,42 @@ USER_PATHS = [UserPath(p) for p in ('~', '~/', '~/a b', '~//etc/x', "~/it's", '~
     pytest.param('', '/tmp', None, id='empty-script-with-cwd'),
 ])
 def test_program_quotes_each_argument_as_one_word(command: list[str] | str, cwd: str | None, start: str | None) -> None:
-    prog, sentinel = launch.program(command, cwd, start)
-    assert re.fullmatch(rb'[0-9a-f]{32}', sentinel), sentinel
-    violations = launch_violations(command, cwd, start, prog, sentinel)
+    prog, marks = launch.program(command, cwd, start)
+    assert re.fullmatch(rb'[0-9a-f]{32}', marks.start) and re.fullmatch(rb'[0-9a-f]{32}', marks.end), marks
+    assert marks.start != marks.end, marks
+    violations = launch_violations(command, cwd, start, prog, marks)
     assert violations == [], '\n'.join(violations)
-    # A fresh sentinel per call.
-    assert launch.program(command, cwd, start)[1] != sentinel
+    # Fresh nonces per call.
+    again = launch.program(command, cwd, start)[1]
+    assert again.start != marks.start and again.end != marks.end, (marks, again)
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize('cwd', ['sub', 'sub dir', '-', '-P', '~', '~/', '~/a b', '~//etc', '~name', '/abs dir',
                                  '$HOME', 'a\nb', UserPath('rel')])
 def test_program_renders_the_cwd(cwd: str) -> None:
-    prog, sentinel = launch.program(['pwd'], cwd)
-    violations = launch_violations(['pwd'], cwd, None, prog, sentinel)
+    prog, marks = launch.program(['pwd'], cwd)
+    violations = launch_violations(['pwd'], cwd, None, prog, marks)
     assert violations == [], '\n'.join(violations)
 
 
-# A planted program's sentinel.
+# A planted program's nonces.
 S = b'0123456789abcdeffedcba9876543210'
+E = b'fedcba98765432100123456789abcdef'
+M = launch.Marks(S, E)
 
 
-def _planted(body: str, cwd_line: str = '') -> tuple[str, bytes]:
+def _record_line(end: bytes = E) -> str:
+    head, tail = end[:16].decode(), end[16:].decode()
+    return f'printf %s%s%s. {head} {tail} "$cluster_mcp_r"; printf %s%s%s. {head} {tail} "$cluster_mcp_r" >&59\n'
+
+
+def _planted(body: str, cwd_line: str = '', *, opening: str = SUBSHELL_OPEN, closing: str = SUBSHELL_CLOSE,
+             ending: str | None = None) -> tuple[str, launch.Marks]:
     head, tail = S[:16].decode(), S[16:].decode()
-    return f'{PROLOGUE}\nprintf %s%s {head} {tail}; printf %s%s {head} {tail} >&2\n{cwd_line}{body}', S
+    ending = STATUS + _record_line() + RERAISE if ending is None else ending
+    return (f'{PROLOGUE}\nprintf %s%s {head} {tail}; printf %s%s {head} {tail} >&2; exec 59>&2 2>/dev/null\n'
+            f'{opening}{cwd_line}{body}{closing}{ending}'), M
 
 
 @pytest.mark.unit
@@ -301,9 +377,9 @@ def _planted(body: str, cwd_line: str = '') -> tuple[str, bytes]:
     pytest.param(['cat', UserPath('~//etc/x')], None, None, _planted(f"exec cat {HOME_WORD}/'/etc/x'"),
                  'reaches the command as', id='slashes-not-collapsed'),
     pytest.param(['pwd'], 'sub', None,
-                 _planted('exec pwd', "command cd -- 'sub' || exec /usr/bin/false\n"), 'reaches cd as',
+                 _planted('exec pwd', "command cd -- 'sub' || exit\n"), 'reaches cd as',
                  id='cwd-without-dot'),
-    pytest.param(['pwd'], 'sub', None, _planted('exec pwd', "cd -- './sub' || exec /usr/bin/false\n"),
+    pytest.param(['pwd'], 'sub', None, _planted('exec pwd', "cd -- './sub' || exit\n"),
                  'command cd --', id='cwd-plain-cd'),
     pytest.param(['pwd'], 'sub', None, _planted('exec pwd', "command cd -- './sub'\n"), 'does not stop',
                  id='cwd-unchecked'),
@@ -316,14 +392,27 @@ def _planted(body: str, cwd_line: str = '') -> tuple[str, bytes]:
                  id='script-bare'),
     pytest.param('echo hi', None, None, _planted('echo hi'), 'fresh non-login bash', id='script-in-login-shell'),
     pytest.param('echo hi', None, None, _planted(SCRIPT_PREFIX + "'echo hi;'"), 'not verbatim', id='script-altered'),
-    pytest.param(['pwd'], None, None, (_planted('exec pwd')[0].replace('trap - EXIT ERR DEBUG RETURN; ', ''), S),
+    pytest.param(['pwd'], None, None, (_planted('exec pwd')[0].replace('trap - EXIT ERR DEBUG RETURN; ', '', 1), M),
                  'prologue', id='traps-kept'),
-    pytest.param(['pwd'], None, None, ('exec pwd', S), 'prologue', id='no-prologue'),
+    pytest.param(['pwd'], None, None, ('exec pwd', M), 'prologue', id='no-prologue'),
     pytest.param(['printf', '0123456789abcdeffedcba9876543210'], None, None,
-                 _planted('exec printf 0123456789abcdeffedcba9876543210'), 'appears whole', id='sentinel-whole'),
+                 _planted('exec printf 0123456789abcdeffedcba9876543210'), 'sentinel appears whole', id='sentinel-whole'),
+    pytest.param(['printf', E.decode()], None, None, _planted(f'exec printf {E.decode()}'), 'end nonce appears whole',
+                 id='end-nonce-whole'),
+    pytest.param(['pwd'], None, None, _planted('exec pwd', opening='', closing='\n'), 'does not run in a subshell',
+                 id='exec-in-place'),
+    pytest.param(['pwd'], None, None, _planted('exec pwd', ending=STATUS + RERAISE), 'does not print the end record',
+                 id='no-record'),
+    pytest.param(['pwd'], None, None,
+                 _planted('exec pwd', ending=STATUS + _record_line().replace(' >&59', ' >&1') + RERAISE),
+                 'does not print the end record', id='record-on-stdout-twice'),
+    pytest.param(['pwd'], None, None, _planted('exec pwd', ending=STATUS + _record_line() + '(exit "$cluster_mcp_s")'),
+                 'does not re-raise', id='signal-not-reraised'),
+    pytest.param(['pwd'], None, None, _planted('exec pwd', closing='\n)\n'), 'does not end, with the caller',
+                 id='subshell-stderr-quiet'),
 ])
 def test_launch_check_catches_planted_programs(command: list[str] | str, cwd: str | None, start: str | None,
-                                               program: tuple[str, bytes], fragment: str) -> None:
+                                               program: tuple[str, launch.Marks], fragment: str) -> None:
     violations = launch_violations(command, cwd, start, *program)
     assert any(fragment in v for v in violations), violations
 
@@ -454,18 +543,29 @@ def test_bootstrap_check_catches_planted_wires(wire: str, fragment: str) -> None
 # Separation (unit)
 
 NOISE = b'profile\n\xff\xfe partial' + b'z' * 70_000
+# A complete end record: the end nonce, then the status.
+X0, X3, S15 = E + b'x0.', E + b'x3.', E + b's15.'
+# Text shaped like a record, but with another nonce: a command's own output.
+LOOKALIKE = b'0f' * 16 + b'x0.' + b'fedcba9876543210' + b'x1.'
 
 SEPARATIONS = [
-    pytest.param((NOISE + S + b'out\n', b'err-noise' + S + b'err\n', 0), id='chatty-prefix'),
-    pytest.param((S + b'out ' + S + b'\n', S + S, 3), id='command-prints-the-sentinel'),
-    pytest.param((S, S, 0), id='quiet-empty'),
+    pytest.param((NOISE + S + b'out\n' + X0, b'err-noise' + S + b'err\n' + X0, 0), id='chatty-prefix'),
+    pytest.param((S + b'out ' + S + b'\n' + X3, S + S + X3, 3), id='command-prints-the-sentinel'),
+    pytest.param((S + LOOKALIKE + b'\n' + X0, S + LOOKALIKE + X0, 0), id='command-prints-record-lookalikes'),
+    pytest.param((S + X0, S + X0, 0), id='quiet-empty'),
+    pytest.param((S + b'out\n' + X0 + b'late\n', S + X0 + b'late-err', 0), id='after-the-record-dropped'),
+    pytest.param((S + b'out\n' + E + b'x7.', S + E + b'x7.', -1), id='status-from-the-record'),
+    pytest.param((S + S15, S + S15, -1), id='signal-death'),
     pytest.param((S + b'part', S, TIMEOUT_EXIT_CODE), id='timeout-after-start'),
+    pytest.param((S + b'part\n' + X0, S + b'perr', TIMEOUT_EXIT_CODE), id='timeout-with-one-record'),
+    pytest.param((S + b'part', S + b'err', -9), id='launch-killed-before-its-record'),
+    pytest.param((S + b'half' + E + b'x', S + E, 0), id='record-incomplete'),
     pytest.param((b'noise', b'startup error\n', 0), id='not-started'),
     pytest.param((b'', b'', 127), id='not-started-127'),
     pytest.param((b'noise', b'profile noise\n' + TAKEN_MARK + TAKEN_MARK, 1), id='parked-descriptor-taken'),
     pytest.param((b'noise', b'', TIMEOUT_EXIT_CODE), id='timeout-before-start'),
-    pytest.param((b'noise', S + b'err\n', 0), id='stdout-redirected'),
-    pytest.param((S + b'out\n', b'noise', 0), id='stderr-redirected'),
+    pytest.param((b'noise', S + b'err\n' + X0, 0), id='stdout-redirected'),
+    pytest.param((S + b'out\n' + X0, b'noise', 0), id='stderr-redirected'),
 ]
 
 
@@ -473,54 +573,100 @@ SEPARATIONS = [
 @pytest.mark.parametrize('raw', SEPARATIONS)
 def test_separate_keeps_only_the_commands_output(raw: tuple[bytes, bytes, int], caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger='rcac_mcp.executor.launch'):
-        result = launch.separate(*raw, S)
-    violations = separation_violations(raw, S, result)
+        result = launch.separate(*raw, M)
+    violations = separation_violations(raw, M, result)
     assert violations == [], '\n'.join(violations)
-    started = S in raw[0] or S in raw[1]
-    complete = S in raw[0] and S in raw[1]
-    expect_warning = (started and not complete) or (not started and raw[2] != TIMEOUT_EXIT_CODE)
+    kept = [_after(stream, S) for stream in raw[:2]]
+    started = any(k is not None for k in kept)
+    redirected = started and None in kept
+    unfinished = raw[2] != TIMEOUT_EXIT_CODE and any(k is not None and _before_record(k, E)[1] is None for k in kept)
+    expect_warning = redirected or unfinished or (not started and raw[2] != TIMEOUT_EXIT_CODE)
     assert bool(caplog.records) == expect_warning, caplog.records
 
 
-def _raw_streams(out: bytes, err: bytes, code: int, sentinel: bytes) -> tuple[bytes, bytes, int]:
+def _raw_streams(out: bytes, err: bytes, code: int, marks: launch.Marks) -> tuple[bytes, bytes, int]:
     return out, err, code
 
 
-def _last_cut(out: bytes, err: bytes, code: int, sentinel: bytes) -> tuple[bytes, bytes, int]:
-    return out.rsplit(sentinel, 1)[-1], err.rsplit(sentinel, 1)[-1], code
+def _last_cut(out: bytes, err: bytes, code: int, marks: launch.Marks) -> tuple[bytes, bytes, int]:
+    def cut(data: bytes) -> bytes:
+        kept = data.rsplit(marks.start, 1)[-1]
+        return kept[:kept.find(marks.end)] if marks.end in kept else kept
+    return cut(out), cut(err), code
 
 
-def _status_kept(out: bytes, err: bytes, code: int, sentinel: bytes) -> tuple[bytes, bytes, int]:
-    o, e, c = launch.separate(out, err, code, sentinel)
+def _status_kept(out: bytes, err: bytes, code: int, marks: launch.Marks) -> tuple[bytes, bytes, int]:
+    o, e, c = launch.separate(out, err, code, marks)
     return o, e, code
 
 
-def _note_dropped(out: bytes, err: bytes, code: int, sentinel: bytes) -> tuple[bytes, bytes, int]:
-    return (out.partition(sentinel)[2], err.partition(sentinel)[2], code)
+def _note_dropped(out: bytes, err: bytes, code: int, marks: launch.Marks) -> tuple[bytes, bytes, int]:
+    o, e, c = launch.separate(out, err, code, marks)
+    return o, e.replace(b"cluster-mcp: the login initialisation redirected the command's stdout; it was not captured\n",
+                        b''), c
 
 
-def _taken_unnoted(out: bytes, err: bytes, code: int, sentinel: bytes) -> tuple[bytes, bytes, int]:
-    return launch.separate(out, err.replace(TAKEN_MARK, b''), code, sentinel)
+def _taken_unnoted(out: bytes, err: bytes, code: int, marks: launch.Marks) -> tuple[bytes, bytes, int]:
+    return launch.separate(out, err.replace(TAKEN_MARK, b''), code, marks)
 
 
-def _timeout_as_not_started(out: bytes, err: bytes, code: int, sentinel: bytes) -> tuple[bytes, bytes, int]:
-    return launch.separate(out, err, 0 if code == TIMEOUT_EXIT_CODE else code, sentinel)
+def _timeout_as_not_started(out: bytes, err: bytes, code: int, marks: launch.Marks) -> tuple[bytes, bytes, int]:
+    return launch.separate(out, err, 0 if code == TIMEOUT_EXIT_CODE else code, marks)
+
+
+def _record_kept(out: bytes, err: bytes, code: int, marks: launch.Marks) -> tuple[bytes, bytes, int]:
+    o, e, c = launch.separate(out, err, code, launch.Marks(marks.start, b'f' * 32))
+    return o, e.replace(UNFINISHED_NOTE, b''), c
+
+
+def _unfinished_unnoted(out: bytes, err: bytes, code: int, marks: launch.Marks) -> tuple[bytes, bytes, int]:
+    o, e, c = launch.separate(out, err, code, marks)
+    return o, e.replace(UNFINISHED_NOTE, b''), c
+
+
+def _timeout_completed(out: bytes, err: bytes, code: int, marks: launch.Marks) -> tuple[bytes, bytes, int]:
+    o, e, c = launch.separate(out, err, 0 if code == TIMEOUT_EXIT_CODE else code, marks)
+    return o, e.replace(UNFINISHED_NOTE, b''), c
 
 
 @pytest.mark.unit
 @pytest.mark.parametrize(('separate', 'raw', 'fragment'), [
-    pytest.param(_raw_streams, (NOISE + S + b'out', S, 0), 'kept output from before the sentinel', id='raw-streams'),
-    pytest.param(_last_cut, (S + b'a' + S + b'b', S, 0), "stdout is b'b', not", id='last-occurrence'),
+    pytest.param(_raw_streams, (NOISE + S + b'out' + X0, S + X0, 0), 'kept output from before the sentinel',
+                 id='raw-streams'),
+    pytest.param(_last_cut, (S + b'a' + S + b'b' + X0, S + X0, 0), "stdout is b'b', not", id='last-occurrence'),
     pytest.param(_status_kept, (b'', b'', 0), 'did not start, but the exit code is 0', id='status-kept'),
-    pytest.param(_note_dropped, (b'noise', S + b'err', 0), 'no note names it', id='note-dropped'),
+    pytest.param(_status_kept, (S + b'out' + E + b'x7.', S + E + b'x7.', -1), 'not the reported 7',
+                 id='record-status-ignored'),
+    pytest.param(_note_dropped, (b'noise', S + b'err' + X0, 0), 'no note names it', id='note-dropped'),
     pytest.param(_taken_unnoted, (b'', TAKEN_MARK, 1), 'did not start, but the result carries', id='taken-unnoted'),
     pytest.param(_timeout_as_not_started, (b'', b'', TIMEOUT_EXIT_CODE), 'a timeout before the sentinel',
                  id='timeout-misread'),
+    pytest.param(_record_kept, (S + b'out' + X0 + b'late', S + X0, 0), 'kept the end record', id='record-kept'),
+    pytest.param(_unfinished_unnoted, (S + b'part', S + b'err', -9), 'no note says the output may be incomplete',
+                 id='unfinished-unnoted'),
+    pytest.param(_timeout_completed, (S + b'part' + X0, S + b'perr', TIMEOUT_EXIT_CODE), f'not the reported {TIMEOUT_EXIT_CODE}',
+                 id='timeout-read-as-complete'),
 ])
 def test_separation_check_catches_planted_results(separate: Callable[..., tuple[bytes, bytes, int]],
                                                   raw: tuple[bytes, bytes, int], fragment: str) -> None:
-    violations = separation_violations(raw, S, separate(*raw, S))
+    violations = separation_violations(raw, M, separate(*raw, M))
     assert any(fragment in v for v in violations), violations
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(('data', 'at', 'want'), [
+    pytest.param(b'out' + X0, 0, 3, id='record'),
+    pytest.param(b'out' + E + b'x', 0, None, id='tail-not-arrived'),
+    pytest.param(E[:-1] + b'x0.' + b'out', 0, None, id='nonce-cut-short'),
+    pytest.param(E + b'y0.' + b'then' + X3, 0, 1, id='bad-tail-then-record'),
+    pytest.param(LOOKALIKE, 0, None, id='lookalike'),
+])
+def test_record_is_the_nonce_then_a_status(data: bytes, at: int, want: int | None) -> None:
+    found = launch.record(data, E, at)
+    if want is None:
+        assert found is None, found
+    else:
+        assert found is not None and data[found.start() - len(E):found.start()] == E, (data, found)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -549,42 +695,73 @@ STUB_PID = 2_147_483_000
 class StubPopen:
     """A `Popen` stand-in: records how it was launched, answers with `returncode`, launches nothing.
 
-    With `times_out`, its output stays open (each `communicate` waits out its timeout and raises)
-    until a signal has been sent to it.
+    Its stdout holds `part`, in a pipe of its own. With `times_out` it has not exited and its pipes
+    stay open until a signal has been sent to it; otherwise its pipes have ended and it exits once
+    its stdin has. What is written to its stdin is read back with `fed`.
     """
 
     calls: list[dict[str, Any]]
     signals: list[tuple[str, int, int]]
     returncode: int | None
     times_out: bool = False
+    made: list['StubPopen']
 
     def __init__(self, argv: list[str], **kwargs: Any) -> None:
         self.calls.append({'argv': argv, **kwargs})
+        self.made.append(self)
         self.pid = STUB_PID
-        self.stdout = self.stderr = None
+        self.returncode = None
+        out_r, self._out_w = os.pipe()
+        err_r, self._err_w = os.pipe()
+        os.write(self._out_w, b'part')
+        self.stdout, self.stderr = os.fdopen(out_r, 'rb'), os.fdopen(err_r, 'rb')
+        self._in_r, in_w = os.pipe()
+        self.stdin = os.fdopen(in_w, 'wb')
+        if not self.times_out:
+            self.hang_up()
 
-    def communicate(self, input: bytes | None = None, timeout: float | None = None) -> tuple[bytes, bytes]:
-        self.calls.append({'input': input, 'timeout': timeout})
-        if self.times_out and not self.signals:
-            time.sleep(min(timeout or 0, 0.05))
-            raise subprocess.TimeoutExpired('stub', timeout or 0, output=b'part', stderr=b'')
-        return b'part', b''
+    def hang_up(self) -> None:
+        for fd in (self._out_w, self._err_w):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    def fed(self) -> bytes:
+        os.set_blocking(self._in_r, False)
+        try:
+            return os.read(self._in_r, 1 << 16)
+        except BlockingIOError:
+            return b''
 
     def poll(self) -> int | None:
-        return type(self).returncode
+        if self.times_out and not self.signals:
+            return None
+        # It reads its stdin to the end before it exits, as `cat` does.
+        if not self.stdin.closed:
+            return None
+        self.returncode = type(self).returncode
+        return self.returncode
 
     def wait(self, timeout: float | None = None) -> int | None:
-        return type(self).returncode
+        return self.poll()
 
 
 def _stub(monkeypatch: pytest.MonkeyPatch, returncode: int | None, times_out: bool) -> tuple[type[StubPopen], list]:
     signals: list[tuple[str, int, int]] = []
     stub = type('Stub', (StubPopen,), {'calls': [], 'signals': signals, 'returncode': returncode,
-                                       'times_out': times_out})
+                                       'times_out': times_out, 'made': []})
     monkeypatch.setattr(subprocess, 'Popen', stub)
+
     # The stub's pid is not a real process; no signal may leave the test, whichever call sends it.
-    monkeypatch.setattr(os, 'killpg', lambda pid, sig: signals.append(('killpg', pid, sig)))
-    monkeypatch.setattr(os, 'kill', lambda pid, sig: signals.append(('kill', pid, sig)))
+    def record(kind: str) -> Callable[[int, int], None]:
+        def send(pid: int, sig: int) -> None:
+            signals.append((kind, pid, sig))
+            for made in stub.made:
+                made.hang_up()
+        return send
+    monkeypatch.setattr(os, 'killpg', record('killpg'))
+    monkeypatch.setattr(os, 'kill', record('kill'))
     return stub, signals
 
 
@@ -592,9 +769,13 @@ def _stub(monkeypatch: pytest.MonkeyPatch, returncode: int | None, times_out: bo
 @pytest.mark.parametrize('times_out', [False, True], ids=['exited', 'seen-at-the-deadline'])
 def test_a_sighup_death_is_minus_one_not_the_marker(monkeypatch: pytest.MonkeyPatch, times_out: bool) -> None:
     stub, signals = _stub(monkeypatch, -signal.SIGHUP, times_out)
-    out, err, code, _ = launch.run_process(['/bin/true'], None, 5)
-    assert code == -1, f'a SIGHUP death reported {code}'
-    assert code != TIMEOUT_EXIT_CODE and out == b'part'
+    out, err, code, _ = launch.run_process(['/bin/true'], None, 0.5)
+    if times_out:
+        # Still running at the deadline: a timeout, never the death's -1.
+        assert code == TIMEOUT_EXIT_CODE and out == b'part', (out, code)
+    else:
+        assert code == -1, f'a SIGHUP death reported {code}'
+        assert code != TIMEOUT_EXIT_CODE and out == b'part'
 
 
 @pytest.mark.unit
@@ -604,7 +785,8 @@ def test_run_process_never_hands_the_child_this_process_stdin(monkeypatch: pytes
     launch.run_process(['/bin/cat'], b'bytes', None)
     launched = [c for c in stub.calls if 'argv' in c]
     assert all(c['stdin'] == subprocess.PIPE and c['start_new_session'] for c in launched), launched
-    assert [c['input'] for c in stub.calls if 'input' in c] == [b'', b'bytes']
+    assert [made.fed() for made in stub.made] == [b'', b'bytes'], 'the stdin given was not what the child read'
+    assert all(made.stdin.closed for made in stub.made), 'the child\'s stdin was not closed: it never reads its end'
 
 
 @pytest.mark.unit
@@ -652,9 +834,10 @@ WIRES = ('local',) + tuple(f'ssh-{Path(s).name}' for s in SHELLS)
 SEPARATION_WIRES = ('local', 'ssh-sh', 'ssh-bash', 'ssh-zsh', 'ssh-tcsh')
 
 
-def _sandboxed(argv: list[str], stdin: bytes | None = None, timeout: float = 30) -> tuple[bytes, bytes, int, bytes]:
+def _sandboxed(argv: list[str], stdin: bytes | None = None, timeout: float = 30,
+               end: bytes | None = None) -> tuple[bytes, bytes, int, bytes]:
     assert argv[0] == str(SANDBOX), argv
-    return launch.run_process(argv, stdin, timeout)
+    return launch.run_process(argv, stdin, timeout, end)
 
 
 def _environment(home: Path | str, *extra: str, path: str | None = None) -> list[str]:
@@ -675,9 +858,10 @@ def run_on(wire: str, command: list[str] | str, home: Path | str, *, cwd: str | 
            stdin: bytes | None = None, timeout: float = 30, env: tuple[str, ...] = (),
            path: str | None = None) -> tuple[bytes, bytes, int]:
     """Render `command`, launch it on `wire` with `home` as HOME, and return the separated result."""
-    prog, sentinel = launch.program(command, cwd, start)
-    out, err, code, note = _sandboxed(_environment(home, *env, path=path) + _wire_argv(wire, prog), stdin, timeout)
-    return launch.separate(out, err, code, sentinel, note)
+    prog, marks = launch.program(command, cwd, start)
+    out, err, code, note = _sandboxed(_environment(home, *env, path=path) + _wire_argv(wire, prog), stdin, timeout,
+                                      marks.end)
+    return launch.separate(out, err, code, marks, note)
 
 
 @pytest.fixture
@@ -749,7 +933,7 @@ def test_profile_cannot_read_stdin_or_shadow_cd(wire: str, home: Path) -> None:
     (home / '.bash_profile').write_text('read -r line\ncd() { echo cd-function; builtin cd "$@"; }\n')
     sent = b'first line\nsecond line\n\0\xff no final newline'
     result = run_on(wire, ['cat'], home, cwd='sub', start='home', stdin=sent)
-    assert result == (sent, b'', 0), f'{wire}: cat returned {result!r}, not the stdin sent'
+    assert result == (sent, b'', 0), f"{wire}: the profile read the caller's stdin, or its cd() printed: cat returned {result!r}, not the stdin sent"
 
 
 @pytest.mark.integration
@@ -877,27 +1061,73 @@ def test_timeout_is_bounded_when_a_process_leaves_the_group(tmp_path: Path) -> N
 
 
 @pytest.mark.integration
-def test_timeout_keeps_a_completed_status() -> None:
-    out, err, code, note = _sandboxed([str(SANDBOX), '/bin/bash', '-c', 'sleep 4 & echo done; exit 0'], timeout=1)
-    assert (out, code, note) == (b'done\n', 0, launch.HELD_NOTE), \
-        f'a command that exited 0 before the deadline reported {code} ({note!r})'
-
-
-@pytest.mark.integration
-def test_a_held_output_does_not_hold_a_completed_command(tmp_path: Path) -> None:
-    # Once the command has exited, what it left running gets a bounded grace: a short writer is kept,
-    # a long holder does not hold the call.
+def test_a_raw_launch_is_complete_at_its_exit(tmp_path: Path) -> None:
+    # With no end record to wait for, a launch that has exited is complete: everything it wrote is
+    # already in the pipes, and what it left running neither holds the call nor turns it into a
+    # timeout.
     pidfile = tmp_path / 'holder.pid'
     try:
         start = time.monotonic()
         out, err, code, note = _sandboxed([str(SANDBOX), '/bin/bash', '-c',
-                                           'sleep 6 & echo $! > "$1"; (sleep 0.2; echo late) & echo done; exit 3',
-                                           'bash', str(pidfile)])
+                                           'sleep 6 & echo $! > "$1"; (sleep 2; echo late) & echo done; exit 3',
+                                           'bash', str(pidfile)], timeout=4)
         elapsed = time.monotonic() - start
-        assert elapsed < launch.GRACE + 1.5, f'a background holder held the call for {elapsed:.1f} s'
-        assert (out, code, note) == (b'done\nlate\n', 3, launch.HELD_NOTE), (out, err, code, note)
+        assert elapsed < 1.5, f'a background holder held an exited launch for {elapsed:.1f} s'
+        assert (out, code, note) == (b'done\n', 3, b''), \
+            f'an exited launch was reported as {(out, err, code, note)!r}, not its own 3 with its output'
     finally:
         _reap(pidfile)
+
+
+# The end record: a call ends at it, whatever is left running, and it reports a signal death.
+
+# A command that leaves a background job writing to both streams after it exits.
+LEAVES_A_WRITER = ['/bin/sh', '-c', '(sleep 3; echo late; echo late-err >&2) & echo now']
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('wire', SEPARATION_WIRES)
+def test_the_call_ends_at_its_records(wire: str, home: Path) -> None:
+    start = time.monotonic()
+    result = run_on(wire, LEAVES_A_WRITER, home, timeout=20)
+    elapsed = time.monotonic() - start
+    assert result == (b'now\n', b'', 0), f'{wire}: the result is {result!r}, not the command\'s own output'
+    assert elapsed < 2, f'{wire}: a background writer held the call for {elapsed:.1f} s past the end records'
+
+
+# Records a launch's own exit status, as its parent sees it (bin/sandbox.sh would report a signal
+# death as 128+N): the launch is run under it, its streams passed through.
+REPORTER = ('import subprocess, sys\n'
+            'code = subprocess.run(sys.argv[2:]).returncode\n'
+            'open(sys.argv[1], "w").write(str(code))\n')
+
+STATUSES = {
+    # (command, the result's exit code, the launch's own status)
+    'hup': (['/bin/sh', '-c', 'kill -s HUP $$'], -1, -1),
+    'term': (['/bin/sh', '-c', 'kill -s TERM $$'], -15, -15),
+    'kill': (['/bin/sh', '-c', 'kill -s KILL $$'], -9, -9),
+    'script-kill': ('echo before; kill -s TERM $$', -15, -15),
+    'exit-3': (['/bin/sh', '-c', 'exit 3'], 3, 3),
+    'exit-130': (['/bin/sh', '-c', 'exit 130'], -2, -2),
+    'exit-200': (['/bin/sh', '-c', 'exit 200'], 200, 200),
+    'exit-255': (['/bin/sh', '-c', 'exit 255'], 255, 255),
+}
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('status', STATUSES)
+@pytest.mark.parametrize('wire', ['local', 'ssh-sh', 'ssh-bash', 'ssh-zsh', 'ssh-tcsh'])
+def test_a_signal_death_is_reported_and_reraised(wire: str, status: str, home: Path, tmp_path: Path) -> None:
+    command, want, own = STATUSES[status]
+    prog, marks = launch.program(command, None, 'home')
+    seen = tmp_path / 'status'
+    argv = _environment(home) + [sys.executable, '-I', '-c', REPORTER, str(seen)] + _wire_argv(wire, prog)
+    out, err, code, note = _sandboxed(argv, None, 20, marks.end)
+    result = launch.separate(out, err, code, marks, note)
+    stdout = b'before\n' if status == 'script-kill' else b''
+    assert result == (stdout, b'', want), f'{wire}-{status}: the result is {result!r}, not exit code {want}'
+    assert seen.read_text() == str(own), \
+        f'{wire}-{status}: the launch itself ended with {seen.read_text()}, not {own}: the signal was not re-raised'
 
 
 # Startup separation: planted startup files that read and print, against a quiet home.
@@ -946,6 +1176,9 @@ SEPARATION_CASES = {
     'kill': ('echo before; kill $$', None),
     'stdin': (['cat'], b'line one\nline two\n\0\xff'),
     'empty': ('', None),
+    # Long enough that a profile's background writer, if it had the caller's streams, would print
+    # before the command's end.
+    'slow': ('sleep 1; echo slow', None),
 }
 
 
@@ -1054,13 +1287,11 @@ SSHD_ENV = ('SSH_CLIENT=127.0.0.1 50000 22', 'SSH_CONNECTION=127.0.0.1 50000 127
 @pytest.mark.parametrize('form', ['argv', 'script', 'fixed-script'])
 @pytest.mark.parametrize('wire', ['local', 'ssh-sh', 'ssh-bash', 'ssh-zsh'])
 def test_no_stage_reads_a_startup_file_under_sshd(wire: str, form: str, home: Path) -> None:
-    from rcac_mcp.scripts import script_argv
-    from rcac_mcp.tools.filesystem import WRITE
     (home / '.bashrc').write_text(BASHRC_MARKER)
     commands = {
         'argv': (['printf', '%s', 'ran'], None),
         'script': ('printf %s ran', None),
-        'fixed-script': (script_argv(WRITE, 'write_file', UserPath('~/written')), b'ran'),
+        'fixed-script': (launch.write_argv('~/written'), b'ran'),
     }
     command, stdin = commands[form]
     result = run_on(wire, command, home, start='home', stdin=stdin, env=SSHD_ENV)
@@ -1123,10 +1354,10 @@ def test_a_taken_parked_descriptor_runs_nothing(fd: str, home: Path) -> None:
     # that takes it leaves behind, on any bash (one that keeps a profile's `exec 58>…` or not).
     assert launch.STAGE.count(PARKED[fd]) == 1, f'descriptor {fd} is not parked by the stage'
     stage = launch.STAGE.replace(PARKED[fd], f'{fd}<>"$2"')
-    prog, sentinel = launch.program(RAN)
+    prog, marks = launch.program(RAN)
     argv = [*launch.POSIX_STAGE, '-c', stage, 'cluster-mcp', prog, str(home / 'elsewhere')]
-    out, err, code, note = _sandboxed(_environment(home) + argv, b'out\n')
-    result = launch.separate(out, err, code, sentinel, note)
+    out, err, code, note = _sandboxed(_environment(home) + argv, b'out\n', end=marks.end)
+    result = launch.separate(out, err, code, marks, note)
     assert result == (b'', TAKEN_NOTE, NOT_STARTED_EXIT_CODE), f'descriptor {fd} taken: the result is {result!r}'
     assert not (home / 'ran').exists(), f'descriptor {fd} taken: the command ran'
 
@@ -1162,7 +1393,21 @@ def test_a_profile_taking_a_parked_descriptor_is_not_run(wire: str, taken: str, 
 
 @pytest.mark.integration
 def test_a_command_printing_its_own_sentinel_keeps_it(home: Path) -> None:
-    prog, sentinel = launch.program(['cat'])
-    sent = sentinel + b' and again ' + sentinel
-    out, err, code, note = _sandboxed(_environment(home) + launch.bash_argv(prog), sent)
-    assert launch.separate(out, err, code, sentinel, note) == (sent, b'', 0)
+    prog, marks = launch.program(['cat'])
+    sent = marks.start + b' and again ' + marks.start
+    out, err, code, note = _sandboxed(_environment(home) + launch.bash_argv(prog), sent, end=marks.end)
+    assert launch.separate(out, err, code, marks, note) == (sent, b'', 0)
+
+
+# Text shaped like an end record: a fixed nonce, another call's, a record with no nonce at all.
+RECORD_LOOKALIKES = (b'0' * 32 + b'x0.' + b'f' * 32 + b's9.' + b'deadbeef' * 4 + b'x1.\n'
+                     + b'cluster-mcp-end x0.\n' + b'x0.s1.\n')
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('wire', ['local', 'ssh-sh', 'ssh-zsh'])
+def test_a_command_printing_record_lookalikes_keeps_them(wire: str, home: Path) -> None:
+    script = 'cat; cat >&2 <<EOF\n' + RECORD_LOOKALIKES.decode() + 'EOF\nexit 4'
+    result = run_on(wire, script, home, stdin=RECORD_LOOKALIKES)
+    assert result == (RECORD_LOOKALIKES, RECORD_LOOKALIKES, 4), \
+        f'{wire}: output shaped like an end record cut the result: {result!r}'

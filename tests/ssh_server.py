@@ -20,12 +20,19 @@ process behind.
 
 `ThrottledSSH` is the same server on a slow link, as sshd behaves on one: it reads the command's
 output as fast as the client's window allows, sends stdout and stderr over one link at a fixed rate
-in the order it read them, and sends the exit status as soon as the process exits, ahead of
-whatever output is still queued.
+in the order it read them, a packet (`piece`) at a time, and sends the exit status as soon as the
+process exits, ahead of whatever output is still queued. The link can stall: for a while right
+after the exit status goes (`stall_after_exit`), or once a given number of bytes has been sent
+(`stall_at`).
 
-An SFTP subsystem serves the same filesystem, starting in the home. It refuses any path outside
-`jail` (the test's own temporary tree), so a transfer that resolves somewhere else fails loudly
-instead of touching the real filesystem. Authentication is one generated client key; the client
+Every exec records the bytes the client sent on its stdin (`stdin_bytes`), so a test can show that
+none of a write's content travelled there.
+
+An SFTP subsystem serves the same filesystem, starting in the home, as OpenSSH's does: a file or
+directory is created with the permissions the client asks for (the process umask narrowing them),
+a client can change them, remove a file or an empty directory, and `normalize` resolves symbolic
+links. It refuses any path outside `jail` (the test's own temporary tree), so a transfer that
+resolves somewhere else fails loudly instead of touching the real filesystem. Authentication is one generated client key; the client
 side is isolated from the developer's SSH setup (`executor()` builds an `SSHExecutor` with no key
 lookup, no agent and an empty SSH config).
 """
@@ -97,7 +104,12 @@ class _SFTP(paramiko.SFTPServerInterface):
         return real if real == self.jail or real.startswith(self.jail + os.sep) else None
 
     def canonicalize(self, path: str) -> str:
-        return self._real(path) or path
+        # As OpenSSH's realpath: symbolic links resolved, a missing last component allowed.
+        real = self._real(path)
+        if real is None:
+            return path
+        resolved = os.path.realpath(real)
+        return resolved if resolved == self.jail or resolved.startswith(self.jail + os.sep) else real
 
     def _stat(self, path: str, how: Any) -> Any:
         real = self._real(path)
@@ -119,7 +131,7 @@ class _SFTP(paramiko.SFTPServerInterface):
         if real is None:
             return paramiko.SFTP_PERMISSION_DENIED
         try:
-            fd = os.open(real, flags, 0o644)
+            fd = os.open(real, flags, _mode(attr, 0o666))
         except OSError as exc:
             return paramiko.SFTPServer.convert_errno(exc.errno)
         if flags & os.O_WRONLY:
@@ -133,8 +145,35 @@ class _SFTP(paramiko.SFTPServerInterface):
         handle.readfile = handle.writefile = os.fdopen(fd, mode)
         return handle
 
-    def chattr(self, path: str, attr: Any) -> int:
+    def _do(self, path: str, act: Any) -> int:
+        real = self._real(path)
+        if real is None:
+            return paramiko.SFTP_PERMISSION_DENIED
+        try:
+            act(real)
+        except OSError as exc:
+            return paramiko.SFTPServer.convert_errno(exc.errno)
         return paramiko.SFTP_OK
+
+    def chattr(self, path: str, attr: Any) -> int:
+        if attr.st_mode is None:
+            return paramiko.SFTP_OK
+        return self._do(path, lambda real: os.chmod(real, attr.st_mode & 0o7777))
+
+    def mkdir(self, path: str, attr: Any) -> int:
+        return self._do(path, lambda real: os.mkdir(real, _mode(attr, 0o777)))
+
+    def rmdir(self, path: str) -> int:
+        return self._do(path, os.rmdir)
+
+    def remove(self, path: str) -> int:
+        return self._do(path, os.remove)
+
+
+def _mode(attr: Any, default: int) -> int:
+    """The permissions a client asked for in `attr`, or `default` when it asked for none."""
+    mode = getattr(attr, 'st_mode', None)
+    return default if mode is None else mode & 0o7777
 
 
 class _Server(paramiko.ServerInterface):
@@ -178,9 +217,11 @@ def _pump(source: Any, send: Any, stop: threading.Event) -> None:
         source.close()
 
 
-def _feed(channel: paramiko.Channel, sink: Any, stop: threading.Event, pumps: list[threading.Thread]) -> None:
+def _feed(channel: paramiko.Channel, sink: Any, stop: threading.Event, pumps: list[threading.Thread],
+          received: list[int]) -> None:
     try:
         while data := channel.recv(65536):
+            received[0] += len(data)
             sink.write(data)
             sink.flush()
     except (OSError, EOFError, paramiko.SSHException):
@@ -209,6 +250,7 @@ class LoopbackSSH:
         self.shell = shell
         self.jail = str(Path(jail).resolve())
         self.received: list[str] = []
+        self.stdin_bytes: list[list[int]] = []
         self.processes: list[subprocess.Popen[bytes]] = []
         self._transports: list[paramiko.Transport] = []
         self._listener = socket.socket()
@@ -243,7 +285,8 @@ class LoopbackSSH:
         stop = threading.Event()
         out = threading.Thread(target=_pump, args=(proc.stdout, channel.sendall, stop), daemon=True)
         err = threading.Thread(target=_pump, args=(proc.stderr, channel.sendall_stderr, stop), daemon=True)
-        feeder = threading.Thread(target=_feed, args=(channel, proc.stdin, stop, [out, err]), daemon=True)
+        feeder = threading.Thread(target=_feed, args=(channel, proc.stdin, stop, [out, err], self._stdin_count()),
+                                  daemon=True)
         for thread in (feeder, out, err):
             thread.start()
         code = proc.wait()
@@ -264,6 +307,10 @@ class LoopbackSSH:
             channel.close()
         except (OSError, EOFError, paramiko.SSHException):
             pass
+
+    def _stdin_count(self) -> list[int]:
+        self.stdin_bytes.append([0])
+        return self.stdin_bytes[-1]
 
     def _launch(self, wire: str) -> subprocess.Popen[bytes]:
         proc = subprocess.Popen([str(SANDBOX), 'env', '-i', *self.environment(), '/bin/sh', '-c', ENTER_HOME,
@@ -306,14 +353,24 @@ PIECE = 8192
 
 
 class _Link:
-    """One slow link carrying both output streams, in the order they were read, at `rate` bytes/s."""
+    """One slow link carrying both output streams, in the order they were read, at `rate` bytes/s,
+    `piece` bytes at a time; it stalls for `stall_at[1]` seconds once `stall_at[0]` bytes have gone,
+    and for any pause `stall` asks for."""
 
-    def __init__(self, channel: paramiko.Channel, rate: int, window: int) -> None:
-        self.channel, self.rate, self.window = channel, rate, window
+    def __init__(self, channel: paramiko.Channel, rate: int, window: int, piece: int = 8192,
+                 stall_at: tuple[int, float] | None = None) -> None:
+        self.channel, self.rate, self.window, self.piece = channel, rate, window, piece
         self.queue: deque[tuple[bool, bytes]] = deque()
         self.queued = 0
         self.ended = 0
+        self.sent = 0
+        self.stall_at = stall_at
+        self.paused_until = 0.0
         self.cond = threading.Condition()
+
+    def stall(self, seconds: float) -> None:
+        """Send nothing more for `seconds` from now."""
+        self.paused_until = max(self.paused_until, time.monotonic() + seconds)
 
     def read(self, source: Any, is_err: bool, stop: threading.Event) -> None:
         """Read `source` as fast as the window allows; at its end (or `stop`), close it."""
@@ -350,12 +407,17 @@ class _Link:
                     return
                 is_err, data = self.queue.popleft()
             send = self.channel.sendall_stderr if is_err else self.channel.sendall
-            for at in range(0, len(data), PIECE):
-                piece = data[at:at + PIECE]
+            for at in range(0, len(data), self.piece):
+                piece = data[at:at + self.piece]
+                if self.stall_at is not None and self.sent >= self.stall_at[0]:
+                    self.stall(self.stall_at[1])
+                    self.stall_at = None
+                time.sleep(max(0.0, self.paused_until - time.monotonic()))
                 try:
                     send(piece)
                 except (OSError, EOFError, paramiko.SSHException):
                     return
+                self.sent += len(piece)
                 time.sleep(len(piece) / self.rate)
             with self.cond:
                 self.queued -= len(data)
@@ -363,10 +425,14 @@ class _Link:
 
 
 class ThrottledSSH(LoopbackSSH):
-    """The loopback server on a link of `rate` bytes a second, with sshd's read-ahead of `window`."""
+    """The loopback server on a link of `rate` bytes a second, with sshd's read-ahead of `window`,
+    sending `piece` bytes at a time; it stalls for `stall_after_exit` seconds once an exit status has
+    gone, and as `stall_at` says (bytes sent, seconds)."""
 
-    def __init__(self, home: Path, shell: str, jail: Path, rate: int, window: int = WINDOW) -> None:
-        self.rate, self.window = rate, window
+    def __init__(self, home: Path, shell: str, jail: Path, rate: int, window: int = WINDOW, piece: int = PIECE,
+                 stall_after_exit: float = 0.0, stall_at: tuple[int, float] | None = None) -> None:
+        self.rate, self.window, self.piece = rate, window, piece
+        self.stall_after_exit, self.stall_at = stall_after_exit, stall_at
         super().__init__(home, shell, jail)
 
     def execute(self, channel: paramiko.Channel, wire: str) -> None:
@@ -374,11 +440,12 @@ class ThrottledSSH(LoopbackSSH):
         started = time.monotonic()
         proc = self._launch(wire)
         stop = threading.Event()
-        link = _Link(channel, self.rate, self.window)
+        link = _Link(channel, self.rate, self.window, self.piece, self.stall_at)
         readers = [threading.Thread(target=link.read, args=(proc.stdout, False, stop), daemon=True),
                    threading.Thread(target=link.read, args=(proc.stderr, True, stop), daemon=True)]
         sender = threading.Thread(target=link.send, daemon=True)
-        feeder = threading.Thread(target=_feed, args=(channel, proc.stdin, stop, readers), daemon=True)
+        feeder = threading.Thread(target=_feed, args=(channel, proc.stdin, stop, readers, self._stdin_count()),
+                                  daemon=True)
         for thread in (feeder, *readers, sender):
             thread.start()
         code = proc.wait()
@@ -388,6 +455,8 @@ class ThrottledSSH(LoopbackSSH):
                 channel.send_exit_status(code)
         except (OSError, EOFError, paramiko.SSHException):
             pass
+        if self.stall_after_exit:
+            link.stall(self.stall_after_exit)
         sender.join()
         try:
             channel.shutdown_write()

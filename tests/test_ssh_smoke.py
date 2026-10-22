@@ -6,7 +6,7 @@
 `SSHExecutor` drives the recommended deployment. Here it connects to an in-process Paramiko server
 bound to 127.0.0.1, with keys generated for the test, which decodes each exec request (the
 launcher's fixed bootstrap carrying the program as one base64 word), records the command the
-program runs, and answers with the program's sentinel, canned output and a non-zero exit status;
+program runs, and answers with the program's sentinel, canned output, its end record and a non-zero exit status;
 no process is launched and nothing leaves the machine. (`test_ssh_exec.py` runs the programs for
 real, against a loopback server that executes them.) The test is isolated from the developer's SSH
 setup: `HOME` is under `tmp_path`, `SSH_AUTH_SOCK` is unset, the client neither looks for keys nor
@@ -57,19 +57,20 @@ def smoke_violations(result: CommandResult, received: list[str], command: str, h
     return violations
 
 
-def decoded(wire: str) -> tuple[str, bytes]:
-    """The command a bootstrap exec string's program runs, and its sentinel; the raw string otherwise."""
+def decoded(wire: str) -> tuple[str, launch.Marks | None]:
+    """The command a bootstrap exec string's program runs, and its nonces; the raw string otherwise."""
     if not wire.startswith(launch.BOOTSTRAP):
-        return wire, b''
+        return wire, None
     try:
-        command, sentinel = launched_script([base64.b64decode(wire[len(launch.BOOTSTRAP):]).decode()])
+        command, marks = launched_script([base64.b64decode(wire[len(launch.BOOTSTRAP):]).decode()])
     except ValueError:
-        return wire, b''
-    return (command if isinstance(command, str) else ' '.join(command)), sentinel
+        return wire, None
+    return (command if isinstance(command, str) else ' '.join(command)), marks
 
 
 class _Server(paramiko.ServerInterface):
-    """Accept the one client key; answer every exec with its sentinel, `smoke:<command>` and EXIT_STATUS."""
+    """Accept the one client key; answer every exec as its program would: the start sentinel,
+    `smoke:<command>`, then the end record carrying EXIT_STATUS, on both streams; and EXIT_STATUS."""
 
     def __init__(self, client_key: paramiko.PKey, received: list[str]) -> None:
         self.client_key = client_key
@@ -89,15 +90,16 @@ class _Server(paramiko.ServerInterface):
         return True
 
     def check_channel_exec_request(self, channel: paramiko.Channel, command: bytes) -> bool:
-        ran, sentinel = decoded(command.decode())
+        ran, marks = decoded(command.decode())
         self.received.append(ran)
+        start, end = (b'', b'') if marks is None else (marks.start, marks.end + b'x%d.' % EXIT_STATUS)
 
         def reply() -> None:
             # Paramiko confirms the exec request after this method returns; answering before that
             # confirmation reaches the client closes the channel under it.
             time.sleep(0.2)
-            channel.sendall(sentinel + b'smoke:' + ran.encode())
-            channel.sendall_stderr(sentinel)
+            channel.sendall(start + b'smoke:' + ran.encode() + end)
+            channel.sendall_stderr(start + end)
             channel.send_exit_status(EXIT_STATUS)
             channel.close()
 

@@ -1,32 +1,37 @@
 # SPDX-FileCopyrightText: 2025 Purdue University
 # SPDX-License-Identifier: MIT
 
-"""SSH-based command executor: Fabric for the connection, a raw Paramiko channel per command."""
+"""SSH-based command executor: Fabric for the connection, a raw Paramiko channel per command.
+
+A file's content never travels on a command's stdin here: `write` sends it by SFTP into a private
+directory beside the target, and a program then moves it into place.
+"""
 
 # Type annotations
 from __future__ import annotations
 from collections.abc import Sequence
-from typing import Any, Callable, Final, Optional, Type
+from typing import Any, Final, Optional, Type
 from types import TracebackType
 
 # Standard libs
+import errno
 import os
 import posixpath
+import secrets
 import select
 import stat
-import threading
 import time
 
 # External libs
 from fabric import Config, Connection
-from paramiko import Channel, SFTPClient, Transport
+from paramiko import SFTPClient, Transport
 from paramiko.common import cMSG_CHANNEL_REQUEST
 from paramiko.message import Message
 from paramiko.ssh_exception import SSHException
 
 # Internal libs
 from rcac_mcp.executor import launch
-from rcac_mcp.executor.base import TIMEOUT_EXIT_CODE, CommandResult
+from rcac_mcp.executor.base import TIMEOUT_EXIT_CODE, CommandResult, UserPath
 
 # Public interface
 __all__ = ['SSHExecutor']
@@ -51,10 +56,24 @@ SLEEP_WAIT: Final = 0.02
 # A read from the channel, per call.
 CHUNK: Final = 65536
 
-# Seconds a call that holds the caller's stdin waits, with nothing arriving, for the program to
-# start. Its bytes go only once the program has started, so a remote rc file that reads stdin would
-# otherwise hold the call for ever; the call then ends as a timeout, having sent nothing.
-START_TIMEOUT: Final = 30.0
+# Where a write stages its content: a directory of this name and a fresh token, mode 0700, beside
+# the target (so the move into place is a rename within one filesystem), holding one file, mode 0600.
+STAGE_PREFIX: Final = '.cluster-mcp-'
+STAGED: Final = 'content'
+
+# The programs that put a staged file in place, "$1" the staged file, "$2" the target, "$3" the mode
+# the target keeps (its own, or `=rw`, which a new file's umask narrows, as `cat >` would leave it).
+# An overwrite moves the file into place, atomically; an append adds its bytes to the target; a
+# target that is not a regular file (a FIFO, a device) is written through, as `cat >` would.
+PLACE: Final = 'chmod -- "$3" "$1" && mv -f -- "$1" "$2"'
+PLACE_APPEND: Final = 'cat -- "$1" >>"$2"'
+PLACE_THROUGH: Final = 'cat -- "$1" >"$2"'
+PLACE_EXECUTABLE: Final = ' && chmod -- +x "$2"'
+MAKE_PARENT: Final = 'mkdir -p -- "$1"'
+
+# The errors that leave a directory closed to a new entry (no write permission), while a writable
+# target in it can still be written through.
+CLOSED: Final = (errno.EACCES, errno.EPERM)
 
 
 def _drain(chan: Any, out: bytearray, err: bytearray) -> None:
@@ -107,71 +126,45 @@ def _stopped(chan: Any, out: bytearray, err: bytearray) -> None:
         _wait(chan, left)
 
 
-def _collect(chan: Any, timeout: float | None, sentinel: bytes = b'',
-             started: Callable[[], None] | None = None) -> tuple[bytes, bytes, int, bytes]:
-    """Read the channel's stdout and stderr to the end; return them, the exit status and a note.
+def _collect(chan: Any, timeout: float | None, end: bytes | None = None) -> tuple[bytes, bytes, int, bytes]:
+    """Read the channel's stdout and stderr until both have carried their end record; return them,
+    the status and a note.
 
-    The output is done when the channel has ended (`_ended`). sshd sends the exit status as soon as
-    the command exits, while its output may still be queued behind it on a slow link, so the read
-    goes on while output arrives. Only once nothing has arrived for `launch.GRACE` after the exit
-    status does it stop, with `launch.HELD_NOTE`: what still holds the output open (a background job
-    of the command's, or one a startup file left running) is no longer the command. At the deadline,
-    a command with no exit status yet is asked to TERM, what it prints as it stops is read for
-    `GRACE`, and the code is `TIMEOUT_EXIT_CODE`; output still arriving after an exit status at
-    `GRACE` past the deadline ends the read too, as a timeout whose note (`launch.LATE_NOTE`) names
-    that status. A signal death or a lost status stays -1, as Paramiko reports it.
-
-    `started`, if given, is called once, when `sentinel` first arrives on either stream: the program
-    is running and its startup files are done. Until then the call waits for it at most
-    `START_TIMEOUT` with nothing arriving, then ends as a timeout.
+    Given the program's end nonce `end`, the output is complete once each stream has carried its end
+    record, however long it takes to arrive: sshd sends the exit status as soon as the command exits,
+    ahead of output still queued on a slow link, so the status is never a reason to stop. The read
+    then stops and the channel is closed, so nothing left running holds the call. A channel that ends
+    first (`_ended`) ends the read too, with everything it carried. At the deadline the code is
+    `TIMEOUT_EXIT_CODE`: a command whose exit status has arrived is asked nothing and the note
+    (`launch.LATE_NOTE`) names that status; otherwise the command is asked to TERM and what it prints
+    as it stops is read for `GRACE`. The status beside complete output is the channel's if it has
+    arrived, else -1, as Paramiko reports a signal death or a lost status; the record is the
+    command's.
     """
     out, err = bytearray(), bytearray()
-    now = time.monotonic()
-    deadline = None if timeout is None else now + timeout
-    heard = now
-    exited = None
+    deadline = None if timeout is None else time.monotonic() + timeout
+    scanned = [0, 0]
     while True:
-        size = len(out) + len(err)
         _drain(chan, out, err)
-        now = time.monotonic()
-        if len(out) + len(err) != size:
-            heard = now
-        if started is not None and (sentinel in out or sentinel in err):
-            started()
-            started = None
+        if end is not None:
+            for i, buf in enumerate((out, err)):
+                if scanned[i] >= 0:
+                    found = launch.record(buf, end, scanned[i])
+                    scanned[i] = -1 if found else max(0, len(buf) - len(end) - 5)
+            if scanned == [-1, -1]:
+                return bytes(out), bytes(err), chan.recv_exit_status() if chan.exit_status_ready() else -1, b''
         if _ended(chan):
             _drain(chan, out, err)
             return bytes(out), bytes(err), chan.recv_exit_status(), b''
-        if chan.exit_status_ready():
-            status = chan.recv_exit_status()
-            exited = now if exited is None else exited
-            quiet = max(heard, exited)
-            if now >= quiet + launch.GRACE:
-                return bytes(out), bytes(err), status, launch.HELD_NOTE
-            if deadline is not None and now >= deadline + launch.GRACE:
-                return bytes(out), bytes(err), TIMEOUT_EXIT_CODE, launch.LATE_NOTE.format(code=status).encode()
-            left = quiet + launch.GRACE - now
-            left = left if deadline is None else min(left, deadline + launch.GRACE - now)
-        else:
-            limit = deadline
-            if started is not None:
-                limit = heard + START_TIMEOUT if limit is None else min(limit, heard + START_TIMEOUT)
-            if limit is not None and now >= limit:
-                _signal(chan, 'TERM')
-                _stopped(chan, out, err)
-                return bytes(out), bytes(err), TIMEOUT_EXIT_CODE, b''
-            left = None if limit is None else limit - now
-        _wait(chan, left)
-
-
-def _feed(chan: Channel, stdin: bytes | None) -> None:
-    """Send `stdin` to the command, then its end; a channel closed under it ends the feed."""
-    try:
-        if stdin:
-            chan.sendall(stdin)
-        chan.shutdown_write()
-    except (OSError, EOFError, SSHException):
-        pass
+        now = time.monotonic()
+        if deadline is not None and now >= deadline:
+            if chan.exit_status_ready():
+                note = launch.LATE_NOTE.format(code=chan.recv_exit_status()).encode()
+                return bytes(out), bytes(err), TIMEOUT_EXIT_CODE, note
+            _signal(chan, 'TERM')
+            _stopped(chan, out, err)
+            return bytes(out), bytes(err), TIMEOUT_EXIT_CODE, b''
+        _wait(chan, None if deadline is None else deadline - now)
 
 
 def _remote(path: str) -> str:
@@ -216,6 +209,56 @@ def _is_dir(sftp: SFTPClient, path: str) -> bool:
         return stat.S_ISDIR(sftp.stat(path).st_mode or 0)
     except OSError:
         return False
+
+
+def _staging(sftp: SFTPClient, path: str) -> tuple[str, str | None, bool]:
+    """Where a write of SFTP path `path` lands, the mode it keeps, and whether it is written through.
+
+    A symbolic link is followed to the file it names (the server resolves it), as a shell's `>`
+    follows it. An existing regular file keeps its permission bits; a missing one gets a new file's
+    (None). A target that exists and is not a regular file is written through; a directory is
+    refused.
+    """
+    try:
+        if stat.S_ISLNK(sftp.lstat(path).st_mode or 0):
+            path = sftp.normalize(path)
+    except FileNotFoundError:
+        return path, None, False
+    try:
+        mode = sftp.stat(path).st_mode or 0
+    except FileNotFoundError:
+        return path, None, False
+    if stat.S_ISDIR(mode):
+        raise IsADirectoryError(errno.EISDIR, 'Is a directory', sftp.normalize(path))
+    return path, f'{stat.S_IMODE(mode):o}', not stat.S_ISREG(mode)
+
+
+def _stage(sftp: SFTPClient, near: str) -> tuple[str, str]:
+    """Make a fresh private directory in `near`; return it and the path of the file to stage there.
+
+    The directory is made mode 0700, so no other user can reach what it holds.
+    """
+    directory = posixpath.join(near, STAGE_PREFIX + secrets.token_hex(8))
+    sftp.mkdir(directory, 0o700)
+    staged = posixpath.join(directory, STAGED)
+    return directory, staged
+
+
+def _upload(sftp: SFTPClient, staged: str, data: bytes) -> None:
+    """Create `staged` exclusively, make it mode 0600 before any byte is written, then write `data`."""
+    with sftp.open(staged, 'wbx') as handle:
+        sftp.chmod(staged, 0o600)
+        handle.set_pipelined(True)
+        handle.write(data)
+
+
+def _discard(sftp: SFTPClient, directory: str, staged: str) -> None:
+    """Remove a staging directory and what is left in it (nothing, once a move has taken the file)."""
+    for remove, target in ((sftp.remove, staged), (sftp.rmdir, directory)):
+        try:
+            remove(target)
+        except OSError:
+            pass
 
 
 class SSHExecutor:
@@ -299,24 +342,20 @@ class SSHExecutor:
         command: Sequence[str] | str,
         cwd: str | None = None,
         timeout: float | None = None,
-        stdin: bytes | None = None,
     ) -> CommandResult:
         """
         Run a command on the remote host under the pinned login bash (see `Executor.run`).
 
         The program travels as the launcher's fixed bootstrap carrying one base64 word, so the
         remote login shell parses none of it. It starts in the login home (`$HOME`), whatever a
-        startup file `cd`s to. The caller's stdin is sent only once the program has started (its
-        sentinel has arrived), so no startup file reads it; a program that never starts gets none,
-        and a call holding stdin waits for the start at most `START_TIMEOUT` with nothing arriving.
-        The output is read to its end, however long it takes to arrive after the exit status
-        (`_collect`).
+        startup file `cd`s to. Its stdin is empty: the end of it is sent at once, so a remote rc
+        file that reads stdin reads nothing. The output is read up to the program's end records,
+        however long it takes to arrive after the exit status (`_collect`).
 
         Args:
             command: An argv (each element one literal argument) or a bash script.
             cwd: Working directory; a leading `~` or `~/` is the remote user's home.
             timeout: Seconds to wait; at the deadline the result carries `TIMEOUT_EXIT_CODE`.
-            stdin: The exact bytes the command reads; None is an empty, closed stdin.
 
         Returns:
             CommandResult with stdout, stderr, exit_code, and hostname.
@@ -325,33 +364,80 @@ class SSHExecutor:
             ValueError: The exec string is over the per-argument limit, before connecting.
         """
         timeout = launch.check_timeout(timeout)
-        prog, sentinel = launch.program(command, cwd, start='home')
+        prog, marks = launch.program(command, cwd, start='home')
         wire = launch.ssh_command(prog)
         transport = self._ensure_connected().client.get_transport()
-        out, err, code, note = self._exec(transport, wire, stdin, timeout, sentinel)
-        out, err, code = launch.separate(out, err, code, sentinel, note)
+        out, err, code, note = self._exec(transport, wire, timeout, marks.end)
+        out, err, code = launch.separate(out, err, code, marks, note)
         return CommandResult(stdout=launch.decode(out), stderr=launch.decode(err), exit_code=code,
                              hostname=self._host)
 
     @staticmethod
-    def _exec(transport: Transport, wire: str, stdin: bytes | None, timeout: float | None,
-              sentinel: bytes) -> tuple[bytes, bytes, int, bytes]:
+    def _exec(transport: Transport, wire: str, timeout: float | None, end: bytes) -> tuple[bytes, bytes, int, bytes]:
         """Run the exec string `wire` on a fresh session channel and collect its output.
 
-        The remote login shell's rc files run on the channel's own stdin before the program can park
-        it, so the caller's bytes go, from a thread, only once the program has printed `sentinel`.
-        With nothing to send, the end of stdin goes at once: it carries no byte of the caller's.
+        The end of stdin goes at once: the channel carries no byte to the command, so nothing the
+        remote login shell's rc files run can read anything from it.
         """
         chan = transport.open_session(timeout=OPEN_TIMEOUT)
         try:
             chan.exec_command(wire)
-            if not stdin:
-                _feed(chan, None)
-                return _collect(chan, timeout)
-            feeder = threading.Thread(target=_feed, args=(chan, stdin), daemon=True)
-            return _collect(chan, timeout, sentinel, feeder.start)
+            chan.shutdown_write()
+            return _collect(chan, timeout, end)
         finally:
             chan.close()
+
+    def write(self, path: str, data: bytes, append: bool = False, parent: str | None = None,
+              executable: bool = False) -> CommandResult:
+        """
+        Write `data` to the remote file `path`, exactly (see `Executor.write`).
+
+        The bytes go by SFTP, never on a command's stdin, into a file of their own (mode 0600) in a
+        private directory (mode 0700) made beside the target, on the target's filesystem; a fixed
+        program then moves that file into place, a rename, so the target is replaced whole or not at
+        all, and keeps its permission bits (a new file gets the mode `cat >` would give it). An
+        append adds the staged bytes to the target. A symbolic link is followed to the file it
+        names. A target that is not a regular file, or a regular file in a directory this user may
+        not add to, is written through instead, from a staging directory in the login home. The
+        staging directory is removed whatever happens.
+
+        Raises:
+            OSError: The content could not be staged (the target is a directory, its directory is
+                missing or closed, a transfer failed); nothing was written.
+        """
+        if not path:
+            # As a shell's `>` with an empty name.
+            raise FileNotFoundError(errno.ENOENT, 'No such file or directory', path)
+        with self._ensure_connected().client.open_sftp() as sftp:
+            # A parent that is already a directory needs no command, and no login shell's start.
+            if parent is not None and not _is_dir(sftp, _remote(parent)):
+                made = self.run(launch.fixed_argv(MAKE_PARENT, 'cluster-mcp-write', UserPath(parent)))
+                if made.exit_code != 0:
+                    return made
+            target, mode, through = _staging(sftp, _remote(path))
+            near = '.' if through else posixpath.dirname(target) or '.'
+            try:
+                directory, staged = _stage(sftp, near)
+            except OSError as exc:
+                if exc.errno not in CLOSED or mode is None or through:
+                    raise
+                # A writable file in a directory closed to new entries: written through, as before.
+                through = True
+                directory, staged = _stage(sftp, '.')
+            try:
+                _upload(sftp, staged, data)
+                if append:
+                    script = PLACE_APPEND
+                elif through:
+                    script = PLACE_THROUGH
+                else:
+                    script = PLACE
+                if executable:
+                    script += PLACE_EXECUTABLE
+                return self.run(launch.fixed_argv(script, 'cluster-mcp-write', UserPath(staged), UserPath(target),
+                                                  mode or '=rw'))
+            finally:
+                _discard(sftp, directory, staged)
 
     def put(self, local_path: str, remote_path: str) -> str:
         """

@@ -25,7 +25,10 @@ def run_command(
     The command runs under bash, after the login initialisation (so `module` and the site's tools
     are available whatever the user's login shell). Nothing the initialisation prints is returned,
     with one exception: over ssh, a background job started by the remote login shell's own rc file
-    (zsh's .zshenv, say) can write into the result while the command runs.
+    (zsh's .zshenv, say) can write into the result while the command runs. The result holds all of
+    the command's output, however slowly it arrives, and comes back as soon as the command has
+    ended: a background job it leaves running does not hold the call, and what that job prints
+    afterwards is not returned.
 
     Args:
         command: The shell command to execute, as a bash script.
@@ -35,7 +38,8 @@ def run_command(
     Returns:
         CommandResult containing stdout, stderr, exit_code, and hostname. On timeout, exit_code is
         -1001 and stdout and stderr hold what was captured before the deadline; -1002 means the
-        command never started.
+        command never started. A command killed by signal N, or exiting 128+N for such a signal,
+        has exit_code -N.
 
     Examples:
         run_command("ls -la")

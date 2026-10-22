@@ -39,19 +39,19 @@ The server supports three execution modes:
   authenticated users via `sudo`. Requires JWT or OIDC authentication.
 
 In every mode a command runs in a login bash (`/bin/bash -l`), whatever the user's login shell, so
-`module` and the site's tools behave the same for everyone. No startup file reads a command's stdin
-or changes where it starts, and nothing the login initialisation prints is returned, with one
-exception: over ssh, a background job started by the remote login shell's own rc file (zsh's
+`module` and the site's tools behave the same for everyone. No startup file reads a file's content
+or changes where a command starts, and nothing the login initialisation prints is returned, with
+one exception: over ssh, a background job started by the remote login shell's own rc file (zsh's
 `.zshenv`, say) can write into a result while the command runs
 ([`issues/startup-background-jobs.md`](issues/startup-background-jobs.md)). A result holds all of
-the command's output, however slowly it arrives; if something left running keeps the output open
-after the command exits, the call returns once nothing has arrived for a second, and stderr ends
-with a note saying so. Over ssh a command's stdin is sent only once it has started, so if the remote
-login shell's rc file reads stdin, a call that sends stdin times out and never writes partial
-content (`write_file` and `sbatch`'s job script both send stdin; without a timeout of their own,
-they wait at most 30 s with nothing arriving for the command to start, then fail naming exit code
-`-1001`). A command that exceeds its `timeout` returns what it printed so far with exit code
-`-1001`.
+the command's output, however slowly it arrives: the launcher reports the command's end on both
+streams, and the call returns there, so a background job the command or a startup file leaves
+running never holds it, and what such a job prints afterwards is not returned. A command killed by
+signal N (or exiting 128+N) has exit code `-N`. `write_file` and `sbatch`'s job script are written
+byte for byte; over ssh their content never rides a command's stdin but goes by SFTP to a private
+temporary file beside the target, which is then moved into place, so the file is replaced whole and
+keeps its permissions. A command that exceeds its `timeout` returns what it printed so far with
+exit code `-1001`.
 
 See [SECURITY.md](SECURITY.md) for detailed architecture and configuration.
 

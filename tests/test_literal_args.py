@@ -117,7 +117,8 @@ ME = getpass.getuser()
 # The modes.
 
 class Recorded:
-    """An executor that records every call it passes on to `inner`: ('run', command, …), ('put'|'get', …)."""
+    """An executor that records every call it passes on to `inner`: ('run', command, …), ('write', path, …),
+    ('put'|'get', …)."""
 
     def __init__(self, inner: Executor) -> None:
         self.inner = inner
@@ -127,10 +128,14 @@ class Recorded:
     def hostname(self) -> str:
         return self.inner.hostname
 
-    def run(self, command: Sequence[str] | str, cwd: str | None = None, timeout: float | None = None,
-            stdin: bytes | None = None) -> CommandResult:
+    def run(self, command: Sequence[str] | str, cwd: str | None = None, timeout: float | None = None) -> CommandResult:
         self.calls.append(('run', command if isinstance(command, str) else list(command), cwd))
-        return self.inner.run(command, cwd=cwd, timeout=timeout, stdin=stdin)
+        return self.inner.run(command, cwd=cwd, timeout=timeout)
+
+    def write(self, path: str, data: bytes, append: bool = False, parent: str | None = None,
+              executable: bool = False) -> CommandResult:
+        self.calls.append(('write', path, parent))
+        return self.inner.write(path, data, append=append, parent=parent, executable=executable)
 
     def put(self, local_path: str, remote_path: str) -> str:
         self.calls.append(('put', local_path, remote_path))

@@ -22,15 +22,6 @@ from rcac_mcp.scripts import fixed, script_argv
 # it) and a NUL, then the long listing of `.`; any further arguments are `ls` options.
 LIST: Final = fixed('cd -- "$1" && printf \'%s\\0\' "$PWD" && shift && exec ls -l --time-style=long-iso "$@" .')
 
-# Write stdin to "$1", exactly: overwrite or append, after creating the parent "$2" when asked. The
-# parent is computed by the caller, never with `$(dirname …)`, which strips a trailing newline from
-# a directory name.
-MKDIR: Final = 'mkdir -p -- "$2" && '
-WRITE: Final = fixed('cat >"$1"')
-APPEND: Final = fixed('cat >>"$1"')
-WRITE_IN_DIR: Final = fixed(MKDIR + WRITE)
-APPEND_IN_DIR: Final = fixed(MKDIR + APPEND)
-
 # The whitespace a base64 `content` may carry (RFC 2045 line breaks: GNU `base64` wraps at 76
 # columns and ends with a newline); every other byte outside the alphabet is an error.
 BASE64_WHITESPACE: Final = {ord(c): None for c in ' \t\r\n'}
@@ -193,14 +184,15 @@ def write_file(
     data = _content_bytes(content, encoding)
     executor = get_executor()
 
+    # The parent is computed here, never with `$(dirname …)`, which strips a trailing newline from a
+    # directory name.
     parent = posixpath.dirname(path) if create_dirs else ''
-    if parent:
-        argv = script_argv(APPEND_IN_DIR if append else WRITE_IN_DIR, 'write_file', UserPath(path), UserPath(parent))
-    else:
-        argv = script_argv(APPEND if append else WRITE, 'write_file', UserPath(path))
 
-    # The content travels on stdin only, never in the argv.
-    result = executor.run(argv, stdin=data)
+    # The content goes through the executor's write, never in an argv.
+    try:
+        result = executor.write(path, data, append=append, parent=parent or None)
+    except OSError as exc:
+        raise RuntimeError(f'Failed to write file: {exc}') from None
 
     if result.exit_code != 0:
         raise RuntimeError(f'Failed to write file (exit {result.exit_code}): {result.stderr}')

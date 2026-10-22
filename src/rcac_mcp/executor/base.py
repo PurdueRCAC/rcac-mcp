@@ -48,12 +48,12 @@ class Executor(Protocol):
     Every backend runs every command under the same pinned interpreter: an explicit login bash
     (`/bin/bash -l`), whatever the user's login shell or the server's `$SHELL`, so site
     initialisation (`module`, the site's tools on `PATH`) is the same in every mode. No startup file
-    reads the caller's stdin or changes where a command starts, a result holds all of the command's
-    output however slowly it arrives, and nothing the login initialisation prints reaches a result,
-    with one exception: over
-    `ssh`, a background job started by the remote login shell's own rc file (zsh's `.zshenv`, say),
-    which runs before anything can be parked, can write into a result while the command runs
-    (`issues/startup-background-jobs.md`).
+    reads a command's stdin or a file's content, or changes where a command starts; a result holds
+    all of the command's output however slowly it arrives, and nothing left running holds a call
+    past the command's end; and nothing the login initialisation prints reaches a result, with one
+    exception: over `ssh`, a background job started by the remote login shell's own rc file (zsh's
+    `.zshenv`, say), which runs before anything can be parked, can write into a result while the
+    command runs (`issues/startup-background-jobs.md`).
     """
 
     @property
@@ -66,7 +66,6 @@ class Executor(Protocol):
         command: Sequence[str] | str,
         cwd: str | None = None,
         timeout: float | None = None,
-        stdin: bytes | None = None,
     ) -> CommandResult:
         """
         Run one command under the pinned login bash and return its result.
@@ -75,46 +74,80 @@ class Executor(Protocol):
         never interpreted by a shell, and an element marked `UserPath` resolves a leading `~` or
         `~/` to the home of the user the command runs as (nothing else in any element expands). A
         `str` is a bash script, run as given; only `run_command` passes one. The login
-        initialisation runs first; none of its startup files reads `stdin` or moves where the
-        command starts, and nothing they print reaches the result, but for the one exception the
-        class docstring states. A command starts in the running user's home (`ssh`, `delegate`) or
-        in the server process's working directory (`local`).
+        initialisation runs first; none of its startup files moves where the command starts, and
+        nothing they print reaches the result, but for the one exception the class docstring
+        states. A command starts in the running user's home (`ssh`, `delegate`) or in the server
+        process's working directory (`local`). Its stdin is empty and closed; a command never reads
+        the server's own stdin, and a file's content reaches a command only through `write`.
 
         Args:
             command: An argv (a sequence of `str`) or a bash script (a `str`).
             cwd: Working directory. A leading `~` or `~/` is the running user's home; nothing else
                 expands, and a relative path is taken from where the command starts.
             timeout: Seconds to wait, over 0 and at most 10⁷; None waits for the command to finish.
-            stdin: The exact bytes the command reads on its stdin. None gives it an empty, closed
-                stdin; a command never reads the server's own stdin. Over `ssh` the bytes go only
-                once the command has started, so if the remote login shell's rc file reads stdin,
-                a call that sends stdin times out and never writes partial content (−1001, empty
-                output; the command never runs). Such a call waits for the start at most
-                `ssh.START_TIMEOUT` (30 s) with nothing arriving, or `timeout` if that comes first,
-                so the timeout comes even when the caller set none.
 
         Returns:
-            CommandResult with stdout, stderr, exit_code, and hostname. The output is read to its
-            end, however long it keeps arriving after the command's exit status (over `ssh` the
-            status comes ahead of output still queued on the link). Only when nothing has arrived
-            for `launch.GRACE` (1 s) while something left running (by the command or a startup
-            file) holds the output open does the call stop reading, without waiting for or
-            signalling it, and stderr then ends with a note saying so. When the command exceeds
-            `timeout` it is stopped and the result carries what it printed before the deadline and
-            as it stopped, and `exit_code == TIMEOUT_EXIT_CODE` (−1001); output still arriving
-            `launch.GRACE` past the deadline from a command that has exited ends the call there too,
-            as −1001, with a note naming the command's own status. No backend raises on a timeout.
-            A command that never began (the login initialisation ended first, or took a
-            descriptor the command's streams were parked on, so the program ran nothing) returns
-            `NOT_STARTED_EXIT_CODE` (−1002); one whose start is announced late, behind a chatty rc
-            file on a slow link, has begun. A command killed by a signal reports −N (or 128+N from
-            a shell).
+            CommandResult with stdout, stderr, exit_code, and hostname. The result is complete
+            exactly when the command's end has been reported on both streams: the launcher runs the
+            command as a child and, once it exits, prints a per-call end record on stdout and on
+            stderr, which the backend reads up to however slowly the output arrives (over `ssh` the
+            exit status comes ahead of output still queued on the link, and decides nothing). The
+            call then returns at once: nothing the command or a startup file left running holds it,
+            and nothing printed after the record is kept. When the end has not been reported by
+            `timeout`, the command is stopped (unless it has exited) and the result carries what it
+            printed before the deadline and as it stopped, and `exit_code == TIMEOUT_EXIT_CODE`
+            (−1001); over `ssh`, a command whose exit status had arrived is named in a note on
+            stderr. No backend raises on a timeout. A command that never began (the login
+            initialisation ended first, or took a descriptor the command's streams were parked on,
+            so the program ran nothing) returns `NOT_STARTED_EXIT_CODE` (−1002); one whose start is
+            announced late, behind a chatty rc file on a slow link, has begun. A command killed by
+            signal N reports −N in every mode, and so does one that exits 128+N for a terminating
+            signal N, which bash reports alike; the launch then dies of that signal itself.
 
         Raises:
             TypeError, ValueError: The command, cwd or timeout cannot be run as given (a non-`str`
                 element, NUL, text that is not valid UTF-8, an empty argv, a program over the
                 per-argument limit of the bytes that carry it, a timeout out of range), before
                 anything starts.
+        """
+        ...
+
+    def write(
+        self,
+        path: str,
+        data: bytes,
+        append: bool = False,
+        parent: str | None = None,
+        executable: bool = False,
+    ) -> CommandResult:
+        """
+        Write exactly `data` to the file `path` on the side commands run on, as the running user.
+
+        `path` and `parent` follow `UserPath`'s rule: a leading `~` or `~/` is the running user's
+        home, nothing else expands, and a relative path is taken from where a command starts. No
+        startup file reads the bytes: in `local` and `delegate` they reach a fixed script on the
+        stdin the launch keeps parked while the login shell initialises, and the file is written
+        in place; over `ssh` they never ride a command's stdin, but go by SFTP to a private
+        temporary file (mode 0600, in a fresh directory of mode 0700) beside the target, which a
+        fixed program then moves into place, so the target is replaced whole and keeps its
+        permission bits (`ssh.write` states the cases written through instead). A symbolic link is
+        followed to the file it names. The temporary file is removed on every path.
+
+        Args:
+            path: The file to write.
+            data: The exact bytes the file holds afterwards (or gains, with `append`).
+            append: Add `data` to the end of the file instead of replacing it; a missing file is
+                created.
+            parent: A directory to create first, with its parents (`mkdir -p`), or None.
+            executable: Make the file executable afterwards (`chmod +x`).
+
+        Returns:
+            The CommandResult of the write: exit code 0 when it is done.
+
+        Raises:
+            OSError: Over `ssh`, the content could not be staged (the target is a directory, or its
+                directory is missing or closed to the user, or the transfer failed); nothing was
+                written.
         """
         ...
 

@@ -18,12 +18,13 @@ fenced to bash, inside `bin/sandbox.sh`, with the `sudo` prefix asserted and rep
 stand-in that gives the command a mapped home distinct from the server's. They pin the timeout
 contract (a result with the captured output and `TIMEOUT_EXIT_CODE`, never an exception), `~` and
 relative paths as the mapped user's home in delegate mode (cwd and both sides of a transfer, never
-the server's `HOME`), transfers that return the path they wrote, stdin delivered exactly and
-closed, bash after the login initialisation whatever `$SHELL` is, startup output that never
-reaches a result, and a profile that `cd`s, reads stdin or leaves a background job running changing
-neither where the command starts, nor what it reads, nor how long the call takes. A signal death
-keeps `-1`; `bin/sandbox.sh` reports a signalled child as
-`128+n`, so that control is a unit row on a recorded launch.
+the server's `HOME`), transfers that return the path they wrote, an empty and closed stdin for
+every command, a write's content delivered exactly on the parked stdin, bash after the login
+initialisation whatever `$SHELL` is, startup output that never reaches a result, and a profile that
+`cd`s, reads stdin or leaves a background job running changing neither where the command starts,
+nor what a write holds, nor how long the call takes. A call ends at the command's end records:
+nothing a command or a profile left running holds it, and what that prints afterwards is not kept.
+A signal death keeps `-1`; the unit row answers from a recorded launch.
 
 The three backends (`SSHExecutor`, `LocalShellExecutor`, `DelegatingExecutor`) must each satisfy
 the runtime-checkable `Executor` protocol (§ Invariants §2), which checks member presence only.
@@ -57,7 +58,7 @@ COMMAND = 'echo $HOME; ls *'
 USER_MAP = {'bob': 'ubob'}
 
 # The protocol's members, named in a failure so a missing one is visible.
-PROTOCOL_MEMBERS = ('hostname', 'run', 'put', 'get', 'open', 'close', '__enter__', '__exit__')
+PROTOCOL_MEMBERS = ('hostname', 'run', 'write', 'put', 'get', 'open', 'close', '__enter__', '__exit__')
 
 # The position of each element in the expected argv, for naming a difference.
 SUDO_ROLES = ('program', 'non-interactive flag', 'HOME flag', 'user flag', 'local user')
@@ -84,10 +85,10 @@ def launch_argv_violations(argv: Sequence[str], user: str | None, command: list[
     found = [f'argv differs at {i} ({role}): {g!r}, expected {e!r}'
              for i, (role, g, e) in enumerate(zip(roles, got, prefix)) if g != e]
     try:
-        _, sentinel = launched_script(got)
+        _, marks = launched_script(got)
     except ValueError as exc:
         return found + [f'argv differs: the last element is not a launcher program ({exc})']
-    found += [f'argv differs: the program: {v}' for v in launch_violations(command, cwd, start, got[-1], sentinel)]
+    found += [f'argv differs: the program: {v}' for v in launch_violations(command, cwd, start, got[-1], marks)]
     return found
 
 
@@ -149,7 +150,7 @@ DRIFTS: dict[str, tuple[Callable[[list[str]], list[str]], str]] = {
     'cwd-unquoted': (lambda a: _swap_program(a, "'/data/my dir'", '/data/my dir'), 'reaches cd as'),
     'wrong-interpreter': (lambda a: a[:5] + ['/bin/zsh'] + a[6:], '(interpreter)'),
     'wrong-user': (lambda a: a[:4] + ['ualice'] + a[5:], '(local user)'),
-    'not-in-home': (lambda a: _swap_program(a, 'command cd -- "${HOME:?HOME is not set}" || exec /usr/bin/false\n', ''),
+    'not-in-home': (lambda a: _swap_program(a, 'command cd -- "${HOME:?HOME is not set}" || exit\n', ''),
                     'does not start in $HOME'),
 }
 
@@ -259,13 +260,14 @@ def test_timeout_returns_the_captured_output(backend: str, executes: Any) -> Non
 
 @pytest.mark.integration
 @pytest.mark.parametrize('backend', ['local', 'delegate'])
-def test_stdin_arrives_exactly_and_closes(backend: str, executes: Any) -> None:
+def test_stdin_is_empty_and_a_write_arrives_exactly(backend: str, executes: Any) -> None:
     data = b'line one\r\nno final newline \x00 \xc3\xa9'
     executor = _executor(executes, backend)
-    sent = executor.run(['cat'], stdin=data, timeout=20)
     empty = executor.run(['cat'], timeout=20)
-    assert (sent.stdout.encode(), sent.exit_code) == (data, 0), f'cat read {sent!r}, not the stdin sent'
-    assert (empty.stdout, empty.exit_code) == ('', 0), f'with no stdin, cat read {empty!r}: stdin was not empty and closed'
+    written = executor.write('~/written', data)
+    assert (empty.stdout, empty.exit_code) == ('', 0), f'cat read {empty!r}: stdin was not empty and closed'
+    assert written.exit_code == 0, written
+    assert (_home_of(executes, backend) / 'written').read_bytes() == data, 'the write did not hold the bytes sent'
 
 
 # The interpreter probe: bash, not in POSIX mode, after the login initialisation (the marker a quiet
@@ -289,9 +291,16 @@ def test_bash_runs_whatever_shell_is_set(backend: str, executes: Any, monkeypatc
 def test_startup_output_is_separated(backend: str, case: str, executes: Any) -> None:
     command, stdin = SEPARATION_CASES[case]
     executor = _executor(executes, backend)
-    want = executor.run(command, stdin=stdin, timeout=20)
-    chatty_home(_home_of(executes, backend))
-    got = executor.run(command, stdin=stdin, timeout=20)
+    home = _home_of(executes, backend)
+
+    def call() -> Any:
+        if stdin is None:
+            return executor.run(command, timeout=20)
+        # Content reaches a command only through a write, on the parked stdin.
+        return executor.write('~/separated', stdin), (home / 'separated').read_bytes()
+    want = call()
+    chatty_home(home)
+    got = call()
     assert got == want, f'{backend}-{case}: the result differs from the quiet home: {got!r} != {want!r}'
 
 
@@ -319,18 +328,30 @@ def test_a_profile_cd_does_not_move_the_start(backend: str, executes: Any) -> No
         f'{backend}: a profile cd moved where the command started: {got!r}, not {want!r}'
 
 
+# A profile that reads stdin, in the foreground and from a background job, which zsh and bash
+# start on the shell's own stdin when it is not a terminal and job control is off, unless told not to.
+PROFILE_READS = ('read -r line; printf %s "$line" > "$HOME/profile-read"\n'
+                 'head -c 1 > "$HOME/profile-took" &\n'
+                 'cat > "$HOME/profile-rest"\n')
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize('backend', ['local', 'delegate'])
-def test_a_profile_cannot_read_stdin(backend: str, executes: Any) -> None:
+def test_a_profile_cannot_read_a_writes_content(backend: str, executes: Any) -> None:
+    # In local and delegate mode the content of a write rides the fixed script's stdin, which the
+    # launch parks while the login shell initialises: a profile reads only /dev/null.
     home = _home_of(executes, backend)
-    (home / '.bash_profile').write_text('read -r line; printf %s "$line" > "$HOME/profile-read"\n'
-                                        'cat > "$HOME/profile-rest"\n')
-    sent = b'first line\nsecond line\n\0 no final newline \xc3\xa9'
-    result = _executor(executes, backend).run(['cat'], stdin=sent, timeout=20)
-    seen = [(home / name).read_bytes() for name in ('profile-read', 'profile-rest')]
-    assert (result.stdout.encode(), result.stderr, result.exit_code) == (sent, '', 0), \
-        f'{backend}: cat read {result!r}, not the stdin sent'
-    assert seen == [b'', b''], f"{backend}: the profile read the caller's stdin: {seen!r}"
+    (home / '.bash_profile').write_text(PROFILE_READS)
+    sent = b'first line\nsecond line\n\0 no final newline \xc3\xa9' * 10_000
+    result = _executor(executes, backend).write('~/written', sent)
+    deadline = time.monotonic() + 5
+    while not (home / 'profile-took').exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    seen = [(home / name).read_bytes() for name in ('profile-read', 'profile-took', 'profile-rest')]
+    assert (result.stdout, result.stderr, result.exit_code) == ('', '', 0), f'{backend}: the write returned {result!r}'
+    assert (home / 'written').read_bytes() == sent, \
+        f"{backend}: the profile read the write's content: the file does not hold the bytes sent"
+    assert seen == [b'', b'', b''], f"{backend}: the profile read the write's content: {seen!r}"
 
 
 # The background job a profile leaves running: it holds every descriptor the profile had open.
@@ -344,29 +365,20 @@ def kill_holder(home: Path) -> None:
         pass
 
 
-# What a result says when the call stopped reading output still held open after the command exited
-# (nothing had arrived for the grace), and when that output was still arriving at the timeout.
-HELD_NOTE = ('cluster-mcp: the command exited, but something left running held its output open; nothing '
-             'arrived for 1 s, so reading stopped there\n')
-LATE_NOTE = ('cluster-mcp: the command exited {code}, but its output was still arriving at the timeout; '
-             'reading stopped there\n')
-
-
 def held_violations(mode: str, quiet: tuple[CommandResult, float], held: tuple[CommandResult, float]) -> list[str]:
-    """Every way a startup file's background job changed a call past the stated stop.
+    """Every way a startup file's background job changed a call: its result, or how long it took.
 
-    The result is the quiet home's, with the note that reading stopped while the output was held
-    open (a stop without the end of output is never silent), and the call lasts at most the grace
-    longer.
+    The result is exactly the quiet home's (no note: the call ended at the command's end records,
+    which are not a guess), and the call takes no longer than it does from the quiet home, give or
+    take a second of noise.
     """
     (want, quiet_s), (got, held_s) = quiet, held
     found = []
-    stated = CommandResult(want.stdout, want.stderr + HELD_NOTE, want.exit_code, want.hostname)
-    if got != stated:
-        found.append(f'{mode}: the result differs from the quiet home\'s plus the held-output note: {got!r} != {stated!r}')
-    if held_s - quiet_s > launch.GRACE + 1.5:
+    if got != want:
+        found.append(f'{mode}: the result differs from the quiet home\'s: {got!r} != {want!r}')
+    if held_s - quiet_s > 1.0:
         found.append(f"{mode}: a startup file's background job held the call for {held_s:.1f} s "
-                     f'(quiet {quiet_s:.1f} s, grace {launch.GRACE:g} s)')
+                     f'(quiet {quiet_s:.1f} s)')
     return found
 
 
@@ -377,50 +389,47 @@ def timed(run: Callable[[], CommandResult]) -> tuple[CommandResult, float]:
 
 
 # A command that exits at once and leaves a job writing to its output for 8 s, every 0.2 s: the
-# output never goes quiet, so only the call's timeout ends it.
+# output never goes quiet, but the command's end is reported at once.
 WRITER = '(i=0; while [ $i -lt 40 ]; do echo tick; i=$((i+1)); sleep 0.2; done) & echo done'
 
 
-def writer_violations(mode: str, result: CommandResult, elapsed: float, timeout: float) -> list[str]:
-    """Every way a call whose output kept arriving after the command exited broke the timeout contract.
+def writer_violations(mode: str, result: CommandResult, elapsed: float) -> list[str]:
+    """Every way a job that keeps writing after its command exited held the call or changed its result.
 
-    It ends within the grace of the timeout, as a timeout (`TIMEOUT_EXIT_CODE`), with the output read
-    so far and the note naming the command's own status.
+    The call returns at the command's end, with its own status, `done` once, and at most the ticks
+    the job printed before the end was reported, in whatever order they came.
     """
     found = []
-    bound = timeout + launch.GRACE + 1.5
-    if elapsed > bound:
-        found.append(f'{mode}: output still arriving held the call for {elapsed:.1f} s (bound {bound:.1f} s)')
-    if result.exit_code != TIMEOUT_EXIT_CODE:
-        found.append(f'{mode}: output still arriving at the timeout returned exit code {result.exit_code}, '
-                     f'not the marker {TIMEOUT_EXIT_CODE}')
-    if not result.stdout.startswith('done\ntick\n'):
-        found.append(f'{mode}: the output read so far was lost: {result.stdout[:60]!r}')
-    if not result.stderr.endswith(LATE_NOTE.format(code=0)):
-        found.append(f'{mode}: the stop at the timeout is silent: stderr {result.stderr[-200:]!r}')
+    if elapsed > 2:
+        found.append(f'{mode}: a job still writing held the call for {elapsed:.1f} s past the command\'s end')
+    if result.exit_code != 0:
+        found.append(f'{mode}: the command\'s end reported exit code {result.exit_code}, not its own 0')
+    lines = result.stdout.splitlines()
+    if lines.count('done') != 1 or set(lines) - {'done', 'tick'} or result.stderr:
+        found.append(f'{mode}: the result is not the command\'s own output: {result.stdout[:60]!r}, {result.stderr!r}')
     return found
 
 
 @pytest.mark.integration
 @pytest.mark.parametrize('backend', ['local', 'delegate'])
-def test_a_holder_that_keeps_writing_ends_at_the_timeout(backend: str, executes: Any) -> None:
+def test_a_background_writer_does_not_hold_the_call(backend: str, executes: Any) -> None:
     executor = _executor(executes, backend)
-    result, elapsed = timed(lambda: executor.run(WRITER, timeout=1.5))
-    violations = writer_violations(backend, result, elapsed, 1.5)
+    result, elapsed = timed(lambda: executor.run(WRITER, timeout=10))
+    violations = writer_violations(backend, result, elapsed)
     assert violations == [], '\n'.join(violations)
 
 
-# A command whose background job writes in bursts, each within the grace of the last: all of it is
-# the result, which ends when the job does.
+# A command whose background job writes after the command has exited: not the command's output.
 BURSTS = '(sleep 0.6; echo late; sleep 0.6; echo later) & echo now'
 
 
 @pytest.mark.integration
 @pytest.mark.parametrize('backend', ['local', 'delegate'])
-def test_output_after_the_exit_is_read_while_it_arrives(backend: str, executes: Any) -> None:
-    result = _executor(executes, backend).run(BURSTS, timeout=30)
-    assert (result.stdout, result.stderr, result.exit_code) == ('now\nlate\nlater\n', '', 0), \
-        f'{backend}: output arriving after the exit, each part within the grace, was cut: {result!r}'
+def test_output_after_the_end_is_not_kept(backend: str, executes: Any) -> None:
+    result, elapsed = timed(lambda: _executor(executes, backend).run(BURSTS, timeout=30))
+    assert (result.stdout, result.stderr, result.exit_code) == ('now\n', '', 0), \
+        f'{backend}: what a background job printed after the command\'s end reached the result: {result!r}'
+    assert elapsed < 1, f'{backend}: the background job held the call for {elapsed:.1f} s'
 
 
 @pytest.mark.integration

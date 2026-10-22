@@ -142,7 +142,7 @@ Top-level package `src/rcac_mcp/`:
 | `executor/delegate.py` | `DelegatingExecutor` + `load_user_map()` — `sudo -n -H -u <user>` on behalf of an authenticated identity; commands and transfers both run as that user. |
 | `scripts.py` | `FIXED_SCRIPTS`, `fixed()` and `script_argv()`: the constant bash scripts a tool or resource runs when one call needs a redirection or two steps, every caller value only a positional parameter. The tool tests refuse any other shell text. |
 | `tools/__init__.py` | `TOOL_REGISTRY`, the `@mcp_tool` decorator, and the **import list that makes registration happen**. |
-| `tools/{shell,filesystem,transfer}.py` | Generic backend-agnostic tools: `run_command`, directory/file read+write (`write_file` byte-exact, content on stdin, `encoding` `utf-8` or `base64`), `upload_file`/`download_file` (returning the path the executor wrote). |
+| `tools/{shell,filesystem,transfer}.py` | Generic backend-agnostic tools: `run_command`, directory/file read+write (`write_file` byte-exact, its content through the executor's `write`, `encoding` `utf-8` or `base64`), `upload_file`/`download_file` (returning the path the executor wrote). |
 | `tools/slurm.py` | Slurm tools: `sbatch`, `squeue`, `scancel`, `sacct`, `sinfo`, `scontrol_show_*`, plus RCAC's `slist`/`sfeatures`. |
 | `tools/rcac.py` | Purdue-specific: `myquota`, `storage_paths`, `jobinfo`/`jobcmd`/`jobenv`/`jobscript`, `showpartitions`, `average_wait`. |
 
@@ -267,8 +267,8 @@ import has no effect.
     hands the executor an argv: a command string is `passed a command string` (only `run_command`
     is `PASSES_A_SCRIPT`), and a shell argv
     whose `-c` text is not in `rcac_mcp.scripts.FIXED_SCRIPTS` is an `unregistered script`, so a
-    value formatted into shell text fails like a command string. `write_file` carries its content
-    on stdin. The filesystem tools, the transfers, the Slurm and site tools and the
+    value formatted into shell text fails like a command string. `write_file` hands its content to
+    the executor's `write`, never to an argv. The filesystem tools, the transfers, the Slurm and site tools and the
     `rcac://context` loader are pinned to their exact argvs (`test_filesystem_argvs`,
     `test_slurm_and_site_argvs`, `test_context_resource_lists_with_a_fixed_script`), each path a
     `UserPath`: each option value is its own element after its option, and a positional value
@@ -291,9 +291,8 @@ import has no effect.
     spaces in its name or one ending in a newline. A refused write (a character outside the base64
     alphabet, a vertical tab or form feed, URL-safe characters, bad padding, an unknown `encoding`,
     a lone surrogate) names `content` or `encoding` and leaves an existing target byte-identical and
-    an absent one, and its parent, absent. The `unit` rows record the executor calls: the content is
-    on stdin exactly and in no argv element, the argv runs a fixed script, and a refused write
-    reaches no executor. `sbatch` writes `script_content` the same way: in all three modes the job
+    an absent one, and its parent, absent. The `unit` rows record the executor calls: the content
+    reaches one `write` exactly and no argv element, and a refused write reaches no executor. `sbatch` writes `script_content` the same way: in all three modes the job
     script it submits holds exactly the bytes sent and is executable
     (`test_job_scripts_are_byte_exact[<mode>]`, against an argv-echo `sbatch`). A profile that
     exports functions over `cat`, `mkdir` and `chmod` and exports `noclobber` and `pipefail` in
@@ -349,14 +348,15 @@ import has no effect.
     whatever `$SHELL` says, in `local` and `delegate`; a recorded SIGHUP death stays `-1`; all three
     backends satisfy `Executor` (§2, §5). The `integration` rows run `local` and `delegate` for real
     through `executes`: a timeout returns the captured output and `TIMEOUT_EXIT_CODE`, never raises,
-    and leaves no process; stdin arrives exactly and closes; the interpreter probe passes under
-    `SHELL=/bin/zsh`; a chatty startup home changes no result; a `.bash_profile` that rewrites the
-    positional parameters and `cd`s elsewhere, or reads stdin, changes neither where the
-    command starts (the server's directory in `local`, the mapped home in `delegate`) nor the
-    bytes it reads; one that leaves a background job holding the output adds only the held-output
-    note and at most `launch.GRACE` to the quiet home's call; output a command's background job
-    writes in bursts after the exit is read whole, and one that keeps writing ends the call at the
-    timeout, as `-1001` with the note naming the command's status; in
+    and leaves no process; a command's stdin is empty and closed, and a write's content arrives
+    exactly; the interpreter probe passes under `SHELL=/bin/zsh`; a chatty startup home changes no
+    result; a `.bash_profile` that rewrites the positional parameters and `cd`s elsewhere, or reads
+    stdin in the foreground and from a background job, changes neither where the command starts
+    (the server's directory in `local`, the mapped home in `delegate`) nor a write's bytes, which
+    ride the parked stdin (`test_a_profile_cannot_read_a_writes_content`); one that leaves a
+    background job holding the output changes neither the quiet home's result nor how long the
+    call takes; and a command's background job, writing or not, neither holds the call past the
+    command's end records nor reaches the result after them; in
     `delegate`, `cwd` `~`, `~/…` and `~name`, the starting directory and both sides of `put`/`get`
     resolve in the mapped home, never the server's `HOME`, and a transfer returns the path it wrote,
     read exactly.
@@ -437,8 +437,13 @@ import has no effect.
     `UserPath`'s leading `~`/`~/` resolves through `"${HOME:?…}"`, `~name`, `$HOME` and globs stay
     literal, and a relative path or cwd gains `./`; a script is one word run by a fresh non-login
     bash; the SSH exec string holds no `!`, backslash or newline and carries the program as one
-    base64 word; `separate` cuts each stream at the first sentinel, reports a command that never
-    started as `-1002` with its note, and a one-stream redirection with a note. NUL, non-UTF-8 text,
+    base64 word; the command runs in a subshell, and the program then prints its end record on
+    both streams, the end nonce in two halves (never whole in the text) and the status; `separate`
+    cuts each stream after the first sentinel and before the end record that follows it, takes the
+    exit code from the record (`x<N>`, or `s<N>` for a signal death, reported `-N`), and reports a
+    command that never started as `-1002` with its note, a one-stream redirection with a note, and
+    a started result without a record with `launch.UNFINISHED_NOTE`; text shaped like a record but
+    not carrying the nonce is output. NUL, non-UTF-8 text,
     an empty argv, a non-`str` element and an over-long program are refused before anything runs, as
     are bad timeouts; the size limit is pinned at its computed boundary per wire (a local program of
     131,071 bytes passes and one more byte is refused; over `ssh`, the largest program whose
@@ -454,10 +459,14 @@ import has no effect.
     under bash after the login initialisation (`[ a == a ]`, a profile function); a profile's `read`
     and `cd()` touch nothing; the bootstrap delivers the program exactly and runs nothing without
     `base64`; an empty `HOME` fails a `~/` path. `run_process` keeps partial output at a timeout,
-    kills the whole group, is bounded when a child leaves the group, and keeps a completed command's
-    status; once the command has exited, a background job that holds its output open does not hold
-    the call past `GRACE` and is noted, while one that finishes within it is still read; a command
-    that traps SIGTERM keeps what it prints as it stops, and one that ignores it is ended by SIGKILL.
+    kills the whole group, is bounded when a child leaves the group, and is complete at both end
+    records or at a launch's exit, whatever was left running; under every wire a call ends at its
+    records while a background job still writes (`test_the_call_ends_at_its_records`), a command
+    killed by a signal, or exiting 128+N for a terminating one, is reported `-N` while the launch
+    itself dies of that signal (`test_a_signal_death_is_reported_and_reraised`, the launch's status
+    read by a parent outside the sandbox's shell), and output shaped like a record comes back whole;
+    a command that traps SIGTERM keeps what it prints as it stops, and one that ignores it is ended
+    by SIGKILL.
     **Profile state:** a profile's `IFS` (`:` or empty), every glob option with a function named
     like a pattern, `set -k`, `set -P` under a symlinked home, `CDPATH` and `POSIXLY_CORRECT` change
     no result, locally and under bash and zsh login shells; and with `SSH_CLIENT` set, no stage, script
@@ -478,8 +487,8 @@ import has no effect.
     a supported configuration.
   - `tests/test_ssh_smoke.py` (`integration`): `smoke_violations`. `SSHExecutor` runs a command
     over the locked Fabric and Paramiko against an in-process Paramiko server on `127.0.0.1` with
-    generated keys, which decodes the launcher's bootstrap and answers with the program's sentinel:
-    stdout, exit status and hostname come back, and the decoded program runs the exact command. No
+    generated keys, which decodes the launcher's bootstrap and answers as the program would, its
+    sentinel first and its end record last: stdout, exit status and hostname come back, and the decoded program runs the exact command. No
     process is launched and no real host is reached: `HOME` is under `tmp_path`, the agent socket is
     unset, no key files or agent are consulted, and Fabric gets an empty SSH config. The process's
     own stdin stays pytest's, which refuses reads, so a forwarded stdin fails the test.
@@ -491,30 +500,42 @@ import has no effect.
     not, and it sends the exit status when the process exits, as sshd does, even while something
     still holds the output open; when the client closes the channel it closes the output pipes
     before stdin, as sshd does, so a command that starts later meets a broken pipe; its environment
-    carries `SSH_CLIENT` and `SSH_CONNECTION`, as sshd's does). `ThrottledSSH` is the same server on
-    a slow link: it reads the output as fast as a 2 MiB window allows, sends both streams over one
-    link at a fixed rate, and sends the exit status ahead of the queued output. Under bash,
-    zsh, sh and tcsh login shells: the interpreter probe
-    passes, stdin arrives exactly and EOF is delivered, a timeout returns the captured output and
-    `TIMEOUT_EXIT_CODE` without raising, hostile values arrive literally, and a chatty startup home
-    changes no result; `put`/`get` land exactly where named (`~/x`, `~//x`, a directory, a
-    `{host}`-shaped local name, a local `~/`). A `.bash_profile` or `.zshenv` that `cd`s elsewhere
-    does not move the start from the login home; a `.zshenv` that reads stdin gets none of the
-    caller's (no-stdin calls are byte-identical to a quiet home's, and a call with stdin ends at its
-    timeout with nothing sent and nothing written, which AGENTS §2, the README and `Executor.run`
-    state: `test_stdin_texts_state_the_rc_timeout`), and a call holding stdin with no timeout of
-    its own (`run`, `write_file`, `sbatch`) still ends as `-1001` once the start bound passes; a
-    background job either leaves running adds only the held-output note and at most `launch.GRACE`,
-    and one that keeps writing ends the call at the timeout with the note naming the status; on the
-    slow link at 256 KiB/s, 1 MiB/s and 4 MiB/s a large `read_file` comes back whole, both streams of
-    a `run_command` come back whole, and a short command behind a 1 MiB `.zshenv` still counts as
-    started; and a `.zshenv` background job still writes into a result, the documented
-    exception (§3), whose statement in every separation text is pinned beside it. The `unit` rows
-    drive the channel loop with a fake channel: it waits rather than spins once the exit status is
-    in, output trickling in after the status is read to its end, a status that arrived before the
-    deadline is kept (with the held-output note), a lost status stays `-1`, and what the
-    command prints after the TERM at a deadline is read; an oversize program is refused, naming the
-    limit, before connecting.
+    carries `SSH_CLIENT` and `SSH_CONNECTION`, as sshd's does; it records the bytes each exec received
+    on stdin, and its SFTP creates, changes and removes files and directories with the permissions
+    asked for and resolves links in `normalize`, as OpenSSH's does). `ThrottledSSH` is the same
+    server on a slow link: it reads the output as fast as a 2 MiB window allows, sends both streams
+    over one link at a fixed rate a packet at a time, sends the exit status ahead of the queued
+    output, and can stall after the exit status or once some bytes have gone. Under bash, zsh, sh
+    and tcsh login shells: the interpreter probe passes, a command's stdin is empty and its end
+    goes at once with no byte on the channel, a timeout returns the captured output and
+    `TIMEOUT_EXIT_CODE` without raising, hostile values arrive literally, a signal death is
+    reported as one (`-15` for TERM, though Paramiko sees only a lost status), and a chatty startup
+    home changes no result; `put`/`get` land exactly where named (`~/x`, `~//x`, a directory, a
+    `{host}`-shaped local name, a local `~/`). A write goes by SFTP and a program moves it into
+    place: the target is replaced whole (a reader of the old file still reads it) and keeps its
+    mode, a new file gets the mode `cat >` gives, the content is staged as a 0600 file in a fresh
+    0700 directory beside the target, a link is followed, a file in a directory closed to new
+    entries is written through, and a write to a directory, a broken transfer or a placing program
+    that never starts changes nothing and leaves no staging behind. A `.bash_profile` or `.zshenv`
+    that `cd`s elsewhere does not move the start from the login home; a remote rc file (`.zshenv`,
+    or the `.bashrc` bash reads under sshd) that reads stdin in the foreground and from a
+    background job (`head -c 1 &`) reads none of a write's content: a 160,000-byte `write_file` and
+    a job script land byte-exact and no channel carried stdin
+    (`test_a_remote_rc_never_reads_a_writes_content`; AGENTS §2, the README and `Executor.write`
+    state the route, `test_content_texts_state_the_sftp_route`); a background job either leaves
+    running neither holds the call past the end records nor changes its result; on the slow link at
+    256 KiB/s, 1 MiB/s and 4 MiB/s, behind a 1.6 s or 1.2 s stall after the exit status or a 5 s
+    stall mid-result at 512 KiB/s, and with 32 KiB packets at 6,000 and 24,000 B/s, a large
+    `read_file` comes back whole, both streams of a `run_command` come back whole, a short command
+    and a write behind a 1 MiB rc file still count as started, and an `sbatch` behind a 40 KB
+    `.bashrc` at 6,000 B/s reads as submitted, once (`test_a_job_that_ran_is_never_reported_as_not_started`);
+    and a `.zshenv` background job still writes into a result, the documented exception (§3),
+    whose statement in every separation text is pinned beside it. The `unit` rows drive the channel
+    loop with a fake channel: it waits rather than spins once the exit status is in, the read ends
+    at both end records and not at one, output trickling in after the status is read to its record,
+    a command whose records have not come by the deadline is a timeout naming its status, a lost
+    status stays `-1`, and what the command prints after the TERM at a deadline is read; an
+    oversize program is refused, naming the limit, before connecting.
   - `tests/test_transports.py` (`integration`, with `unit` controls): `transport_violations`. The
     installed `rcac-mcp -e local` starts under `bin/sandbox.sh` on each transport and a client lists
     exactly `EXPECTED_TOOLS` in the era it asked for: `stdio` and `http` in both eras, `sse` in the
@@ -585,7 +606,8 @@ import has no effect.
     shim directory that puts the shim first again; a login bash reads it after its profile files.
   - **`launches`** (`unit` and `integration`) replaces `subprocess.Popen` with a recorder: nothing
     runs, and the recorded argv is what the test asserts. For a launcher program it answers
-    `<user>|<command>` behind the program's sentinel on both streams, so the backend's `separate`
+    `<user>|<command>` between the program's sentinel and its end record on both streams (the record
+    reporting `answer_code`), so the backend's `separate`
     keeps the answer (`launched_script`, a harness verb, reads the command back).
   - **`executes`** (`integration` only) runs the `local` and `delegate` backends for real, fenced:
     it replaces `Popen` in `rcac_mcp.executor.launch` with a launcher that accepts only a `/bin/bash`
@@ -990,10 +1012,12 @@ The two leaf files at the end of this list are footguns, not human-gated paths.
   took one (`TAKEN_MARK`), and the per-call sentinel that keep login output out of results, the per-argument size check (`MAX_ARGUMENT`) on the bytes each
   wire carries, the prologue's resets (`IFS`, `set -k`, `set -P`) and the function export that
   splits and globs nothing, `--norc` on every bash but the login one (`POSIX_STAGE`, `SCRIPT`) and
-  the fixed scripts' `FIXED_RESET`, the read once the command has exited (to the end of the output;
-  only `GRACE` with nothing arriving stops it early, with `HELD_NOTE`, and output still arriving
-  `GRACE` past the deadline ends it as a timeout, with `LATE_NOTE`), and the timeout sequence
-  (SIGTERM, then SIGKILL, each followed by a bounded drain).
+  the fixed scripts' `FIXED_RESET`, the command run as a child (a subshell that `exec`s it, so the
+  program outlives it) and the end record printed after it on both streams (its nonce never whole
+  in the text, its status `s<N>` for a signal death, which the program re-raises on itself,
+  `TERMINATING`), the read that is complete at both records or at a local launch's exit and at no
+  timing rule (`run_process`), and the timeout sequence (SIGTERM, then SIGKILL, each followed by a
+  bounded drain).
 - **`auth.py` / `token.py`** — the 32-char minimum in two places; the issuer/audience/algorithm
   triple that must match across signer and verifier; OIDC's all-four check and the proxy's held
   posture (§6). `AUTH_MODES`' annotation is checked in its resolved shape: a stray `:` once made its
@@ -1001,13 +1025,15 @@ The two leaf files at the end of this list are footguns, not human-gated paths.
 - **`executor/ssh.py`** — reconnect backoff (`_ensure_connected` never gives up once its delay
   reaches the cap; `issues/ssh-reconnect-loop.md`); the connect bound (`_bounded`: the TCP connect,
   banner and auth timeouts default to `CONNECT_TIMEOUT` through Fabric's config, so an ssh_config
-  `ConnectTimeout` still wins, and a startup against an unreachable host is answered within it); the channel loop (`_collect`), which must send
-  the caller's stdin, then EOF, only once the program's sentinel has arrived (an empty stdin's EOF
-  at once), waiting for that start at most `START_TIMEOUT` with nothing arriving; wait without
-  spinning; keep reading after an exit status while output arrives (sshd sends the status ahead of
-  output still queued on the link), stopping only once nothing has arrived for `launch.GRACE`
-  (saying so) or at `launch.GRACE` past the deadline (a timeout, saying so); read for
-  `launch.GRACE` after the TERM at a deadline; and return the timeout marker rather than raise; `run`, which starts every program in `$HOME`
+  `ConnectTimeout` still wins, and a startup against an unreachable host is answered within it); the channel loop (`_collect`), which must
+  send no stdin and its EOF at once; wait without spinning; read to both end records, never stopping
+  at the exit status (sshd sends it ahead of output still queued on the link); and at the deadline
+  return the timeout marker rather than raise, naming an exit status that had arrived
+  (`launch.LATE_NOTE`) or reading for `launch.GRACE` after the TERM; `write`, which stages content
+  by SFTP as a 0600 file in a fresh 0700 directory beside the target, has a fixed program move it
+  into place (keeping the target's mode, following a link, writing through a target that is not a
+  regular file or sits in a directory closed to new entries) and removes the staging on every
+  path; `run`, which starts every program in `$HOME`
   and builds the exec string (refusing an oversize one) before connecting; the SFTP `~` mapping
   (`_remote`).
 - **`__init__.py`** — `_resolve_exec_mode()`, the posture ladder.
@@ -1050,21 +1076,16 @@ The two leaf files at the end of this list are footguns, not human-gated paths.
 
 ### 2. Executor Protocol contract (`executor/base.py`) [human gate]
 
-- `Executor` is a `@runtime_checkable` `Protocol` with **eight** members: `hostname` (property),
-  `run`, `put`, `get`, `open`, `close`, `__enter__`, `__exit__`.
-- **`run(command, cwd=None, timeout=None, stdin=None) -> CommandResult`.** `command` is an argv (a
+- `Executor` is a `@runtime_checkable` `Protocol` with **nine** members: `hostname` (property),
+  `run`, `write`, `put`, `get`, `open`, `close`, `__enter__`, `__exit__`.
+- **`run(command, cwd=None, timeout=None) -> CommandResult`.** `command` is an argv (a
   sequence of `str`: each element reaches the program as exactly one literal argument, never
   interpreted by a shell) or a bash script (a `str`, run as given). An argv element marked
   `UserPath` (`executor/base.py`) resolves a leading `~` or `~/` to the home of the user the command
   runs as, and so does `cwd`; nothing else in any value expands (`~name`, `$VAR`, globs are
-  literal), and a relative `UserPath` or `cwd` is anchored with `./`. `stdin` is the exact bytes the
-  command reads; `None` gives it an empty, closed stdin, so a command never reads the server's own
-  stdin (on `stdio` that is the JSON-RPC stream). Over `ssh` the bytes go only once the command has
-  started, so no startup file reads them: if the remote login shell's rc file reads stdin, a call
-  that sends stdin times out and never writes partial content (`-1001`, empty output; the command
-  never runs). Such a call waits for the start at most `ssh.START_TIMEOUT` (30 s) with nothing
-  arriving, or its own `timeout` if that comes first, so the `-1001` comes even for a call with no
-  timeout: `write_file` and `sbatch` pass none, and fail naming the exit code. A command starts in the login home (`ssh`), the
+  literal), and a relative `UserPath` or `cwd` is anchored with `./`. A command's stdin is empty
+  and closed, so it never reads the server's own stdin (on `stdio` that is the JSON-RPC stream),
+  and over `ssh` the channel carries no byte of stdin, its end sent at once. A command starts in the login home (`ssh`), the
   mapped user's home (`delegate`) or the server process's working directory (`local`), whatever a
   startup file `cd`s to. A malformed command (a non-`str` element, NUL, text that is not valid
   UTF-8, an empty argv, a program over the per-argument limit) or a timeout out of range is a
@@ -1072,6 +1093,23 @@ The two leaf files at the end of this list are footguns, not human-gated paths.
   element, its NUL included (`launch.MAX_ARGUMENT`), checked against the bytes that cross it: the
   program itself for a local or delegated launch, and over `ssh` the exec string (the bootstrap plus
   the program's base64 word), so an `ssh` program fits up to 98,154 bytes.
+- **`write(path, data, append=False, parent=None, executable=False) -> CommandResult`** is the one
+  route a file's content takes: `write_file` and `sbatch`'s `script_content` both use it, and no
+  content ever rides an argv or a command's stdin over `ssh`. `path` and `parent` follow
+  `UserPath`'s rule; `parent` is made first (`mkdir -p`), `executable` runs `chmod +x` afterwards,
+  and the result's exit code is 0 when the file holds exactly `data` (or gained it, with
+  `append`). In `local` and `delegate` the bytes reach a fixed script (`launch.write_argv`) on the
+  stdin the launch keeps parked while the login shell initialises, so no startup file can read
+  them, and the file is written in place. Over `ssh` they go by SFTP to a private temporary file
+  (mode 0600, in a fresh directory of mode 0700 beside the target, so on its filesystem), which a
+  fixed program moves into place: an overwrite is a rename, so the target is replaced whole and
+  keeps its permission bits (a new file gets the mode `cat >` gives); an append adds the staged
+  bytes; a symbolic link is followed; a target that is not a regular file, or a regular file in a
+  directory closed to new entries, is written through instead, staged in the login home; the
+  staging directory is removed on every path. A target that is a directory, a missing directory,
+  or a failed transfer raises `OSError` over `ssh` before anything is written (the tools report it
+  as a failed write). Recorded limits of the move: hard links to the old file keep the old content,
+  and the new file is owned by the user who wrote it, with no ACL the old one had.
 - **Every backend runs every command under the pinned interpreter**, `/bin/bash -l`, through the
   launcher (`executor/launch.py`): never the server's `$SHELL`, never the user's login shell. The
   login initialisation runs (so `module` and the site's tools behave the same for every user), and
@@ -1097,17 +1135,20 @@ The two leaf files at the end of this list are footguns, not human-gated paths.
 - **One timeout contract in every backend.** A command that exceeds its `timeout` is stopped and
   `run` returns a `CommandResult` carrying whatever stdout and stderr were captured before the
   deadline and as it stopped (each backend reads on for `launch.GRACE` after the TERM at the
-  deadline) and `exit_code = TIMEOUT_EXIT_CODE`; no backend raises on a timeout. `-1` keeps its one
-  meaning: a command killed by SIGHUP (or, over SSH, a signal death or a lost status, as Paramiko
-  reports them). Do not add new sentinels in the signal range `-1..-64`; a new reserved code goes
-  below `-1000` and is documented here first.
+  deadline) and `exit_code = TIMEOUT_EXIT_CODE`; no backend raises on a timeout. A command killed
+  by signal N reports `-N` in every mode, over `ssh` too (the end record carries the signal, which
+  Paramiko cannot), and so does one that exits 128+N for a terminating signal N, which bash
+  reports alike; the launch re-raises the signal on itself, so it dies as its command did. `-1` is
+  a SIGHUP death, or a status lost with the end record. Do not add new sentinels in the signal
+  range `-1..-64`; a new reserved code goes below `-1000` and is documented here first.
 - **Reserved exit codes below −1000** (`executor/base.py`), which no completed command (0..255) and
   no signal death (−1..−64) can produce:
   - **`TIMEOUT_EXIT_CODE = -1001`**: the command hit its timeout; stdout and stderr carry whatever
-    was captured before the deadline. A command that had already exited keeps its own status,
-    unless its output is still arriving `launch.GRACE` past the deadline: the call then ends there
-    as a timeout, and stderr ends with `cluster-mcp: the command exited N, but its output was still
-    arriving at the timeout; reading stopped there` (`launch.LATE_NOTE`).
+    was captured before the deadline. It is the code whenever the command's end records have not
+    both arrived by the deadline: a local or delegated launch that has exited by then keeps its own
+    status (all it wrote is in hand), and over `ssh` a command whose exit status arrived ahead of
+    its output is still a timeout, and stderr ends with `cluster-mcp: the command exited N, but not
+    all of its output had arrived at the timeout` (`launch.LATE_NOTE`).
   - **`NOT_STARTED_EXIT_CODE = -1002`**: the login initialisation ended (a profile's `exit`, a failed
     launch) before the command's first line ran; stdout is empty and stderr is the fixed line
     `cluster-mcp: the command did not start (exit N); the server log has the details`. Or a startup
@@ -1121,19 +1162,20 @@ The two leaf files at the end of this list are footguns, not human-gated paths.
   parks the command's streams while the login shell initialises, and every program prints a
   per-call sentinel first; each backend's `run` passes its streams through `launch.separate`, which
   drops everything up to it (including what an SSH login shell's own rc files print before the
-  program starts). **The exception** (recorded, not fixed; `issues/startup-background-jobs.md`):
+  program starts) and everything from the command's end record on. **The exception** (recorded, not fixed; `issues/startup-background-jobs.md`):
   over `ssh`, a background job started by the remote login shell's own rc file (zsh's `.zshenv`,
   say), which runs before anything can be parked, can write into a result while the command runs.
   `tests/test_ssh_exec.py` pins both halves: that such a job still can
   (`test_a_remote_rc_background_job_can_write_into_a_result`), and that every text promising
   separation states it (`test_separation_texts_state_the_remote_rc_exception`: this section, the
   README, the `run_command` description and the `Executor` docstring).
-- **No startup file reads the caller's stdin, moves where a command starts, or holds a call open.**
-  A local or delegated launch parks stdin while the login shell initialises. Over `ssh` the remote
-  login shell's rc files run on the channel's own stdin before anything is parked, so the caller's
-  bytes go only once the program's sentinel has arrived (an empty stdin's end goes at once, as it
-  carries none): a program that never starts gets none, and an rc file that waits for stdin waits
-  until the timeout, so the call times out and never writes partial content (§2). Every program
+- **No startup file reads a write's content, moves where a command starts, or holds a call
+  open.** A command's stdin is empty. A local or delegated launch parks stdin while the login shell
+  initialises, so a write's content, on a fixed script's stdin there, is out of every startup
+  file's reach. Over `ssh` the remote login shell's rc files run on the channel's own stdin before
+  anything can be parked (and zsh gives even a background job of `.zshenv` the real stdin), so the
+  channel carries no stdin at all, its end sent at once, and a write's content goes by SFTP to a
+  private temporary file instead (§2). Every program
   changes to its start directory after the login initialisation: `$HOME` over `ssh` and in
   `delegate` (`launch.START_HOME`), and in `local` the server process's working directory, written
   into the program text as one quoted word.
@@ -1150,18 +1192,26 @@ The two leaf files at the end of this list are footguns, not human-gated paths.
   the functions a profile can export over the programs it runs and the options it can export in
   `SHELLOPTS` (`launch.FIXED_RESET`). Pinned by `test_profile_state_does_not_reach_the_launcher`,
   `test_no_stage_reads_a_startup_file_under_sshd` and `test_a_profile_cannot_change_a_fixed_script`.
-- **A result is complete unless only holders remain.** Once the command's exit status is known,
-  the backend reads its output to the end, however long it keeps arriving: over `ssh`, sshd sends
-  the status as soon as the command exits, ahead of output still queued on the link, and a command
-  whose sentinel arrives after it (behind a chatty rc file on a slow link) still started. The read
-  stops early only when nothing has arrived for `launch.GRACE` (1 s) while something left running
-  (a background job of the command's or a startup file's) still holds the output open: that job is
-  neither waited for nor signalled, and stderr ends with `cluster-mcp: the command exited, but
-  something left running held its output open; nothing arrived for 1 s, so reading stopped there`
-  (`launch.HELD_NOTE`). A stop before the end of output is never silent. Output that keeps arriving
-  ends at `launch.GRACE` past the deadline, as a timeout (above). Pinned by a throttled sshd model
-  (`tests/ssh_server.py`'s `ThrottledSSH`) at three rates and by the holder rows in all three
-  modes.
+- **A result is complete exactly when both end records have arrived.** The program runs the
+  command as a child and, once it exits, prints a per-call end record on stdout and on stderr
+  (`launch.record`): a second nonce, never whole in the program text, then the command's status.
+  The backend reads each stream to its record however slowly the output arrives, then closes it:
+  nothing the command or a startup file left running holds the call, is waited for or is
+  signalled, and nothing written after the record is kept. Over `ssh`, sshd sends the exit status
+  as soon as the command exits, ahead of output still queued on the link, so the status decides
+  nothing, and a command whose sentinel arrives after it (behind a chatty rc file on a slow link)
+  still started: a submission that ran is never reported as not started. There is no timing
+  rule; only the timeout bounds a call whose records do not come. A local or delegated launch that
+  exits without them is complete at its exit (an exited process has nothing more to write), and a
+  stream that ends without one has ended; a started result without a record says so
+  (`cluster-mcp: the launch ended before it reported the command's end, so its output may be
+  incomplete`, `launch.UNFINISHED_NOTE`). Output shaped like a record but not carrying the nonce
+  is output. Pinned by a throttled sshd model (`tests/ssh_server.py`'s `ThrottledSSH`) at three
+  rates, behind stalls after the exit status and mid-result and with 32 KiB packets at 6,000 and
+  24,000 B/s, and by the background-job rows in all three modes. A recorded limit: over `ssh`, a
+  launch that dies before its records (killed from outside) while something it started still holds
+  the channel is held until the timeout, as is a program that never starts behind an rc file that
+  leaves such a job.
 - **A timed-out command may outlive the call** (recorded, not fixed): over SSH the server is asked
   to TERM it and the channel is closed, and under a non-root `delegate` server `sudo` relays TERM
   only to the command; `issues/timeout-process-cleanup.md`. The contract above holds either way.
@@ -1225,7 +1275,9 @@ What each mode means:
   directory. The server never expands a caller's path itself.
 - **Transfers run as the mapped user.** `put` and `get` are one copy through `run` (a fixed script
   behind `launch.FIXED_RESET`, the two paths as positional parameters) and return the path it printed; the server process does
-  no file I/O on a caller's path, and a failed copy raises `RuntimeError` with its stderr.
+  no file I/O on a caller's path, and a failed copy raises `RuntimeError` with its stderr. So do
+  writes: `write` is one fixed script (`launch.write_argv`) through the same launch, as the mapped
+  user, its content on the stdin the launch keeps parked.
 - **The user map file format is `<identity> <local-user>`, one per line**, `#` comments, first
   whitespace splits. A malformed line raises `ValueError` naming the line number — a partial map is
   worse than no map.

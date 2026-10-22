@@ -29,8 +29,6 @@ from harness import ERAS, Outcome, RecordingExecutor, call, drive, in_memory, sh
 from rcac_mcp.executor import UserPath
 from rcac_mcp.executor.delegate import DelegatingExecutor
 from rcac_mcp.executor.shell import LocalShellExecutor
-from rcac_mcp.scripts import script_argv
-from rcac_mcp.tools import slurm
 
 # Values that a shell would split, expand or read as an option.
 HOSTILE_ARGS = ['two words', '-v', '--', '$HOME', '*', 'line\nbreak', "it's", '']
@@ -102,7 +100,7 @@ def test_args_follow_the_script_and_extra_args_precede_dashdash(guard) -> None:
                                  'job_name': 'j', 'partition': 'p'})
     assert not outcome.is_error, outcome.text
     assert outcome.text == argv_echo.JOB_ID
-    [(_, argv, _, _, _)] = executor.calls
+    [(_, argv, _, _)] = executor.calls
     violations = sbatch_violations(argv, '~/jobs/run.sh', HOSTILE_ARGS, EXTRA)
     if not isinstance(argv[argv.index('--') + 1], UserPath):
         violations.append(f'the script path is not a UserPath: {argv!r:.200}')
@@ -146,7 +144,7 @@ JOB_NAMES = [
 
 @pytest.mark.unit
 @pytest.mark.parametrize(('job_name', 'stem'), JOB_NAMES)
-def test_script_content_is_written_on_stdin_then_submitted(job_name: str | None, stem: str, guard) -> None:
+def test_script_content_is_written_then_submitted(job_name: str | None, stem: str, guard) -> None:
     content = '#!/bin/bash\n#SBATCH -c 4\necho done'
     args = {'script_content': content, 'args': ['a b'], 'extra_args': ['--exclusive']}
     if job_name is not None:
@@ -154,14 +152,13 @@ def test_script_content_is_written_on_stdin_then_submitted(job_name: str | None,
     outcome, executor = _sbatch(args)
     assert not outcome.is_error, outcome.text
     write, submit = executor.calls
-    path = write[1][write[1].index('-c') + 3]
+    path = write[1]
     violations = []
     if not re.fullmatch(rf'~/jobs/{re.escape(stem)}_\d{{8}}_\d{{6}}\.sh', path) or not isinstance(path, UserPath):
         violations.append(f'the script path is not a ~/jobs UserPath named from {stem!r}: {path!r}')
-    if write[1] != script_argv(slurm.WRITE_JOB_SCRIPT, 'sbatch', path, '~/jobs') or write[4] != content.encode():
-        violations.append(f'the script is not written with its content on stdin only: {write!r:.300}')
-    if any(content in element for element in write[1]):
-        violations.append('the content travels in an argv element')
+    if write != ('write', path, content.encode(), False, '~/jobs', True):
+        violations.append(f'the script is not written through the executor\'s write, exactly and executable: '
+                          f'{write!r:.300}')
     if job_name is not None and submit[1][1:3] != ['-J', job_name]:
         violations.append(f'-J does not carry the job name literally: {submit[1]!r:.200}')
     violations += sbatch_violations(submit[1], path, ['a b'], ['--exclusive'])
