@@ -309,6 +309,18 @@ the plan's call. Found by `stack-upgrade`'s GOAL non-goals, carried at retiremen
 *Horizon: later · Depends on: — · Refs: runs where the gate runs, so CI picks it up through its mirror of the gate (`ci-workflow`; cleared: landed on `develop` 2026-10-18); [`spec/stack-upgrade/`](spec/stack-upgrade/) pins the one annotation*
 **Seed:** [`issues/annotation-check.md`](issues/annotation-check.md) · *status: unshaped*
 
+## The `integration` marker says it drives the CLI, and not every integration test does
+
+`pyproject.toml` describes `integration` as "drives the installed CLI", but `test_docs_modules_absent`
+and the git-backed absence-message controls in `tests/test_registry.py` are `integration` only
+because they start git, which the unit guard forbids in a `unit` test. In practice the marker means
+"not `unit`"; its description states a narrower rule, and `AGENTS.md` § Testing notes the mismatch
+instead of fixing it. Rewording both markers to the line the unit guard draws settles it. Found by
+the `absence-check-leftover-classification` plan, 2026-10-19.
+
+*Horizon: later · Depends on: — · Refs: [`spec/absence-check-leftover-classification/`](spec/absence-check-leftover-classification/) (PLAN §5)*
+**Seed:** [`issues/integration-marker-wording.md`](issues/integration-marker-wording.md) · *status: unshaped*
+
 ---
 
 # Settled questions

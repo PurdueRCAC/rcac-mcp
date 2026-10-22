@@ -15,6 +15,7 @@ from __future__ import annotations
 import multiprocessing
 import os
 import pty
+import shutil
 import socket
 import stat
 import subprocess
@@ -51,6 +52,21 @@ PROCESS_ENTRY_POINTS = (
 )
 NETWORK_ENTRY_POINTS = [(socket.socket, 'connect'), (socket.socket, 'connect_ex'),
                         (socket, 'create_connection'), (socket, 'getaddrinfo')]
+
+
+def need_git() -> None:
+    """Return if git is on PATH; otherwise skip the test, or fail it on CI.
+
+    Every test that builds a git repository goes through here. On CI (`CI=true`, as GitHub Actions
+    sets it) git is always installed, so a missing one fails the test, naming it: a skipped test
+    there would be coverage silently lost. Elsewhere it skips.
+    """
+    if shutil.which('git'):
+        return
+    if os.environ.get('CI', '').lower() == 'true':
+        pytest.fail('git is not on PATH here, and on CI it must be', pytrace=False)
+    pytest.skip('git is not on PATH here')
+
 
 SHIM_MESSAGE = 'refused by the test PATH shim'
 SHIM_SCRIPT = f"""#!/bin/sh

@@ -3,15 +3,15 @@ slug: absence-check-leftover-classification
 title: Explain an importable leftover by git status, not file suffix
 kind: test
 appetite: small
-status: in_progress
+status: in_review
 branch: test/absence-check-leftover-classification
 base: develop
-current_phase: P1
+current_phase: done
 last_updated: '2026-10-22'
 phases:
 - id: P1
   name: Classify each leftover by git status, with the suffix rule as the fallback
-  status: pending
+  status: done
   satisfies:
   - R1
   - R2
@@ -107,25 +107,25 @@ location by what git knows of its files (tracked, untracked, ignored), one line 
 class, and by today's suffix text wherever git cannot answer; `test_docs_modules_absent` fails and
 passes exactly as before. This is the whole change and the last phase.
 
-- [ ] Apply the prototype: `git apply spec/absence-check-leftover-classification/research/prototype.diff`.
+- [x] Apply the prototype: `git apply spec/absence-check-leftover-classification/research/prototype.diff`.
       It adds `git_env`, `ask_git`, `git_classes`, `leaf_entries`, `covering`, `suffix_explanation`
       and `git_explanation` to `tests/test_registry.py`, moves `test_docs_modules_absent` to
       `integration`, adds the controls (PLAN §2's table), adds `need_git` to `tests/conftest.py`,
       and rewrites the `tests/test_registry.py` entry in `AGENTS.md` § Testing. Read each hunk
       against PLAN §2 before committing; reword freely, but a changed line that a
       `verify/check.py` `MUTANTS` anchor names moves that anchor in the same commit.
-- [ ] Leave `module_absent`, the body and parametrize of `test_docs_modules_absent`, and every path
+- [x] Leave `module_absent`, the body and parametrize of `test_docs_modules_absent`, and every path
       outside `tests/test_registry.py`, `tests/conftest.py` and `AGENTS.md` untouched (`static`
       checks each against `55fc5b7`).
-- [ ] Every git launch is a list literal starting with `str(SANDBOX)` and runs with `git_env()`,
+- [x] Every git launch is a list literal starting with `str(SANDBOX)` and runs with `git_env()`,
       setup included; no skip in the module, and none in conftest outside `need_git`.
-- [ ] Every test id in the module is listed in `verify/ids.txt` with its kind (`git` for the
+- [x] Every test id in the module is listed in `verify/ids.txt` with its kind (`git` for the
       controls behind `need_git`, `plain` otherwise); a test added or renamed changes that file in
       the same commit.
-- [ ] Comments and docstrings are declarative and carry no spec ids (§ Conventions).
-- [ ] Run the profile's full `verify` once before the commit:
+- [x] Comments and docstrings are declarative and carry no spec ids (§ Conventions).
+- [x] Run the profile's full `verify` once before the commit:
       `uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run pytest -q && bin/sandbox.sh uv run rcac-mcp --help`.
-- [ ] **Deferral ledger.** Walk this phase and PLAN §5 for "defer", "follow-up", "known limitation",
+- [x] **Deferral ledger.** Walk this phase and PLAN §5 for "defer", "follow-up", "known limitation",
       "do not fix here", "not handled" and "out of scope". Each one has an `issues/{slug}.md` (from
       the KB's `ISSUE.md` template, `status: unshaped`) and a `ROADMAP.md` entry, or `.security/`
       when it describes an unremediated weakness (AGENTS.md § Factory, Where deferred work goes).
@@ -135,6 +135,8 @@ passes exactly as before. This is the whole change and the last phase.
       `issues/integration-marker-wording.md` and its `ROADMAP.md` entry. The adopted seed
       `issues/absence-check-leftover-classification.md` stays: `code rcac-mcp roadmap` retires it
       after landing.
+      *Built 2026-10-22:* the two accepted limits read as risks (each still gets a working `del`),
+      not deferred work; `issues/integration-marker-wording.md` and its Part III entry filed.
 - **Verify:** `sh spec/absence-check-leftover-classification/verify/gate.sh P1` — static checks
   against `55fc5b7`, every named id passing with git and `CI=true` in both eras, the slice without
   git off CI (git ids skip) and on CI (they fail), and the twelve mutants. Offline, one child at a

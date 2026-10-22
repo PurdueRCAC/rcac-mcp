@@ -213,14 +213,20 @@ import has no effect.
   observed behaviour, and that gates may import directly (`sys.path.insert(0, 'tests')`). Their
   names and the parametrised test ids are a contract: renaming one breaks a gate loudly. Each check
   has standing negative controls, planted shapes it must reject.
-  - `tests/test_registry.py` (`unit`): `EXPECTED_TOOLS`, `registry_violations`, `module_absent`,
-    `absence_violations`. `TOOL_REGISTRY` and the tools the server actually serves (listed by a
-    harness client, `served_tools`) match
-    `EXPECTED_TOOLS` exactly, and the removed documentation modules stay unimportable; when one
-    does import, `absence_violations` says where from and reads what is there: bytecode alone is
-    the stale checkout below, with its remedy; any other file means the module was re-added, and
-    the message says so instead of offering a remedy. `EXPECTED_TOOLS` is hard-coded, so a tool
-    change edits it in the same commit as `SERVER_INSTRUCTIONS` and the README (§ Invariants §9).
+  - `tests/test_registry.py` (`unit`, `integration`): `EXPECTED_TOOLS`, `registry_violations`,
+    `module_absent`, `absence_violations`. `TOOL_REGISTRY` and the tools the server actually serves
+    (listed by a harness client, `served_tools`) match `EXPECTED_TOOLS` exactly, and the removed
+    documentation modules stay unimportable; when one does import, `absence_violations` says where
+    from and asks git, through `bin/sandbox.sh`, what each file there is. A tracked file means the
+    module was re-added, and the message says so with no `del`; an untracked file and an ignored
+    one (the stale checkout below) each get their own line and a `del` that reaches only that
+    class. Where git cannot answer (not on PATH, not a work tree, a failed call, or a `unit` test,
+    which may start no process) the message is the old suffix rule's: bytecode alone is a stale
+    checkout, anything else a re-added module. So `test_docs_modules_absent` is `integration`
+    although it drives no CLI, and `-m unit` no longer runs it; the git-backed controls build their
+    own repository under `tmp_path` and go through `conftest.need_git`, which skips them without
+    git and fails them on CI. `EXPECTED_TOOLS` is hard-coded, so a tool change edits it in the same
+    commit as `SERVER_INSTRUCTIONS` and the README (§ Invariants §9).
   - `tests/test_instructions.py` (`unit`): `instruction_violations`, `guidance_violations`,
     `NON_TOOL_TERMS`. `SERVER_INSTRUCTIONS`, both as the constant and as served (what a harness
     client receives on connecting, `served_instructions`), lists exactly the
