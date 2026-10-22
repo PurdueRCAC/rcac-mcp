@@ -3,7 +3,7 @@ slug: absence-check-leftover-classification
 title: Explain an importable leftover by git status, not file suffix
 kind: test
 appetite: small
-status: in_review
+status: blocked
 branch: test/absence-check-leftover-classification
 base: develop
 current_phase: done
@@ -28,10 +28,10 @@ phases:
   hill: uphill
   verify: sh spec/absence-check-leftover-classification/verify/gate.sh P1
 review:
-  last_reviewed_commit: ''
-  verdict: none
-  blocked_reason: ''
-  cycle: 0
+  last_reviewed_commit: e550c200fe0c18c646d0984813c3201558932d92
+  verdict: changes-requested
+  blocked_reason: '2 MEDIUM: symlinked/nested leaves fall back; global excludes unread'
+  cycle: 1
 ---
 
 # TECH.md — Explain an importable leftover by git status, not file suffix
