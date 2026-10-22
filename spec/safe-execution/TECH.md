@@ -1301,6 +1301,15 @@ contract or the heredoc writes; every planted violation is killed; every deferra
 - **Remediation amendment 4 (2026-10-22, Geoffrey's ruling after review cycle 3).** Reopened with
   P1, P2, P4, P5 and P6 and landed in one commit with them; the end record, the SFTP route, the pins, the
   measurements and the mutants are in P2's fourth note.
+- **Lock amendment (2026-10-22).** The first CI run of the remediation's head (55014e7) ran the
+  suite green on Linux (`1538 passed` per era, 0 skipped) and failed only at the release gate's
+  `bin/audit_lock.py`: advisories published since the last run against two locked packages,
+  `certifi` 2026.1.4 (GHSA-6q48-6c7w-9gw2, fixed in 2026.10.19) and `opentelemetry-api` 1.39.1
+  (GHSA-xcq7-p3pf-p88h, fixed in 1.45.1). `uv lock --upgrade-package` moved exactly those two
+  (and dropped `importlib-metadata` and `zipp`, which the newer `opentelemetry-api` no longer
+  needs); `pyproject.toml` is unchanged. Not this cycle's code: `develop` carries the same lock, so
+  it goes in a commit of its own, which landing can keep or leave to `develop`. Locally after it:
+  `uv lock --check`, the audit clean, `1538 passed` in each era, sandboxed `--help` exit 0.
 - **Verify:** frontmatter `P7.verify`.
 - **Touches:** `AGENTS.md`, `issues/`, `ROADMAP.md`, any straggler text the sweep names.
 
