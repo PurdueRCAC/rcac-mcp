@@ -375,16 +375,6 @@ the plan's call. Found by `stack-upgrade`'s GOAL non-goals, carried at retiremen
 *Horizon: later · Depends on: — · Refs: runs where the gate runs, so CI picks it up through its mirror of the gate (`ci-workflow`; cleared: landed on `develop` 2026-10-18); [`spec/stack-upgrade/`](spec/stack-upgrade/) pins the one annotation*
 **Seed:** [`issues/annotation-check.md`](issues/annotation-check.md) · *status: unshaped*
 
-## A truncated sdist crashes the hygiene check instead of naming it
-
-`bin/sdist_hygiene.py` reports an unreadable tarball as one formatted line, but a gzip stream cut
-short raises `EOFError` outside the errors it catches, so the check exits 1 with a traceback. It
-still fails closed in the release gate and in CI; only the message breaks its contract. Found by
-the `ci-workflow` review, 2026-10-18.
-
-*Horizon: later · Depends on: — · Refs: the shared check `ci-workflow` introduced ([`spec/ci-workflow/`](spec/ci-workflow/))*
-**Seed:** [`issues/sdist-hygiene-truncated-gzip.md`](issues/sdist-hygiene-truncated-gzip.md) · *status: unshaped*
-
 ## A startup file's background job can delay a result, or reach it over SSH
 
 Startup output never reaches a result, but a background process a startup file leaves running holds

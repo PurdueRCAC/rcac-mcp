@@ -586,9 +586,15 @@ import has no effect.
     `bin/sdist_hygiene.py`, loaded by path and fed tarballs built in `tmp_path`. Each furniture
     entry is named, lookalikes (`binary.txt`, `specs/`, `tests/fixturesX/`) pass, a member outside
     the root named after the tarball or with `..` is named, and a missing or unreadable sdist
-    fails. The furniture cases run over a tuple written in the test, never the script's own
-    `FURNITURE`, and `test_furniture_matches_the_recorded_set` pins the two together, so dropping
-    an entry is red.
+    fails. Unreadable means not read in full: a truncated stream (every cut through a gzip
+    stream's tail), a damaged gzip checksum or length, a damaged header mid-archive, no
+    end-of-archive block, data after it (however far), a truncated or damaged later xz or bz2
+    stream, and any error raised while reading, each named in the one `cannot be read` line with no
+    traceback, while the other sdists are still checked. Readable variants (GNU format,
+    uncompressed, multi-stream gzip, xz and bz2) and every kind of member (directories, links,
+    duplicates) are judged as before. The furniture cases run over a tuple written in the test,
+    never the script's own `FURNITURE`, and `test_furniture_matches_the_recorded_set` pins the two
+    together, so dropping an entry is red.
 - **The rails, in `tests/conftest.py`**, beside the collection hook (which they never feed: no
   fixture adds a marker):
   - **The unit guard** makes `unit` mean something: for a `unit` test, `HOME` and `XDG_*` point
