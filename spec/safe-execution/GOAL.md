@@ -197,6 +197,17 @@ Broken today → fixed. Tests run without a cluster: the `ssh` path against a st
   `encoding="base64"`, ASCII whitespace (space, tab, CR, LF) is ignored, per RFC 2045 line
   wrapping; any other non-alphabet character, or bad padding, fails per R5. A test pins both sides
   (foreman, PLAN/TECH gate, 2026-10-17).
+- **Q:** How does a result become complete, and how does content reach an ssh command, after
+  review cycle 3 reached the bound? — **A (Geoffrey, at the escalation, 2026-10-22):** by an
+  end-of-output marker, not a timing rule. The launcher runs the command, then prints a per-call
+  end marker on both streams once it exits, preserving its exit status and any signal death; a
+  result is complete exactly when both markers have arrived, however slow the link, and nothing a
+  startup file or the command leaves running can cut a result short or hold a call past its
+  markers. Timeouts (R8) still bound everything. Over ssh, file content (`write_file`,
+  `sbatch` `script_content`) travels by SFTP to a private temporary file that the program moves
+  into place, so nothing the content needs rides stdin and no remote startup file can read it.
+  One more debate review follows, as a named exception to the bound; if it is not clean, the
+  cycle stops for him.
 
 ## Related materials
 
