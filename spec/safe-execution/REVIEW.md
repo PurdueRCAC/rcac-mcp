@@ -394,3 +394,70 @@ ruling); `list_directory` paths read from `$PWD`; five seeds filed; and `average
   remediated until he rules. Class 1 has now failed twice as a timing heuristic (a fixed grace,
   then an idle cutoff); the foreman's recommendation to him replaces the heuristic rather than
   tuning it.
+
+## Review cycle 4 — changes-requested; the named exception did not come back clean (2026-10-22)
+
+- **Reviewed commit:** 227a7bb12991716fba2fcc306a2e7de393f81e3f · **Mode:** a fresh blind debate pass, the
+  fourth cycle Geoffrey allowed as a named exception (GOAL Clarification, 2026-10-22). CI run
+  39867502149 on the same commit (ubuntu-24.04, bash 5.2, every shell): `1575 passed` per era, 0
+  skipped.
+- **What held** (both reviewers): the end-record design and the SFTP architecture. Completeness on
+  links from 2 KB/s to 1 MB/s with 1–64 KiB packets and stalls up to 5 s before and after the exit
+  status; holders left by the command or a profile returning in ≤ 0.06 s; signal deaths as −N;
+  timeouts with `LATE_NOTE`; forged records kept as output; a launch killed before its records
+  (`UNFINISHED_NOTE`); the `sbatch` double-submit case on a 40 KB/s link with a 2 s stall (one
+  submission, job id returned, script byte-exact, 0 bytes on stdin); remote rc files reading stdin
+  during a write (0 bytes reached them); records split across reads (by probe); six concurrent
+  writes to one target; staging cleanup on every tried failure; literal arguments and the start
+  directory under a hostile profile; R9 on the raw wire; the 98,154-byte ssh program limit; 25 of
+  25 planted mutants killed (ship) and the suite's rows (block).
+
+### [CRITICAL/CONFIRMED] A failed SFTP upload is reported as a successful write and destroys the target (block 1)
+
+- **Where:** `src/rcac_mcp/executor/ssh.py:247-252` (`_upload`, `set_pipelined(True)`), `:428-438` (the
+  move runs with no check of what landed).
+- **Failure scenario:** paramiko 5.0.0 files pipelined write replies under `type(None)`, so
+  `_finish_responses` never raises them, and `_close` swallows an `IOError` on close. On ENOSPC or
+  EDQUOT the staged file is short or empty, `PLACE` moves it over the target, and the result is exit
+  0 with empty stderr. A job script truncated at 32,768 of 36,027 bytes would be submitted.
+  **A regression:** on the same full filesystem `origin/develop` returned `cat: stdout: No space
+  left on device`, exit 1.
+- **Evidence:** a 4 MB HFS+ image filled to 8 KiB and 32 KiB free, served by the real OpenSSH 10.3p1
+  `sftp-server` behind the loopback server: 0 and 32,768 bytes on disk, original gone, exit 0; an
+  injected EDQUOT at 32 KiB for a job script. The suite's own row is hollow (it patches `_upload`
+  to raise, which the real stack never does).
+- **Touches:** R4; `executor/ssh.py` (high-blast-radius); §2 (*[human gate]*).
+
+### [HIGH/CONFIRMED] A lost link after the command ran reads "did not start" (block 2)
+
+- **Where:** `src/rcac_mcp/executor/ssh.py:156-158` (a closed channel taken as a clean end),
+  `launch.py:362-368` (`-1002`).
+- **Failure scenario:** the link drops after the command ran while its output, start sentinel
+  included, is still queued: `ran=True`, `exit_code=-1002`, "the command did not start". `sbatch`
+  then raises "Failed to submit job" and an agent resubmits: the double-submit class this cycle
+  promises away (§3).
+- **Touches:** R8; §3 (*[human gate]*).
+
+### [MEDIUM/CONFIRMED] Two SFTP replace semantics differ from every other mode (block 3, ship 1)
+
+- **Where:** `src/rcac_mcp/executor/ssh.py:222-226` (`normalize` raising `FileNotFoundError` falls
+  through), `:68` (`PLACE`, `mv -f`), `:214` (`_staging`).
+- **Failure scenario:** a dangling symlink is replaced by a regular file (a shell `>` fails and
+  keeps the link); an overwrite replaces a 0444 target the user cannot write (local and delegate
+  refuse, as did develop over ssh), so in a group-writable directory without the sticky bit it
+  replaces another user's file; mode bits are copied verbatim, a 4755 target staying setuid.
+- **Touches:** R4; §2 (*[human gate]*); none is in §2's recorded limits.
+
+### [LOW] Coverage and a test stand-in
+
+- No row splits an end record across reads while a holder keeps the channel open: scanning from
+  `len(buf)` (`ssh.py:153`, `launch.py:515`) and dropping the record's full stop (`launch.py:184`)
+  survive the suite. The code is correct (a probe passes).
+- `tests/conftest.py:258`: the `sudo` stand-in crashes on a SIGKILL death instead of dying of it.
+
+## Stopped for Geoffrey — cycle 4
+
+- Per his ruling, a fourth cycle that is not clean stops the cycle. The design both reviewers
+  attacked held; what failed are SFTP failure paths (error propagation, replace permissions, a
+  dangling link) and one link-loss misreport, all in `executor/ssh.py` and §2/§3. The foreman's
+  options to him are in the KB log of 2026-10-22.
