@@ -145,3 +145,5 @@ passes exactly as before. This is the whole change and the last phase.
   the blind reviewer can grade it.
 - **Touches:** `tests/test_registry.py`, `tests/conftest.py`, `AGENTS.md` (§ Testing),
   `spec/absence-check-leftover-classification/verify/` (when an id or anchor moves).
+
+**Moved-base amendment (foreman, 2026-10-22).** The branch was rebased onto develop `bfa0595`, which changed only `uv.lock`; `verify/gate.sh`'s `BASE` moves from `55fc5b7` to `bfa0595` so its "nothing outside the change differs" check compares against the real base. No gate check is loosened.
