@@ -3,7 +3,7 @@ slug: absence-check-leftover-classification
 title: Explain an importable leftover by git status, not file suffix
 kind: test
 appetite: small
-status: blocked
+status: in_review
 branch: test/absence-check-leftover-classification
 base: develop
 current_phase: done
@@ -147,3 +147,31 @@ passes exactly as before. This is the whole change and the last phase.
   `spec/absence-check-leftover-classification/verify/` (when an id or anchor moves).
 
 **Moved-base amendment (foreman, 2026-10-22).** The branch was rebased onto develop `bfa0595`, which changed only `uv.lock`; `verify/gate.sh`'s `BASE` moves from `55fc5b7` to `bfa0595` so its "nothing outside the change differs" check compares against the real base. No gate check is loosened.
+
+**Review cycle 1 remediation (2026-10-22).** REVIEW.md's two MEDIUM findings and its coverage
+observations, each closed as a class. P1 is reopened; `gate.sh` is unchanged, and `verify/` only
+grows: `ids.txt` lists the new controls (88 ids), and `check.py` adds a mutant per new branch and
+per surviving mutant (23 on macOS, 22 elsewhere; the mutants part now takes about 4 min).
+
+1. *Every leaf git lists gets git's class.* Git is asked from the location's parent about the
+   location by name, and leaves are keyed by their path relative to it, as git prints it: no
+   `resolve()` of a leaf, so a symlinked location is the link (tracked: "re-added", no `del`;
+   untracked: its own `del`). On macOS both sides are compared composed (NFC), which matches
+   whether `core.precomposeUnicode` is on or off. A repository nested inside falls back with the
+   reason added to the message. The top-containment guard stays, on the parent. § Testing lists
+   every fallback case, a missing `bin/sandbox.sh` included. Controls: `…_for_odd_entries`
+   `tracked-symlink-location`, `untracked-symlink-location`, `decomposed-name`,
+   `decomposed-name-unprecomposed`, `tracked-decomposed-name`, `nested-repository` (now with its
+   reason), `above-ceiling`.
+2. *The classes are the developer's `git status`* (foreman's ruling): `developer_excludes` reads
+   `core.excludesFile` from the developer's global config files, else the XDG `ignore` default,
+   from the test process's HOME, and passes it with `-c`, unless the repository sets its own. The
+   hook and `GIT_*` scrub and `GIT_CONFIG_NOSYSTEM` stay. `scratch_repo` gives every control a
+   scratch HOME. Control: `test_absence_message_follows_developer_excludes` (8 rows, each checked
+   against a plain `git status --ignored` in the same scratch HOME).
+3. *Every surviving mutant dies:* sum check dropped (`listed-twice-accepted`, killed by
+   `…_fails_midway[mixed-lists-twice]`), `GIT_CONFIG_NOSYSTEM` dropped (`system-config-read`, by
+   `…_developer_excludes[system-config]`), the `GIT_CEILING_DIRECTORIES` keep dropped
+   (`ceiling-dropped`, by `…_odd_entries[above-ceiling]`), a top-level symlink followed
+   (`location-symlink-followed`). `GIT_CLASSES` is gone. The completeness check is now one count
+   per leaf, so `unlisted-file-accepted` moved its anchor.

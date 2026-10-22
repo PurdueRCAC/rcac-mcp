@@ -64,6 +64,7 @@ test_absence_message_falls_back_when_git_fails_midway[bare-pyc-ls-files] git
 test_absence_message_falls_back_when_git_fails_midway[module-file-ls-files] git
 test_absence_message_falls_back_when_git_fails_midway[empty-pycache-check-ignore] git
 test_absence_message_falls_back_when_git_fails_midway[mixed-omits-untracked] git
+test_absence_message_falls_back_when_git_fails_midway[mixed-lists-twice] git
 test_a_missing_git_fails_on_ci_and_skips_elsewhere[ci] plain
 test_a_missing_git_fails_on_ci_and_skips_elsewhere[local] plain
 test_a_missing_git_fails_on_ci_and_skips_elsewhere[ci-false] plain
@@ -72,5 +73,19 @@ test_absence_message_ignores_git_hook_environment[work-tree] git
 test_absence_message_ignores_git_hook_environment[index-file] git
 test_absence_message_ignores_git_hook_environment[all] git
 test_absence_message_for_odd_entries[tracked-symlink] git
+test_absence_message_for_odd_entries[tracked-symlink-location] git
+test_absence_message_for_odd_entries[untracked-symlink-location] git
+test_absence_message_for_odd_entries[decomposed-name] git
+test_absence_message_for_odd_entries[decomposed-name-unprecomposed] git
+test_absence_message_for_odd_entries[tracked-decomposed-name] git
 test_absence_message_for_odd_entries[nested-repository] git
 test_absence_message_for_odd_entries[unreadable-directory] git
+test_absence_message_for_odd_entries[above-ceiling] git
+test_absence_message_follows_developer_excludes[default-ignore] git
+test_absence_message_follows_developer_excludes[xdg-ignore] git
+test_absence_message_follows_developer_excludes[gitconfig] git
+test_absence_message_follows_developer_excludes[xdg-config] git
+test_absence_message_follows_developer_excludes[gitconfig-over-xdg-config] git
+test_absence_message_follows_developer_excludes[git-config-global] git
+test_absence_message_follows_developer_excludes[repository-own] git
+test_absence_message_follows_developer_excludes[system-config] git

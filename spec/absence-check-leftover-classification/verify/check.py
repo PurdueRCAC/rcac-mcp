@@ -20,7 +20,7 @@ mutants   Each way of breaking the explanation turns named tests red. One exact 
           passes first. An `old` string that does not occur exactly once is red: the build moved
           the code, and this table moves with it.
 
-Footprint: one pytest child at a time; under 250 MB; about 30 s for the mutants.
+Footprint: one pytest child at a time; under 250 MB; about 4 min for the mutants.
 """
 
 from __future__ import annotations
@@ -74,6 +74,8 @@ T = 'test_absence_message_for_tracked_files'
 M = 'test_absence_message_for_mixed_files'
 F = 'test_absence_message_falls_back_without_git'
 W = 'test_absence_message_falls_back_when_git_fails_midway'
+O = 'test_absence_message_for_odd_entries'
+X = 'test_absence_message_follows_developer_excludes'
 
 # (name, file, old, new, ids that must fail[, the JUnit tag a kill shows when not `failure`])
 MUTANTS = [
@@ -101,12 +103,33 @@ MUTANTS = [
      [f'{W}[empty-pycache-check-ignore]']),
     ('symlink-followed', MODULE, "if entry.is_symlink() or not entry.is_dir()", "if not entry.is_dir()",
      ['test_absence_message_for_odd_entries[tracked-symlink]']),
-    ('unlisted-file-accepted', MODULE, "if set().union(*listings.values()) != relative.keys() or sum(map(len, listings.values())) != len(relative):",
-     "if False:",
-     [f'{W}[mixed-omits-untracked]', 'test_absence_message_for_odd_entries[nested-repository]']),
+    ('unlisted-file-accepted', MODULE, "    if any(placed[r] != 1 for r in relative.keys() - inside):",
+     "    if False:", [f'{W}[mixed-omits-untracked]']),
+    ('listed-twice-accepted', MODULE, 'placed[r] != 1', 'placed[r] < 1', [f'{W}[mixed-lists-twice]']),
+    ('system-config-read', MODULE, "    env['GIT_CONFIG_NOSYSTEM'] = '1'\n", '', [f'{X}[system-config]']),
+    ('ceiling-dropped', MODULE, " or k == 'GIT_CEILING_DIRECTORIES'", '', [f'{O}[above-ceiling]']),
+    ('location-symlink-followed', MODULE, '    if path.is_symlink() or not path.is_dir():\n        return [path]',
+     '    if not path.is_dir():\n        return [path]',
+     [f'{O}[tracked-symlink-location]', f'{O}[untracked-symlink-location]']),
+    ('top-not-checked', MODULE, '        where.resolve().relative_to(Path(found.stdout.strip()).resolve())\n', '',
+     [f'{F}[empty-pycache-git-answers-elsewhere]']),
+    ('nested-reason-dropped', MODULE, '    if nested:\n        return (', '    if False:\n        return (',
+     [f'{O}[nested-repository]']),
+    ('developer-excludes-unread', MODULE, "    return ['-c', f'core.excludesFile={excludes}']", '    return []',
+     [f'{X}[default-ignore]', f'{X}[gitconfig]', f'{X}[git-config-global]']),
+    ('repository-excludes-overridden', MODULE, '    if own.returncode == 0:\n        return []\n', '',
+     [f'{X}[repository-own]']),
+    ('xdg-config-home-unread', MODULE, "os.environ.get('XDG_CONFIG_HOME') or ", '', [f'{X}[xdg-ignore]']),
+    ('gitconfig-before-xdg-config', MODULE, "[config_home / 'git' / 'config', Path.home() / '.gitconfig']",
+     "[Path.home() / '.gitconfig', config_home / 'git' / 'config']", [f'{X}[gitconfig-over-xdg-config]']),
     ('need-git-skips-on-ci', CONFTEST, "    if os.environ.get('CI', '').lower() == 'true':\n        pytest.fail('git",
      "    if False:\n        pytest.fail('git", ['test_a_missing_git_fails_on_ci_and_skips_elsewhere[ci]']),
 ]
+# Only macOS composes the names it lists, so only there does leaving them as stored lose a file.
+if sys.platform == 'darwin':
+    MUTANTS.append(('names-not-normalised', MODULE,
+                    "return unicodedata.normalize('NFC', name) if sys.platform == 'darwin' else name",
+                    'return name', [f'{O}[decomposed-name]', f'{O}[tracked-decomposed-name]']))
 
 
 def fail(message: str) -> None:
