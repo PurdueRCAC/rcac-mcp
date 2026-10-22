@@ -208,6 +208,13 @@ Broken today → fixed. Tests run without a cluster: the `ssh` path against a st
   into place, so nothing the content needs rides stdin and no remote startup file can read it.
   One more debate review follows, as a named exception to the bound; if it is not clean, the
   cycle stops for him.
+- **Q:** After review cycle 4, the named exception, came back not clean? — **A (Geoffrey,
+  2026-10-22):** a fix scoped to the failure paths it found, then one review scoped to verifying
+  those fixes. Every SFTP write is verified, and the staged file's size and hash are checked before
+  the move. Over ssh, a write refuses where a shell `cat >` would (a target the user cannot write,
+  a dangling link) and never carries setuid or setgid bits. A link lost after the command may have
+  run is reported as its own "may have run" result, never as `-1002` "did not start". Each is
+  pinned.
 
 ## Related materials
 
