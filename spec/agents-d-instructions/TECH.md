@@ -6,12 +6,12 @@ appetite: big
 status: in_progress
 branch: feature/agents-d-instructions
 base: develop
-current_phase: P1
-last_updated: '2026-10-19'
+current_phase: P2
+last_updated: '2026-10-23'
 phases:
 - id: P1
   name: Site reader and composer
-  status: pending
+  status: done
   satisfies:
   - R3
   - R5
@@ -153,13 +153,13 @@ checklists below are the work. `code-build` executes the next actionable phase, 
 **Goal:** `src/rcac_mcp/site.py` reads a directory the way the convention says, through either
 path, and composes instructions within a budget; nothing calls it yet.
 
-- [ ] Create `src/rcac_mcp/site.py` exactly to PLAN § 2.1–2.2: the constants (`AGENTS_D`,
+- [x] Create `src/rcac_mcp/site.py` exactly to PLAN § 2.1–2.2: the constants (`AGENTS_D`,
       `READ_TIMEOUT` read at call time), `SiteFile`, `SiteContext` and its constructors and `text`,
       `read_local`, `READ_SITE` (registered with `scripts.fixed`; the directory as `"$1"`; it
       unsets `base64 tr test` first), `parse_remote`, `read_remote`, `read_bounded` (daemon thread),
       `units`, `omission_note`, `compose`, `minimum_budget`, `BudgetError(ValueError)`, `register`,
       `site_of`. Names and signatures are the ones `verify/site_gate.py`'s docstring lists.
-- [ ] `tests/test_site.py` with the test functions `verify/p1.sh` names, built on `read_violations`
+- [x] `tests/test_site.py` with the test functions `verify/p1.sh` names, built on `read_violations`
       and `compose_violations`. The layout includes `Z.md` and `10-first.md` (byte order versus
       case-folded order), a dotfile, a space, `AGENTS.md`, `Upper.MD`, a blank file, a `.txt`, a
       symlink, a directory and a FIFO named `*.md`, plus `.md`, `-n.md` and `end 0.md`.
@@ -167,7 +167,7 @@ path, and composes instructions within a budget; nothing calls it yet.
       (`integration`). No test skips (`test_only_need_shell_skips`): the non-UTF-8 name row asserts
       the file system's refusal where it refuses one (macOS). A failed read composes within the
       smallest budget a good read accepts (`test_a_budget_that_serves_a_good_read_serves_a_failed_one`).
-- [ ] `tests/test_hygiene.py` stays green: the new launches start with `bin/sandbox.sh`.
+- [x] `tests/test_hygiene.py` stays green: the new launches start with `bin/sandbox.sh`.
 - **Verify:** `sh spec/agents-d-instructions/verify/p1.sh` (named tests, then `site_gate.py`'s
   independent oracle).
 - **Touches:** `src/rcac_mcp/site.py`, `tests/test_site.py`.
