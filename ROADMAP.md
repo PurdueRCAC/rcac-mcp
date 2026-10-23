@@ -71,7 +71,7 @@ mode, the default, and a small fix: `safe-execution` already bounds the first co
 bounds the reconnect the same way, so it ships in 0.1.3.
 
 *Horizon: near-term · Depends on: safe-execution (its connect timeouts, P3; cleared: landed on `develop` 2026-10-23) · Refs: [`spec/safe-execution/`](spec/safe-execution/) research 02 §4*
-**Seed:** [`issues/ssh-reconnect-loop.md`](issues/ssh-reconnect-loop.md) · *status: unshaped*
+**Seed:** [`issues/ssh-reconnect-loop.md`](issues/ssh-reconnect-loop.md) · *status: adopted:ssh-reconnect-loop*
 
 ## `sbatch` job scripts written in the same second share a name
 

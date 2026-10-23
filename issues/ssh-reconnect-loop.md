@@ -1,5 +1,5 @@
 ---
-status: unshaped
+status: adopted:ssh-reconnect-loop
 kind: fix
 appetite: small
 lane: public
