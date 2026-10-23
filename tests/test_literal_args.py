@@ -63,7 +63,7 @@ from typing import Any, Callable, Iterator, Sequence
 import pytest
 
 import argv_echo
-from harness import Outcome, call, drive, in_memory, served_surface, shared_server
+from harness import SITE, Outcome, call, drive, in_memory, served_surface, shared_server
 from rcac_mcp.executor import CommandResult, Executor
 from rcac_mcp.executor.delegate import DelegatingExecutor
 from rcac_mcp.executor.shell import LocalShellExecutor
@@ -772,7 +772,7 @@ def _rows() -> set[tuple[str, str, str]]:
 
 @pytest.mark.unit
 def test_literal_matrix_covers_every_string_param() -> None:
-    surface = served_surface(create_mcp_server('none'))
+    surface = served_surface(create_mcp_server('none', site=SITE))
     assert len(string_params(surface)) > 40
     violations = coverage_violations(surface, _rows())
     assert violations == [], '\n'.join(violations)
@@ -799,7 +799,7 @@ def _planted(surface: dict[str, Any], tool: str, name: str, schema: dict[str, An
                  'which the surface does not serve as a string', id='stray-row'),
 ])
 def test_coverage_check_catches_planted_gaps(plant: Callable[..., Any], fragment: str) -> None:
-    surface = served_surface(create_mcp_server('none'))
+    surface = served_surface(create_mcp_server('none', site=SITE))
     rows = _rows()
     # A non-string parameter needs no row.
     assert coverage_violations(_planted(surface, 'squeue', 'count', {'type': 'integer'}), rows) == []

@@ -104,6 +104,7 @@ from rcac_mcp.executor import launch
 from rcac_mcp.executor.base import CommandResult, Executor
 from rcac_mcp.middleware import AuthExecutorMiddleware, SharedExecutorMiddleware
 from rcac_mcp.server import create_mcp_server
+from rcac_mcp.site import SiteContext
 from rcac_mcp.token import ALGORITHM, AUDIENCE, ISSUER
 
 __all__ = ['Outcome', 'drive', 'serving', 'http_client', 'in_memory', 'call', 'call_http', 'mint',
@@ -112,7 +113,7 @@ __all__ = ['Outcome', 'drive', 'serving', 'http_client', 'in_memory', 'call', 'c
            'select_era', 'era_mismatch', 'session_era', 'rejection_status', 'served_tools',
            'served_instructions', 'served_surface', 'protocol_error', 'Negotiated', 'negotiate', 'Listed',
            'stdio_tools', 'url_tools', 'Refused', 'stdio_refusal', 'SANDBOX', 'LOOPBACK', 'installed_auth', 'StateProbe', 'tool_names',
-           'launched_script']
+           'launched_script', 'read_resource', 'SITE']
 
 T = TypeVar('T')
 
@@ -323,6 +324,15 @@ async def call(client: Client, tool: str, args: dict[str, Any]) -> Outcome:
     return Outcome(result.is_error, ''.join(getattr(part, 'text', '') for part in result.content))
 
 
+async def read_resource(client: Client, uri: str) -> Outcome:
+    """Read `uri` on a connected client: its joined text, or the error's text with `is_error` set."""
+    try:
+        contents = await client.read_resource(uri)
+    except Exception as exc:
+        return Outcome(True, str(exc))
+    return Outcome(False, ''.join(getattr(part, 'text', '') for part in contents))
+
+
 async def tool_names(client: Client) -> tuple[str, ...]:
     """List the tools on a connected client: a request that is not a tool call, on the same session."""
     return tuple(tool.name for tool in await client.list_tools())
@@ -440,17 +450,19 @@ async def negotiate(target: Any, era: str, token: str | None = None) -> Negotiat
 
 @dataclass(frozen=True)
 class Listed:
-    """What a client listed from a server in another process, and the era it negotiated there."""
+    """What a client listed from a server in another process: the tools, the era and the instructions."""
 
     tools: tuple[str, ...]
     protocol_version: str | None
     has_initialize_result: bool
+    instructions: str | None = None
 
 
 async def _listed(client: _EraClient) -> Listed:
     async with client:
         version, has_initialize_result = session_era(client)
-        return Listed(tuple(tool.name for tool in await client.list_tools()), version, has_initialize_result)
+        return Listed(tuple(tool.name for tool in await client.list_tools()), version, has_initialize_result,
+                      client.instructions)
 
 
 def stdio_tools(argv: Sequence[str], era: str, env: Mapping[str, str] | None = None, timeout: float = 60) -> Listed:
@@ -683,23 +695,27 @@ class StateProbe(Middleware):
         return await call_next(context)
 
 
-def delegate_server(map_path: str, *extra: Middleware) -> FastMCP:
+# The site context every builder serves unless given another: none, as on a host without /etc/agents.d.
+SITE = SiteContext.missing('this host')
+
+
+def delegate_server(map_path: str, *extra: Middleware, site: SiteContext = SITE) -> FastMCP:
     """A `jwt` server with `AuthExecutorMiddleware` over `map_path`; the caller sets `JWT_SECRET`.
 
     `extra` middleware (a `Rendezvous`, say) is added after the executor middleware, so it runs
     inside it; the same holds for the other builders. Each builder adds a `MethodLog` last.
     """
     _require_running_loop('delegate_server')
-    return create_mcp_server('jwt', middlewares=[AuthExecutorMiddleware('jwt', map_path), *extra, MethodLog()])
+    return create_mcp_server('jwt', middlewares=[AuthExecutorMiddleware('jwt', map_path), *extra, MethodLog()], site=site)
 
 
-def shared_server(executor: Executor, *extra: Middleware) -> FastMCP:
+def shared_server(executor: Executor, *extra: Middleware, site: SiteContext = SITE) -> FastMCP:
     """An unauthenticated server whose `SharedExecutorMiddleware` installs `executor` per call."""
     _require_running_loop('shared_server')
-    return create_mcp_server('none', middlewares=[SharedExecutorMiddleware(executor), *extra, MethodLog()])
+    return create_mcp_server('none', middlewares=[SharedExecutorMiddleware(executor), *extra, MethodLog()], site=site)
 
 
-def bare_server(*extra: Middleware) -> FastMCP:
+def bare_server(*extra: Middleware, site: SiteContext = SITE) -> FastMCP:
     """An unauthenticated server with no executor middleware at all."""
     _require_running_loop('bare_server')
-    return create_mcp_server('none', middlewares=[*extra, MethodLog()])
+    return create_mcp_server('none', middlewares=[*extra, MethodLog()], site=site)

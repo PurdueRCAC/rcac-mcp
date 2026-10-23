@@ -16,8 +16,8 @@ move. Cancellation is never converted: the boundary catches `Exception`, not `Ba
 
 **Both protocol eras, each pinned.** A client on a handshake revision completes `initialize`; a
 client on revision 2026-07-28 is answered on `server/discover` and never sends `initialize`. Each
-receives `SERVER_INSTRUCTIONS` as its instructions and lists exactly `EXPECTED_TOOLS`, in memory
-and over HTTP, whatever era the run selected. What each end saw is read through `negotiate`, and
+receives the base instructions composed with the harness's site context (`SERVER_INSTRUCTIONS`
+here) and lists exactly `EXPECTED_TOOLS`, in memory and over HTTP, whatever era the run selected. What each end saw is read through `negotiate`, and
 `era_violations` decides. The delegate contracts (isolation, the tokenless refusal, a foreign
 token's 401) also run in the modern era on every run, so the default handshake-era pass does not
 leave them unproven there.
@@ -36,14 +36,18 @@ from typing import Any, Callable
 import pytest
 
 import harness
-from harness import (MODERN_VERSION, Negotiated, Outcome, RecordingExecutor, Raises, Rendezvous, StateProbe, call,
-                     call_http, delegate_server, drive, http_client, in_memory, mint, negotiate, protocol_error,
+from harness import (MODERN_VERSION, SITE, Negotiated, Outcome, RecordingExecutor, Raises, Rendezvous, StateProbe,
+                     call, call_http, delegate_server, drive, http_client, in_memory, mint, negotiate, protocol_error,
                      rejection_status, select_era, serving, session_era, shared_server, tool_names, user_map)
 from rcac_mcp.middleware import ToolErrorMiddleware
-from rcac_mcp.server import SERVER_INSTRUCTIONS
+from rcac_mcp.server import SERVER_INSTRUCTIONS as BASE
+from rcac_mcp.site import compose
 from test_isolation import isolation_violations, launched_as
 from test_no_executor import NO_EXECUTOR, refusal_violations, report
 from test_registry import EXPECTED_TOOLS
+
+# What every harness server serves: the base instructions and the harness's site context.
+SERVER_INSTRUCTIONS = compose(BASE, SITE)
 
 
 def boundary_violations(outcome: Outcome | None, raised: BaseException | None, expected: str) -> list[str]:

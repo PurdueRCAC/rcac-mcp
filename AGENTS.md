@@ -201,6 +201,7 @@ There is no config file and no config singleton — everything is CLI flags plus
 | `JWT_SECRET` | HS256 shared secret (≥ 32 chars) |
 | `OIDC_CONFIG_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `MCP_BASE_URL` | OIDC proxy (all four required together) |
 | `MCP_BASE_URL` | also used to build the absolute icon URL in `server.py` |
+| `RCAC_INSTRUCTIONS_BUDGET` | the most characters (UTF-16 code units, as JavaScript clients count) the served instructions may take; default 4096, Claude Code's cut; `--instructions-budget` overrides |
 
 `MCP_BASE_URL` is read **at import time** in `server.py` to compute `ICON_URL`; setting it after
 import has no effect.
@@ -435,7 +436,8 @@ import has no effect.
     listed in its commit body and here. Deltas so far (`safe-execution`): `run_command.description`,
     `write_file.description`, `write_file.properties.encoding`, `sbatch.properties.args`, and
     `description` and `properties.extra_args` on each of `sbatch`, `squeue`, `scancel`, `sacct`
-    and `sinfo`.
+    and `sinfo`; (`agents-d-instructions`) `instructions`, the base composed with the harness's
+    site context (`harness.SITE`).
     `TOLERATED` names the four differences FastMCP 4 introduces, each with its cause and accepted
     only in its own shape: an argument `description` where there was none, `additionalProperties`
     added as exactly `false`, output `$defs` inlined, and a `description` on an inlined output node
@@ -667,9 +669,10 @@ import has no effect.
   the FastMCP 4 / MCP SDK 2 touchpoints it relies on. The contract-test modules speak only its
   verbs (`drive`, `serving`, `http_client`, `in_memory`, `call`, `call_http`, `negotiate`, `mint`,
   `user_map`, `served_tools`, `served_instructions`, `served_surface`, `installed_auth`, `protocol_error`,
-  `RecordingExecutor`, `Rendezvous`, `Raises`, `MethodLog`, `StateProbe`, `tool_names`, `launched_script`, `delegate_server`,
+  `RecordingExecutor`, `Rendezvous`, `Raises`, `MethodLog`, `StateProbe`, `tool_names`, `launched_script`, `read_resource`, `delegate_server`,
   `shared_server`, `bare_server`, `stdio_tools`, `stdio_refusal`, `url_tools`; the builders take extra middleware, such as a `Rendezvous`, added inside the
-  executor middleware, and add a `MethodLog` last) and the `JWTVerifier` type it re-exports. `negotiate` connects in a given
+  executor middleware, and add a `MethodLog` last; each serves the site context `site=` names, by
+  default `SITE`, a host without `/etc/agents.d`) and the `JWTVerifier` type it re-exports. `negotiate` connects in a given
   era without the post-connect check and returns what both ends saw (`Negotiated`: version,
   whether an `InitializeResult` exists, instructions, tool names, and the methods the server's
   `MethodLog` saw), so a test decides the era itself. `stdio_refusal` connects in a given era to a
@@ -679,7 +682,7 @@ it raises if the connect succeeds. Delegate mode runs over an in-process ASGI ro
   verifier's 401 arrives as an error from connect-time negotiation, so `call_http` reads it from a
   response recorder and reports a rejection only when the last answer was a 401. `stdio_tools`
   and `url_tools` list the tools of a server in another process and report the era it negotiated
-  (`Listed`): `stdio_tools` (like `stdio_refusal`) launches the server itself, inside FastMCP where
+  and the instructions it served (`Listed`): `stdio_tools` (like `stdio_refusal`) launches the server itself, inside FastMCP where
   the static launch check cannot see it, so it refuses an argv whose first element is not this
   repo's `bin/sandbox.sh`, and closes the server when its client exits; `url_tools` reaches only a
   loopback host.

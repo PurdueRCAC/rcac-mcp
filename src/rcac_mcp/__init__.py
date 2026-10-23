@@ -22,6 +22,8 @@ from cmdkit.logging import Logger, level_by_name, logging_styles
 
 # Internal libs
 from rcac_mcp.server import create_mcp_server
+from rcac_mcp import site as site_context
+from rcac_mcp.site import DEFAULT_BUDGET
 from rcac_mcp.startup import StartupFailure, answer_until_eof, connect_failure_message
 from rcac_mcp.token import generate_token
 
@@ -60,7 +62,7 @@ APP_VERSION = f'RCAC MCP Server v{__version__} ({python_implementation()} {pytho
 APP_USAGE = f"""\
 Usage:
   {APP_NAME} [-h] [-v] [-t TRANSPORT] [-H HOST] [-p PORT] [-a AUTH] [-e EXEC_MODE] [--ssh-host HOST]
-             [--generate-token] [--lifetime SECONDS]
+             [--instructions-budget CHARS] [--generate-token] [--lifetime SECONDS]
 
   {__description__}\
 """
@@ -94,6 +96,8 @@ Options:
   -a, --auth        AUTH        Authentication mode: none, jwt, oidc (default: {DEFAULT_AUTH}).
   -e, --exec-mode   MODE        Execution mode: ssh, local, delegate (default: auto).
       --ssh-host    HOST        SSH host to connect to (required for ssh mode).
+      --instructions-budget CHARS
+                                Most characters the served instructions may take (default: {DEFAULT_BUDGET}).
       --generate-token          Generate a JWT token and exit (requires JWT_SECRET).
       --sub         SUBJECT     Subject identifier for token (username or user ID).
       --lifetime    SECONDS     Token lifetime in seconds (default: {DEFAULT_LIFETIME}).
@@ -108,6 +112,7 @@ Environment Variables:
   MCP_BASE_URL        Public URL of this server (required for oidc auth).
   RCAC_SSH_HOST       Default SSH host (can be overridden with --ssh-host).
   RCAC_USER_MAP       Path to user mapping file for delegate mode.
+  RCAC_INSTRUCTIONS_BUDGET  Default for --instructions-budget.
 
 Examples:
   {APP_NAME} --ssh-host cluster.rcac.purdue.edu   # SSH to cluster (stdio)
@@ -144,6 +149,9 @@ class MCPServerApp(Application):
 
     ssh_host: str | None = None
     interface.add_argument('--ssh-host', default=ssh_host)
+
+    instructions_budget: int | None = None
+    interface.add_argument('--instructions-budget', type=int, default=instructions_budget)
 
     generate_token_flag: bool = False
     interface.add_argument('--generate-token', action='store_true', dest='generate_token_flag')
@@ -197,7 +205,9 @@ class MCPServerApp(Application):
                 log.info(f'SSH connection established to {executor.hostname}')
 
         try:
-            mcp = create_mcp_server(self.auth, middlewares=middlewares)
+            budget = self._resolve_budget()
+            site = self._read_site(exec_mode, executor)
+            mcp = create_mcp_server(self.auth, middlewares=middlewares, site=site, budget=budget)
             if self.transport == 'stdio':
                 mcp.run(transport='stdio')
             elif self.transport == 'sse':
@@ -224,6 +234,27 @@ class MCPServerApp(Application):
             return 'local'
         else:
             return 'delegate'
+
+    def _resolve_budget(self) -> int:
+        """The instructions budget: the flag, else RCAC_INSTRUCTIONS_BUDGET, else the default."""
+        budget = self.instructions_budget
+        if budget is None:
+            value = os.environ.get('RCAC_INSTRUCTIONS_BUDGET', '').strip()
+            if not value:
+                return DEFAULT_BUDGET
+            try:
+                budget = int(value)
+            except ValueError:
+                raise ValueError(f'RCAC_INSTRUCTIONS_BUDGET must be a whole number of characters, not {value!r}') from None
+        if budget <= 0:
+            raise ValueError(f'the instructions budget must be over 0, not {budget}')
+        return budget
+
+    def _read_site(self, exec_mode: str, executor):
+        """Read /etc/agents.d once: the cluster's over the executor in ssh mode, else this host's."""
+        if exec_mode == 'ssh':
+            return site_context.read_bounded(lambda: site_context.read_remote(executor), 'the cluster')
+        return site_context.read_bounded(site_context.read_local, 'this host')
 
     def _create_executor(self, exec_mode: str):
         """Create executor based on mode."""

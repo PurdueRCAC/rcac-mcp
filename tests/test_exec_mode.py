@@ -158,8 +158,8 @@ def resolve(argv: list[str], env_host: str | None, monkeypatch: pytest.MonkeyPat
     """Drive the app once with server construction stubbed and SSH faked; return what it did."""
     built: list[dict] = []
 
-    def create_mcp_server(auth_mode: str | None = None, middlewares: list | None = None) -> StubServer:
-        record = {'auth': auth_mode, 'middlewares': list(middlewares or [])}
+    def create_mcp_server(auth_mode: str | None = None, middlewares: list | None = None, **kwargs: Any) -> StubServer:
+        record = {'auth': auth_mode, 'middlewares': list(middlewares or []), 'site': kwargs.get('site')}
         built.append(record)
         return StubServer(record)
 

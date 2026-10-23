@@ -27,6 +27,11 @@ import pytest
 from harness import Listed, era_mismatch, stdio_tools, url_tools
 from test_cli import CLI, SANDBOX
 from test_registry import EXPECTED_TOOLS
+from rcac_mcp.server import SERVER_INSTRUCTIONS
+from rcac_mcp.site import compose, read_local
+
+# What a server started here serves: the base and this host's own /etc/agents.d, at the default budget.
+HOST_INSTRUCTIONS = compose(SERVER_INSTRUCTIONS, read_local('this host'))
 
 HOST = '127.0.0.1'
 START_TIMEOUT = 30.0
@@ -43,6 +48,8 @@ def transport_violations(listed: Listed, transport: str, era: str) -> list[str]:
     missing, unexpected = sorted(EXPECTED_TOOLS - tools), sorted(tools - EXPECTED_TOOLS)
     if missing or unexpected:
         violations.append(f'{transport}: tools differ from EXPECTED_TOOLS: missing {missing}, unexpected {unexpected}')
+    if listed.instructions is not None and listed.instructions != HOST_INSTRUCTIONS:
+        violations.append(f'{transport}: instructions differ from the composed text: {listed.instructions!r:.120}')
     mismatch = era_mismatch(era, listed.protocol_version, listed.has_initialize_result)
     if mismatch is not None:
         violations.append(f'{transport}: {mismatch}')
@@ -151,6 +158,7 @@ def test_transport_lists_expected_tools(transport: str, era: str, tmp_path: Path
         listed, leftovers = stdio_and_list(era, tmp_path)
     else:
         listed, leftovers = serve_and_list(transport, era, tmp_path)
+    assert listed.instructions is not None, f'{transport}: no instructions were served'
     assert transport_violations(listed, transport, era) == []
     assert leftovers == []
 

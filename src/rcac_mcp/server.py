@@ -22,6 +22,7 @@ from rcac_mcp.auth import AUTH_MODES
 from rcac_mcp.middleware import ToolErrorMiddleware
 from rcac_mcp.tools import TOOL_REGISTRY
 from rcac_mcp.resources import RESOURCE_REGISTRY
+from rcac_mcp.site import DEFAULT_BUDGET, SiteContext, compose, register
 
 # Public interface
 __all__ = [
@@ -117,6 +118,9 @@ Resources:
 def create_mcp_server(
     auth_mode: Optional[str] = None,
     middlewares: Optional[List] = None,
+    *,
+    site: SiteContext,
+    budget: int = DEFAULT_BUDGET,
 ) -> FastMCP:
     """
     Create and configure the MCP server.
@@ -124,13 +128,15 @@ def create_mcp_server(
     Args:
         auth_mode: Authentication mode ('none', 'jwt', 'oidc').
         middlewares: Optional list of FastMCP Middleware instances to add.
+        site: The site context read at startup; the server never reads it again.
+        budget: The most characters the composed instructions may take.
 
     Returns:
         Configured FastMCP server instance.
     """
     server = FastMCP(
         name='RCAC',
-        instructions=SERVER_INSTRUCTIONS,
+        instructions=compose(SERVER_INSTRUCTIONS, site, budget),
         auth=AUTH_MODES[auth_mode](),
         icons=[
             Icon(
@@ -139,6 +145,8 @@ def create_mcp_server(
             ),
         ],
     )
+
+    register(server, site)
 
     for route, impl in CUSTOM_ROUTES.items():
         server.custom_route(route, methods=['GET'])(impl)

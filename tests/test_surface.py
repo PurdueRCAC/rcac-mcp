@@ -12,7 +12,8 @@ the committed file to be identical. A deliberate surface change since then is a 
 of the named deltas only, in the snapshot's shape, listed in AGENTS.md § Testing: so far
 `run_command.description`, `write_file.description`, `write_file.properties.encoding`,
 `sbatch.description`, `sbatch.properties.args`, and `description` and `properties.extra_args` on
-each of `sbatch`, `squeue`, `scancel`, `sacct` and `sinfo` (`safe-execution`).
+each of `sbatch`, `squeue`, `scancel`, `sacct` and `sinfo` (`safe-execution`); `instructions`, the
+base composed with the harness's site context (`agents-d-instructions`).
 
 `surface_violations` compares what a client in the selected era is served now (`served_surface`)
 with the snapshot. No tool, argument, required argument, argument type or default, description,
@@ -33,7 +34,7 @@ from typing import Any, Callable
 
 import pytest
 
-from harness import served_surface
+from harness import SITE, served_surface
 from rcac_mcp.server import create_mcp_server
 from test_registry import EXPECTED_TOOLS
 
@@ -219,7 +220,7 @@ def tolerated_differences(snapshot: dict[str, Any], served: dict[str, Any]) -> d
 
 @pytest.mark.unit
 def test_served_surface_matches_baseline() -> None:
-    served = served_surface(create_mcp_server('none'))
+    served = served_surface(create_mcp_server('none', site=SITE))
     assert served['tools'], 'the server listed no tools'
     violations = surface_violations(load_fixture(), served)
     assert violations == [], '\n'.join(violations)

@@ -6,7 +6,7 @@ appetite: big
 status: in_progress
 branch: feature/agents-d-instructions
 base: develop
-current_phase: P2
+current_phase: P3
 last_updated: '2026-10-23'
 phases:
 - id: P1
@@ -23,7 +23,7 @@ phases:
   verify: sh spec/agents-d-instructions/verify/p1.sh
 - id: P2
   name: Startup reads once and serves the composed instructions
-  status: pending
+  status: done
   satisfies:
   - R1
   - R2
@@ -178,27 +178,27 @@ path, and composes instructions within a budget; nothing calls it yet.
 every client in both eras receives the base plus the site context within the budget; a budget too
 small exits 2 naming the minimum.
 
-- [ ] `__init__.py` (high blast radius): `--instructions-budget` and `RCAC_INSTRUCTIONS_BUDGET` in
+- [x] `__init__.py` (high blast radius): `--instructions-budget` and `RCAC_INSTRUCTIONS_BUDGET` in
       the interface, `APP_USAGE` and `APP_HELP` (same commit); `_resolve_budget`; `_read_site`
       branching on `'ssh'` only; the three lines in `run()` per PLAN § 2.3. No change to
       `_resolve_exec_mode`, and no second `if exec_mode == 'delegate':` line.
-- [ ] `server.py` (high blast radius): `create_mcp_server(…, *, site, budget=DEFAULT_BUDGET)`,
+- [x] `server.py` (high blast radius): `create_mcp_server(…, *, site, budget=DEFAULT_BUDGET)`,
       `instructions=compose(SERVER_INSTRUCTIONS, site, budget)`, `register(server, site)`.
       `SERVER_INSTRUCTIONS` itself is unchanged in this phase (it is rewritten in P3, with the tool
       it names).
-- [ ] Harness: `SITE`, the `site=` keyword on `delegate_server`, `shared_server`, `bare_server`,
+- [x] Harness: `SITE`, the `site=` keyword on `delegate_server`, `shared_server`, `bare_server`,
       the `read_resource` verb, `Listed.instructions`; § Testing's verb list follows.
-- [ ] Rewrites: `test_instructions` (base check plus served equals `compose(…, SITE)`),
+- [x] Rewrites: `test_instructions` (base check plus served equals `compose(…, SITE)`),
       `test_protocol` (composed text), `test_exec_mode` stub (`**kwargs`), `test_transports`
       (instructions per transport and era equal `compose(SERVER_INSTRUCTIONS, read_local())`),
       `site=SITE` at every direct `create_mcp_server('none')`; re-anchor the `instructions-dropped`
       mutant on the new line and re-run it.
-- [ ] `tests/test_site_startup.py` with the functions `verify/p2.sh` names; the hung-read test
+- [x] `tests/test_site_startup.py` with the functions `verify/p2.sh` names; the hung-read test
       has `local`, `ssh` and `local-at-the-good-minimum` rows, each starting within 0.5 s of the
       bound with the timeout line.
-- [ ] `uv run python spec/agents-d-instructions/verify/fixture_deltas.py apply` (the `instructions`
+- [x] `uv run python spec/agents-d-instructions/verify/fixture_deltas.py apply` (the `instructions`
       delta), listed in the commit body and in `test_surface.py`'s docstring.
-- [ ] `AGENTS.md` § Configuration: the variable, the flag, the unit, the default (same commit as
+- [x] `AGENTS.md` § Configuration: the variable, the flag, the unit, the default (same commit as
       the flag).
 - **Verify:** `sh spec/agents-d-instructions/verify/p2.sh` (named tests in both eras, then
   `serve_gate.py instructions` driving the real CLI over stdio, then the fixture check).

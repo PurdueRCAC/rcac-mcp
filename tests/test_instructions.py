@@ -11,8 +11,9 @@ from typing import Callable, Iterable, Sequence
 
 import pytest
 
-from harness import served_instructions
+from harness import SITE, served_instructions
 from rcac_mcp.server import SERVER_INSTRUCTIONS, create_mcp_server
+from rcac_mcp.site import HEADING, compose
 from rcac_mcp.tools import TOOL_REGISTRY
 
 
@@ -72,8 +73,11 @@ def _registered() -> list[str]:
 
 
 def _served_instructions() -> str:
-    # What a client in the selected protocol era receives when it connects.
-    return served_instructions(create_mcp_server('none')) or ''
+    # The base part of what a client in the selected protocol era receives when it connects: the
+    # site context after it is the site's text, which this check does not govern.
+    served = served_instructions(create_mcp_server('none', site=SITE)) or ''
+    assert served == compose(SERVER_INSTRUCTIONS, SITE), 'served instructions are not the composed text'
+    return served.partition(f'\n\n{HEADING}\n\n')[0]
 
 
 def _drop_sinfo(text: str) -> str:

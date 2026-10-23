@@ -715,7 +715,7 @@ CASES: tuple[Case, ...] = (
     # The server's instructions reach a client in both protocol eras: in the InitializeResult of a
     # handshake and in the DiscoverResult of revision 2026-07-28.
     Case('instructions-dropped', 'server.py',
-         (('        instructions=SERVER_INSTRUCTIONS,\n', '        instructions=None,\n'),),
+         (('        instructions=compose(SERVER_INSTRUCTIONS, site, budget),\n', '        instructions=None,\n'),),
          ('test_protocol.py::test_client_era_is_served[legacy-memory]',
           'test_protocol.py::test_client_era_is_served[modern-memory]'),
          'instructions differ'),
