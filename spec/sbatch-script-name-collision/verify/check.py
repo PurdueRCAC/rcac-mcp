@@ -3,7 +3,7 @@
     check.py targets LIST              print each id in LIST as a pytest node id under tests/
     check.py outcomes LIST JUNIT...    every id in LIST is in each report exactly once, and passed
     check.py static --base REV         P1: what the fix may touch and how the name is drawn
-    check.py surface --base REV        P2: the one named surface delta, and AGENTS.md records it
+    check.py surface --base REV        P2: the one named surface delta, its length cap, and AGENTS.md's record
 
 Offline and read-only: the base revision is read with `git show`/`git diff`, the package is imported
 from this tree, and nothing is launched but git.
@@ -41,6 +41,7 @@ OLD_FORM = '~/jobs/<name>_<timestamp>.sh'
 OLD_DOC_FORM = '~/jobs/<job_name>_<timestamp>.sh'
 NEW_FORM = '~/jobs/<name>_<YYYYmmdd_HHMMSS>_<token>.sh'
 FROZEN = datetime(2026, 10, 23, 12, 0, 0, 1)
+DESCRIPTION_CAP = 2000
 
 
 def git(*args: str) -> str:
@@ -165,6 +166,10 @@ def surface(base: str) -> list[str]:
     doc = inspect.getdoc(slurm.sbatch.fn)
     if new.get(('tools', 'sbatch', 'description')) != doc:
         found.append('the fixture description is not the sbatch docstring as served')
+    # This cycle's delta only, not a suite-wide rule: Claude Code cuts an MCP tool description at
+    # 2,048 characters, and the sbatch description must stay clear of it (gate ruling, 2026-10-23).
+    if doc is not None and len(doc) > DESCRIPTION_CAP:
+        found.append(f'the sbatch description is {len(doc)} characters, over this cycle\'s cap of {DESCRIPTION_CAP}')
     if doc is None or NEW_FORM not in doc or OLD_DOC_FORM in doc:
         found.append(f'the sbatch docstring does not state {NEW_FORM} in place of {OLD_DOC_FORM}')
 

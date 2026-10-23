@@ -59,7 +59,8 @@ mutants1() {
         fail 'a planted naming defect survived'
 }
 
-# The one named served-surface delta, recorded in AGENTS.md.
+# The one named served-surface delta, at most 2,000 characters (this cycle's cap, not a suite-wide
+# rule), recorded in AGENTS.md.
 surface() { check surface --base "$BASE" || fail 'surface checks are red'; }
 
 tests2() { ids "$V/ids-P2.txt"; }

@@ -53,16 +53,18 @@ above. A file planted at the exact chosen name is out of scope (Q1(a)).
 ```
     Either script_path (existing file on cluster) or script_content
     (script text to write) must be provided. If script_content is given,
-    the script is written byte for byte (no newline added) to a new file,
-    ~/jobs/<name>_<YYYYmmdd_HHMMSS>_<token>.sh, and made executable before
-    submission. <name> is job_name with every character but A-Z, a-z, 0-9,
-    '.', '_' and '-' made '_' and any leading '.' or '-' dropped ('job' if
-    nothing is left); <token> is 16 random hex digits, new for each call.
+    the script is written byte for byte (no newline added) to
+    ~/jobs/<name>_<YYYYmmdd_HHMMSS>_<token>.sh (<name>: the sanitised job_name;
+    <token>: 16 random hex digits, new per call) and made executable before submission.
     Every value reaches sbatch, or the job script, as exactly one argument.
 ```
 
 It names the directory, every part of the name and the token's width, so a model can find a
-script by job name and knows each call makes a new file. The `Args:`, `Returns:` and `Examples:`
+script by job name and knows each call makes a new file. It calls `<name>` the sanitised job name
+without restating the rule (gate ruling, 2026-10-23). The served description goes from 1,872
+characters on `develop` to 1,960 (+88), under Claude Code's 2,048-character cut for an MCP tool
+description. Gate `surface` holds this cycle's delta to at most 2,000 characters; that check covers
+this delta only and is not a suite-wide rule. The `Args:`, `Returns:` and `Examples:`
 lines are unchanged, so the only served delta is `sbatch.description`. It lands by §9's scripted
 hand-edit of `tests/fixtures/served_surface.json` (load, set `tools.sbatch.description` to
 `inspect.getdoc(sbatch.fn)`, dump with `indent=1, ensure_ascii=False` and the trailing newline;
@@ -110,7 +112,7 @@ docstring states the form and why the token is drawn per call.
   gains `_[0-9a-f]{16}` before `\.sh`.
 - `test_sbatch.py::test_the_docstring_states_the_script_path_the_tool_writes` (`unit`, P2): reads
   the `~/jobs/<name>_<YYYYmmdd_HHMMSS>_<token>.sh` template from `inspect.getdoc(sbatch.fn)`, turns
-  it into a pattern (`<name>` from an oracle the test applies itself to the stated rule,
+  it into a pattern (`<name>` from the test's own sanitisation oracle, the docstring naming it only,
   `<YYYYmmdd_HHMMSS>` the frozen instant, `<token>` sixteen hex digits, the width read from the
   docstring's "16 random hex digits"), and requires `_job_script_path` to match it for `train`,
   `../up/a b;c`, `-x`, `...` and no name.
@@ -204,11 +206,12 @@ No adversarial design review ran (not required on this path). Targeted reads set
   236) now makes the file name exceed the common 255-byte limit, and the write fails with "Failed
   to write job script" before anything is submitted. That is a clean refusal, as it already was for
   longer names; truncating would change the sanitisation (a non-goal) and break R4's "begins with
-  the sanitised job name". Recorded here as accepted; for the foreman to rule whether it needs a
-  seed.
-- **The description grows by about 230 characters**, on the tool `issues/slurm-capability.md`
-  already names as the largest. R5 asks for the naming to be stated; the width goes with it.
-  `job_submit` inherits this naming and its wording.
+  the sanitised job name". Accepted at the PLAN/TECH gate (2026-10-23): a clean failure before
+  submission needs no seed.
+- **The description grows by 88 characters** (1,872 → 1,960), on the tool
+  `issues/slurm-capability.md` already names as the largest. Claude Code truncates an MCP tool
+  description past 2,048 characters, so gate `surface` caps this cycle's `sbatch.description` at
+  2,000 (gate ruling, 2026-10-23). `job_submit` inherits this naming and its wording.
 - **Randomness is not uniqueness.** The guarantee is probabilistic (§2). Q1(a) accepts "cannot in
   practice coincide"; a hard guarantee is Q1(b), out of scope.
 - **The gate's `static` part pins the mechanism** (`secrets.token_hex(8)`, no clock, pid, host,
@@ -233,8 +236,9 @@ child at a time.
   `mutants1` (`script-name-per-second` and `script-name-process-counter` each killed for the stated
   reason).
 - **P2** (`gate.sh P2`): `static`; `surface` (the fixture differs from the base only at
-  `tools.sbatch.description`, which equals the served docstring and states the new form; `AGENTS.md`
-  records the delta in §9 and § Testing); `tests1` and `tests2`; `mutants2` (`script-token-short`
+  `tools.sbatch.description`, which equals the served docstring, states the new form and is at
+  most 2,000 characters, a check on this cycle's delta only; `AGENTS.md` records the delta in §9
+  and § Testing); `tests1` and `tests2`; `mutants2` (`script-token-short`
   killed); `full`, the profile's verify, with each pytest run inside the sandbox.
 
 There is no CLI drive to add: `sbatch` needs a cluster, and the suite already drives it through the
@@ -243,5 +247,7 @@ served schema against the real `local`, `delegate` and `ssh` (loopback) backends
 
 Drafted gates were dry-run on two trees: on this branch (the base code), `static` and `surface` are
 red for the expected reasons; on a prototype carrying the design's source, docstring, fixture and
-`AGENTS.md` edits (`.worktrees/sbatch-script-name-collision-prototype`, removed after the PLAN/TECH
-sign-off), both are green. The id parts need the builder's tests, so they were not dry-run.
+`AGENTS.md` edits (`.worktrees/sbatch-script-name-collision-prototype`, removed at the PLAN/TECH
+sign-off), both are green, the second time with the ruled wording (1,960 characters). On that
+prototype the full suite in the sandbox failed only the four regex rows P1 updates (1714 passed).
+The id parts need the builder's tests, so they were not dry-run.

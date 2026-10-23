@@ -164,7 +164,10 @@ is named, exactly as P1 names it, landed as the one named delta `sbatch.descript
 cycle's deferral ledger is closed.
 
 - [ ] `src/rcac_mcp/tools/slurm.py`: replace the `sbatch` docstring's `script_content` sentence with
-      PLAN §2's text. `Args:`, `Returns:` and `Examples:` stay as they are.
+      PLAN §2's text: the path form, `<name>` as the sanitised job name (the rule not restated),
+      `<token>` as 16 random hex digits new per call. `Args:`, `Returns:` and `Examples:` stay as
+      they are. The served description goes from 1,872 to 1,960 characters; it must stay at most
+      2,000, under Claude Code's 2,048-character cut (gate ruling, 2026-10-23).
 - [ ] `tests/fixtures/served_surface.json`: §9's scripted hand-edit of the one delta: load it, set
       `tools.sbatch.description` to `inspect.getdoc(sbatch.fn)`, dump with `indent=1,
       ensure_ascii=False` and the trailing newline. The diff is the one description line.
@@ -178,12 +181,12 @@ cycle's deferral ledger is closed.
 - [ ] **Deferral ledger.** Walk P1, this phase and PLAN §5 for "defer", "follow-up", "known
       limitation", "not fixed here", "out of scope" and "left as". Each deferral has an
       `issues/{slug}.md` (`status: unshaped`, from the KB's `ISSUE.md` template) and a `ROADMAP.md`
-      entry, or `.security/` when the security lane says so. PLAN §5 records the name-length
-      headroom as an accepted risk, not deferred work, pending the foreman's ruling at the PLAN/TECH
-      gate; if the ruling asks for a seed, file it here. No other deferral is expected.
+      entry, or `.security/` when the security lane says so. PLAN §5's name-length headroom was
+      accepted at the PLAN/TECH gate with no seed (2026-10-23). No deferral is expected.
 - **Verify:** `sh spec/sbatch-script-name-collision/verify/gate.sh P2`: `static`; `surface` (the
   fixture differs from the base only at `tools.sbatch.description`, equal to the served docstring
-  and stating the new form; `AGENTS.md` records the delta twice); `tests1` and `tests2` in both
+  stating the new form, and at most 2,000 characters, a check on this cycle's delta only;
+  `AGENTS.md` records the delta twice); `tests1` and `tests2` in both
   eras; `mutants2`; `full`, the profile's verify, with each pytest inside the sandbox. Phase-only
   parts for build's fail-once mutation: `gate.sh tests2`, `gate.sh mutants2`.
 - **Touches:** `src/rcac_mcp/tools/slurm.py`, `tests/fixtures/served_surface.json`,
