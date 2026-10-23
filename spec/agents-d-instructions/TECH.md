@@ -3,7 +3,7 @@ slug: agents-d-instructions
 title: Serve /etc/agents.d as the server's instructions
 kind: feature
 appetite: big
-status: in_review
+status: blocked
 branch: feature/agents-d-instructions
 base: develop
 current_phase: done
@@ -62,10 +62,10 @@ phases:
   hill: uphill
   verify: sh spec/agents-d-instructions/verify/p4.sh
 review:
-  last_reviewed_commit: ''
-  verdict: none
-  blocked_reason: ''
-  cycle: 0
+  last_reviewed_commit: ef8322d0b1ee8ad0247d3387389f275e21b190fc
+  verdict: changes-requested
+  blocked_reason: CRITICAL budget unit (§9) + 2 LOW + 1 PLAUSIBLE + C12
+  cycle: 1
 ---
 
 # TECH.md — Serve /etc/agents.d as the server's instructions
