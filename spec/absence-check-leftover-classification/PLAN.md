@@ -226,6 +226,9 @@ No fan-out: appetite small, root cause known (trigger 1 off), no high-blast-radi
   excludes file ignores is reported untracked: both classes get a `del`, so only the label differs.
   - 2026-10-22: no longer true. Review cycle 1 ruled that the classes are the developer's own `git
     status`; the global excludes file is read and passed in (TECH.md, review cycle 1 remediation).
+  - 2026-10-22: review cycle 2: the developer's own git is asked, with their HOME, XDG and
+    `GIT_CONFIG_*`, rather than an excludes file found and passed in (TECH.md, review cycle 2
+    remediation).
 - **An in-tree non-editable install** (a `site-packages` under the ignored `.venv/`) is reported as
   ignored leftovers with a `del`; reinstalling is the better remedy. The default `uv sync` installs
   editable, so this is unlikely; not handled.

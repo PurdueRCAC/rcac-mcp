@@ -3,7 +3,7 @@ slug: absence-check-leftover-classification
 title: Explain an importable leftover by git status, not file suffix
 kind: test
 appetite: small
-status: blocked
+status: in_review
 branch: test/absence-check-leftover-classification
 base: develop
 current_phase: done
@@ -26,6 +26,7 @@ phases:
   parallel: false
   hammerable: false
   hill: uphill
+  attempts: 1
   verify: sh spec/absence-check-leftover-classification/verify/gate.sh P1
 review:
   last_reviewed_commit: b5b25dcea9b20e299b53ca4d850f4106b925f088
@@ -175,3 +176,47 @@ per surviving mutant (23 on macOS, 22 elsewhere; the mutants part now takes abou
    (`ceiling-dropped`, by `…_odd_entries[above-ceiling]`), a top-level symlink followed
    (`location-symlink-followed`). `GIT_CLASSES` is gone. The completeness check is now one count
    per leaf, so `unlisted-file-accepted` moved its anchor.
+
+**Moved base, again (2026-10-22).** develop moved to `90b0938` (release 0.1.2, a version bump in
+`pyproject.toml` and `uv.lock` only). The branch was already pushed, so develop was merged in rather
+than rebased onto; `verify/gate.sh`'s `BASE` moves from `bfa0595` to `90b0938`. No check is
+loosened.
+
+**Review cycle 2 remediation (2026-10-22).** REVIEW.md's cycle 2 routing, each closed as a class.
+P1 is reopened. `verify/` only grows or follows moved code: `ids.txt` lists 104 ids; `check.py`
+drops the mutants of the deleted hand-rebuilt excludes code and adds one per new branch (28 on
+macOS, 27 elsewhere; about 6 min); `ENTRY_GONE` adds the two retired § Testing claims; the `nogit`
+farm adds `env`, which every git launch now goes through, so the fake-git fallback rows still reach
+their fake there.
+
+1. *Ask the developer's own git; don't rebuild its configuration.* `developer_excludes` is deleted.
+   Every classifier call is `[str(SANDBOX), 'env', *developer_home(), git, -c core.fsmonitor=false,
+   -c core.hooksPath=/dev/null, -C …]`: the sandbox's HOME and XDG variables go back to the test
+   process's own (unset where it has none), and the environment is the developer's less
+   `REDIRECTING` (`git rev-parse --local-env-vars` without its `GIT_CONFIG*` entries, plus the four
+   pathspec-mode variables), plus `GIT_OPTIONAL_LOCKS=0`. `GIT_CONFIG_NOSYSTEM` is no longer set.
+   `core.hooksPath=/dev/null` is git's documented way to disable hooks (an empty value is
+   undocumented); the classifier's calls never write the index, so the hooks path and optional
+   locks are defence in depth and their mutants equivalent (noted in `check.py`). A repository's
+   own `core.fsmonitor` ran on every `ls-files` before this change; it no longer does. Controls:
+   `…_follows_developer_excludes` grows to 14 rows (`include`, `include-if-gitdir`,
+   `repository-own-home`, `git-config-global-empty`, `git-config-count`, `no-system`;
+   `system-config` now expects `ignored`), every class control checks each named file against
+   `git status --ignored` run as the developer runs it (`assert_classes_are_status`),
+   `test_asking_git_runs_nothing_the_configuration_names` (repository, global, `GIT_CONFIG_*`), and
+   `test_git_env_drops_what_points_git_elsewhere`. Every control's configuration is scratch:
+   `scratch_package` gives a scratch HOME and `GIT_CONFIG_SYSTEM`, clears `GIT_CONFIG_*` and
+   `XDG_CONFIG_HOME`, and `scratch_repo` asserts with `git config --list --show-scope
+   --show-origin` that every file git reads is under pytest's base temp, bar a git
+   distribution's built-in defaults (scope `unknown`, Apple's), and none under the real HOME.
+   `AGENTS.md` § Testing says why running the developer's git is safe.
+2. *No message says "re-added" for something git does not track.* Scoped as the cases where git
+   answers: a repository nested there was the one such fallback. It is now the one entry git lists
+   it as (a directory holding `.git`), in git's class for it (`??`, `!!`, or a tracked gitlink), with
+   a closing line saying git does not look into it. Where git cannot answer (a failed call, a file
+   in no list, an unreadable directory), GOAL's Outcome keeps today's text. Control:
+   `test_absence_message_for_nested_repositories` (`untracked`, `untracked-bytecode`, `ignored`,
+   `beside-tracked`, `gitlink`); the `odd_entries[nested-repository]` row moves there.
+3. *`need_git` never skips on CI.* Its test catches every outcome, a skip included, and gains
+   `ci-present` and `local-present`, so a `need_git` that skips with git on PATH fails it
+   (mutant `need-git-skips-with-git`, killed under `CI=true`).

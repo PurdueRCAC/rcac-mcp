@@ -68,6 +68,8 @@ test_absence_message_falls_back_when_git_fails_midway[mixed-lists-twice] git
 test_a_missing_git_fails_on_ci_and_skips_elsewhere[ci] plain
 test_a_missing_git_fails_on_ci_and_skips_elsewhere[local] plain
 test_a_missing_git_fails_on_ci_and_skips_elsewhere[ci-false] plain
+test_a_missing_git_fails_on_ci_and_skips_elsewhere[ci-present] plain
+test_a_missing_git_fails_on_ci_and_skips_elsewhere[local-present] plain
 test_absence_message_ignores_git_hook_environment[git-dir] git
 test_absence_message_ignores_git_hook_environment[work-tree] git
 test_absence_message_ignores_git_hook_environment[index-file] git
@@ -78,7 +80,6 @@ test_absence_message_for_odd_entries[untracked-symlink-location] git
 test_absence_message_for_odd_entries[decomposed-name] git
 test_absence_message_for_odd_entries[decomposed-name-unprecomposed] git
 test_absence_message_for_odd_entries[tracked-decomposed-name] git
-test_absence_message_for_odd_entries[nested-repository] git
 test_absence_message_for_odd_entries[unreadable-directory] git
 test_absence_message_for_odd_entries[above-ceiling] git
 test_absence_message_follows_developer_excludes[default-ignore] git
@@ -89,3 +90,18 @@ test_absence_message_follows_developer_excludes[gitconfig-over-xdg-config] git
 test_absence_message_follows_developer_excludes[git-config-global] git
 test_absence_message_follows_developer_excludes[repository-own] git
 test_absence_message_follows_developer_excludes[system-config] git
+test_absence_message_follows_developer_excludes[git-config-global-empty] git
+test_absence_message_follows_developer_excludes[include] git
+test_absence_message_follows_developer_excludes[include-if-gitdir] git
+test_absence_message_follows_developer_excludes[repository-own-home] git
+test_absence_message_follows_developer_excludes[git-config-count] git
+test_absence_message_follows_developer_excludes[no-system] git
+test_absence_message_for_nested_repositories[untracked] git
+test_absence_message_for_nested_repositories[untracked-bytecode] git
+test_absence_message_for_nested_repositories[ignored] git
+test_absence_message_for_nested_repositories[beside-tracked] git
+test_absence_message_for_nested_repositories[gitlink] git
+test_asking_git_runs_nothing_the_configuration_names[repository] git
+test_asking_git_runs_nothing_the_configuration_names[global] git
+test_asking_git_runs_nothing_the_configuration_names[environment] git
+test_git_env_drops_what_points_git_elsewhere git

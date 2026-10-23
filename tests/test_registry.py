@@ -5,9 +5,11 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
 import importlib.util
 import os
+import pwd
 import shlex
 import shutil
 import subprocess
@@ -102,53 +104,55 @@ def leaf_entries(path: Path) -> list[Path]:
             if entry.is_symlink() or not entry.is_dir() or not any(entry.iterdir())]
 
 
+# What bin/sandbox.sh points into its throwaway directory. Git finds the developer's global config,
+# the files it includes and every `~` in a config value through them, so each is handed back.
+HOME_VARIABLES = ('HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME')
+
+# What a git hook exports to point git at its own repository, index or object store (the list
+# `git rev-parse --local-env-vars` prints, less the configuration it carries), and what changes how
+# git reads the pathspec given here. The configuration variables (`GIT_CONFIG_*`) are the
+# developer's, and stay.
+REDIRECTING = frozenset({
+    'GIT_DIR', 'GIT_WORK_TREE', 'GIT_IMPLICIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
+    'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_GRAFT_FILE', 'GIT_SHALLOW_FILE',
+    'GIT_NO_REPLACE_OBJECTS', 'GIT_REPLACE_REF_BASE', 'GIT_PREFIX', 'GIT_INTERNAL_SUPER_PREFIX',
+    'GIT_LITERAL_PATHSPECS', 'GIT_GLOB_PATHSPECS', 'GIT_NOGLOB_PATHSPECS', 'GIT_ICASE_PATHSPECS',
+})
+
+# Nothing the developer's configuration names may run while git is asked: a file-system monitor is
+# a hook command or a daemon git starts, and hooks run when git writes its index.
+READ_ONLY = ('-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null')
+
+
 def git_env() -> dict[str, str]:
-    """The environment git runs in: this one without any variable that picks a repository for it."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_') or k == 'GIT_CEILING_DIRECTORIES'}
-    env['GIT_CONFIG_NOSYSTEM'] = '1'
+    """The environment git runs in: this one without what points git at another repository.
+
+    `GIT_OPTIONAL_LOCKS=0` keeps git from refreshing, and so writing, the index it reads.
+    """
+    env = {k: v for k, v in os.environ.items() if k not in REDIRECTING}
+    env['GIT_OPTIONAL_LOCKS'] = '0'
     return env
 
 
-def ask_git(program: str, where: Path, args: Sequence[str], stdin: str = '') -> subprocess.CompletedProcess[str] | None:
-    """Run git in `where` through bin/sandbox.sh; None when it cannot be started or does not finish.
+def developer_home() -> list[str]:
+    """`env` arguments giving git this process's own HOME and XDG directories inside bin/sandbox.sh."""
+    return [*(a for k in HOME_VARIABLES if k not in os.environ for a in ('-u', k)),
+            *(f'{k}={os.environ[k]}' for k in HOME_VARIABLES if k in os.environ)]
 
-    Repository-selecting variables (`GIT_DIR`, `GIT_INDEX_FILE` and the rest, as a git hook sets
-    them) are dropped so git answers for `where`; `GIT_CEILING_DIRECTORIES` is kept. The sandbox's
-    HOME hides the developer's global config, and the system config is not read.
+
+def ask_git(program: str, where: Path, args: Sequence[str], stdin: str = '') -> subprocess.CompletedProcess[str] | None:
+    """Ask the developer's own git, read-only, in `where`; None when it cannot be started or does not finish.
+
+    It runs through bin/sandbox.sh with the developer's HOME and XDG directories handed back, so it
+    reads exactly the configuration their `git status` reads: global and system config, includes,
+    `GIT_CONFIG_*` and every excludes file. Only what points it at another repository is dropped
+    (`git_env`), and nothing that configuration names can run (`READ_ONLY`).
     """
     try:
-        return subprocess.run([str(SANDBOX), program, '-C', str(where), *args], input=stdin, env=git_env(),
-                              capture_output=True, text=True, timeout=60)
+        return subprocess.run([str(SANDBOX), 'env', *developer_home(), program, *READ_ONLY, '-C', str(where), *args],
+                              input=stdin, env=git_env(), capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError, ValueError):
         return None
-
-
-def developer_excludes(program: str, where: Path) -> list[str] | None:
-    """The `-c` option giving git the excludes file the developer's own git reads; None if git fails.
-
-    That file is `core.excludesFile` from the developer's global config (`$GIT_CONFIG_GLOBAL`, else
-    `$XDG_CONFIG_HOME/git/config` then `~/.gitconfig`, the later winning), else
-    `$XDG_CONFIG_HOME/git/ignore`. The sandbox's HOME hides all of them, so they are found from this
-    process's HOME and passed in. A repository that sets its own `core.excludesFile` keeps it.
-    """
-    own = ask_git(program, where, ['config', '--get', 'core.excludesFile'])
-    if own is None or own.returncode not in (0, 1):
-        return None
-    if own.returncode == 0:
-        return []
-    config_home = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config')
-    chosen = os.environ.get('GIT_CONFIG_GLOBAL')
-    excludes = str(config_home / 'git' / 'ignore')
-    for config in [Path(chosen)] if chosen else [config_home / 'git' / 'config', Path.home() / '.gitconfig']:
-        if not config.is_file():
-            continue
-        found = ask_git(program, where, ['config', '--file', str(config), '--includes', '--get',
-                                         'core.excludesFile'])
-        if found is None or found.returncode not in (0, 1):
-            return None
-        if found.returncode == 0:
-            excludes = os.path.expanduser(found.stdout.rstrip('\n'))
-    return ['-c', f'core.excludesFile={excludes}']
 
 
 def comparable(name: str) -> str:
@@ -161,14 +165,15 @@ def comparable(name: str) -> str:
     return unicodedata.normalize('NFC', name) if sys.platform == 'darwin' else name
 
 
-def git_classes(path: Path) -> dict[str, list[Path]] | str | None:
+def git_classes(path: Path) -> dict[str, list[Path]] | None:
     """Sort every leaf entry at or under `path` by what git knows of it, as the developer's git status does.
 
-    Returns the classes; or, when git lists a repository nested at or under `path` as one entry, the
-    reason it cannot classify the files in it; or None when git cannot be asked or does not answer:
-    no process may start (the unit guard), bin/sandbox.sh or git is missing, `path` is not inside a
-    git work tree, a call fails, or a file is in none of git's lists or in more than one. The caller
-    explains by suffix instead, adding the reason when there is one; this never raises.
+    Returns the classes, `tracked`, `untracked` and `ignored`, and under `nested` the repositories
+    nested there, each of which git lists as one entry in its class and does not look into. None
+    when git cannot be asked or does not answer: no process may start (the unit guard),
+    bin/sandbox.sh or git is missing, `path` is not inside a git work tree, a call fails, or a file
+    is in none of git's lists or in more than one. The caller explains by suffix instead; this
+    never raises.
     """
     if getattr(subprocess.Popen, 'unit_guard', False) or not SANDBOX.is_file():
         return None
@@ -185,39 +190,39 @@ def git_classes(path: Path) -> dict[str, list[Path]] | str | None:
         # A top the parent does not lie under is no answer for it.
         where.resolve().relative_to(Path(found.stdout.strip()).resolve())
         relative = {comparable(entry.relative_to(path.parent).as_posix()): entry for entry in leaf_entries(path)}
-        excludes = developer_excludes(program, where)
     except (OSError, ValueError, RuntimeError):
-        return None
-    if excludes is None:
         return None
     listings: dict[str, list[str]] = {}
     for kind, flags in (('tracked', ['--cached']), ('untracked', ['--others', '--exclude-standard']),
                         ('ignored', ['--others', '--ignored', '--exclude-standard'])):
-        listed = ask_git(program, where, [*excludes, 'ls-files', '-z', *flags, '--', f':(literal){path.name}'])
+        listed = ask_git(program, where, ['ls-files', '-z', *flags, '--', f':(literal){path.name}'])
         if listed is None or listed.returncode != 0:
             return None
-        listings[kind] = [comparable(n) for n in listed.stdout.split('\0') if n]
-    # A repository nested inside is listed as one entry, its directory, and none of its files.
-    named = {n.rstrip('/') for names in listings.values() for n in names}
-    nested = sorted({n for n in named for r in relative if r.startswith(f'{n}/')})
-    inside = {r for r in relative if any(r.startswith(f'{n}/') for n in nested)}
+        listings[kind] = [comparable(n).rstrip('/') for n in listed.stdout.split('\0') if n]
+    # A repository nested inside is listed as one entry, its directory, and none of its files: that
+    # directory is the leaf, in the class git lists it under.
+    named = {n for names in listings.values() for n in names}
+    nested: dict[str, Path] = {}
+    for r, entry in relative.items():
+        for n in named:
+            top = path.parent.joinpath(*entry.relative_to(path.parent).parts[:n.count('/') + 1])
+            if r.startswith(f'{n}/') and os.path.lexists(top / '.git'):
+                nested[n] = top
+    relative = {r: e for r, e in relative.items() if not any(r.startswith(f'{n}/') for n in nested)} | nested
     # Git lists files only: a directory that holds nothing is ignored or untracked by its rules.
-    empty = [r for r, entry in relative.items() if r not in inside and entry.is_dir() and not entry.is_symlink()]
+    empty = [r for r, entry in relative.items() if r not in nested and entry.is_dir() and not entry.is_symlink()]
     if empty:
-        checked = ask_git(program, where, [*excludes, 'check-ignore', '-z', '--stdin'],
-                          ''.join(f'{r}\0' for r in empty))
+        checked = ask_git(program, where, ['check-ignore', '-z', '--stdin'], ''.join(f'{r}\0' for r in empty))
         if checked is None or checked.returncode not in (0, 1):
             return None
         ignored = set(checked.stdout.split('\0'))
         listings['ignored'] += [r for r in empty if r in ignored]
         listings['untracked'] += [r for r in empty if r not in ignored]
     placed = Counter(n for names in listings.values() for n in set(names))
-    if any(placed[r] != 1 for r in relative.keys() - inside):
+    if any(placed[r] != 1 for r in relative):
         return None
-    if nested:
-        return (f'Git cannot classify the files under {[f"{n}/" for n in nested]}: each is a repository '
-                f'nested inside, which git lists as one entry, so this explanation is by file suffix.')
-    return {kind: [relative[r] for r in sorted(set(names) & relative.keys())] for kind, names in listings.items()}
+    classes = {kind: [relative[r] for r in sorted(set(names) & relative.keys())] for kind, names in listings.items()}
+    return classes | {'nested': [nested[n] for n in sorted(nested)]}
 
 
 def covering(path: Path, chosen: Sequence[Path], entries: Sequence[Path]) -> list[Path]:
@@ -258,7 +263,7 @@ def suffix_explanation(name: str, path: Path) -> str:
 
 def git_explanation(name: str, path: Path, classes: dict[str, list[Path]]) -> str:
     """Explain an importable `path` by what git knows of each file there, one line per class present."""
-    entries = [e for files in classes.values() for e in files]
+    entries = [e for kind in ('tracked', 'untracked', 'ignored') for e in classes[kind]]
 
     def shown(files: list[Path]) -> list[str]:
         return [str(f.relative_to(path.parent)) + ('/' if f.is_dir() and not f.is_symlink() else '')
@@ -283,6 +288,9 @@ def git_explanation(name: str, path: Path, classes: dict[str, list[Path]]) -> st
     if not classes['tracked'] and classes['untracked'] and classes['ignored']:
         lines.append(f'Git tracks nothing there, so `del {shlex.quote(str(path))}` takes it all, and the '
                      f'directory that would otherwise stay behind and still import.')
+    if nested := classes['nested']:
+        lines.append(f'Each of {shown(nested)} is a git repository nested there, which git lists as one entry '
+                     f'and does not look into; move it out first if you mean to keep it.')
     return '\n'.join(lines)
 
 
@@ -291,8 +299,7 @@ def absence_violations(name: str) -> list[str]:
 
     Each location is explained by what git knows of its files: a tracked file means the module was
     re-added, a regression to undo in the change that made it; an ignored or untracked file is a
-    leftover to delete. Where git cannot answer, the explanation falls back to file suffixes, and
-    names the reason when git answered but could not classify a file.
+    leftover to delete. Where git cannot answer, the explanation falls back to file suffixes.
     """
     if module_absent(name):
         return []
@@ -302,10 +309,7 @@ def absence_violations(name: str) -> list[str]:
     for location in locations:
         path = Path(location)
         classes = git_classes(path)
-        if isinstance(classes, dict):
-            violations.append(git_explanation(name, path, classes))
-        else:
-            violations.append(suffix_explanation(name, path) + (f'\n{classes}' if classes else ''))
+        violations.append(suffix_explanation(name, path) if classes is None else git_explanation(name, path, classes))
     return violations
 
 
@@ -385,8 +389,18 @@ def plant(root: Path, entries: Sequence[str]) -> None:
 
 
 @pytest.fixture
-def scratch_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """A uniquely named importable package on `sys.path`; its modules leave `sys.modules` afterwards."""
+def scratch_package(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch):
+    """A uniquely named importable package on `sys.path`; its modules leave `sys.modules` afterwards.
+
+    Git asked about it reads a scratch configuration: HOME is an empty scratch directory, the system
+    config an empty scratch file, and no `GIT_CONFIG_*` variable is set, so the developer's own
+    configuration never reaches a control; a control that wants one plants it.
+    """
+    home = tmp_path_factory.mktemp('home')
+    for variable in [k for k in os.environ if k.startswith('GIT_CONFIG') or k == 'XDG_CONFIG_HOME']:
+        monkeypatch.delenv(variable)
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setenv('GIT_CONFIG_SYSTEM', str(write(home / '.system-gitconfig', '')))
     package = f'scratch_{uuid.uuid4().hex}'
     plant(tmp_path, [f'{package}/__init__.py'])
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -442,20 +456,58 @@ def git_in(root: Path, *args: str) -> None:
 
 
 @pytest.fixture
-def scratch_repo(scratch_package: Path, tmp_path_factory: pytest.TempPathFactory,
-                 monkeypatch: pytest.MonkeyPatch) -> Path:
+def scratch_repo(scratch_package: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
     """`scratch_package` in a fresh git work tree that ignores bytecode and swap files.
 
-    HOME is a scratch directory with no git config in it, so the developer's own excludes never
-    reach a control; a control that wants global excludes plants them there.
+    Every configuration file git reads there is a scratch one, so the developer's are never read;
+    the one exception is the defaults a git distribution builds in (scope `unknown`, as Apple's
+    git reads them from its own installation).
     """
     need_git()
-    monkeypatch.setenv('HOME', str(tmp_path_factory.mktemp('home')))
-    monkeypatch.delenv('XDG_CONFIG_HOME', raising=False)
-    monkeypatch.delenv('GIT_CONFIG_GLOBAL', raising=False)
-    git_in(scratch_package.parent, 'init', '-q')
-    (scratch_package.parent / '.gitignore').write_text('__pycache__/\n*.py[cod]\n*.swp\n')
+    top = scratch_package.parent
+    git_in(top, 'init', '-q')
+    (top / '.gitignore').write_text('__pycache__/\n*.py[cod]\n*.swp\n')
+    shown = ask_git(GIT, top, ['config', '--list', '--show-scope', '--show-origin', '-z'])
+    assert shown is not None and shown.returncode == 0, shown
+    fields = shown.stdout.split('\0')
+    read = {(scope, (top / origin.removeprefix('file:')).resolve())
+            for scope, origin in zip(fields[0::3], fields[1::3]) if origin.startswith('file:')}
+    scratch = tmp_path_factory.getbasetemp().resolve()
+    assert ('local', (top / '.git' / 'config').resolve()) in read, read
+    assert all(scratch in f.parents for scope, f in read if scope != 'unknown'), read
+    real_home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    assert not any(real_home in f.parents and scratch not in f.parents for _, f in read), read
     return scratch_package
+
+
+def status_classes(top: Path) -> dict[str, str]:
+    """What the developer's `git status --ignored` shows in `top`: each path it lists, and its class.
+
+    Run as the developer runs it, outside any hook, with this process's HOME and XDG directories.
+    """
+    unset = [a for k in ('HOME', 'XDG_CONFIG_HOME') if k not in os.environ for a in ('-u', k)]
+    home = [*unset, *(f'{k}={os.environ[k]}' for k in ('HOME', 'XDG_CONFIG_HOME') if k in os.environ)]
+    shown = subprocess.run([str(SANDBOX), 'env', *home, 'git', '-C', str(top), 'status', '--porcelain', '-z',
+                            '--ignored', '--untracked-files=all'], capture_output=True, text=True, check=True)
+    return {comparable(entry[3:]): {'??': 'untracked', '!!': 'ignored'}.get(entry[:2], 'tracked')
+            for entry in shown.stdout.split('\0') if entry}
+
+
+def assert_classes_are_status(message: str, package: Path) -> None:
+    """Every file the explanation names is in the class the developer's `git status --ignored` gives it.
+
+    A tracked file git status does not list is unchanged; a path it lists with a trailing slash
+    stands for everything under it. Names are relative to `package`, as the explanation shows them.
+    """
+    status = status_classes(package.parent)
+    for kind, line in class_lines(message).items():
+        for shown in ast.literal_eval(line.split(':')[0].split(' ', 2)[2]):
+            # Git status never lists a directory that holds nothing.
+            if shown.endswith('/') and not any((package / shown).iterdir()):
+                continue
+            name = comparable(f'{package.name}/{shown}'.rstrip('/'))
+            listed = [c for p, c in status.items() if p.rstrip('/') == name or (p.endswith('/') and name.startswith(p))]
+            assert listed == ([] if kind == 'tracked' and not listed else [kind]), (name, kind, status, message)
 
 
 def explain(package: Path, entries: list[str], tracked: list[str]) -> str:
@@ -500,6 +552,7 @@ def test_absence_message_for_ignored_files(scratch_repo: Path, entries: list[str
     assert str(lines['ignored'].split(':')[0]) == f'- ignored {named}', message
     assert removals(lines['ignored']) == [str(scratch_repo / located)], message
     assert 're-added' not in message, message
+    assert_classes_are_status(message, scratch_repo)
 
 
 @pytest.mark.integration
@@ -520,6 +573,7 @@ def test_absence_message_for_untracked_files(scratch_repo: Path, entries: list[s
     assert lines['untracked'].split(':')[0] == f'- untracked {named}', message
     assert removals(lines['untracked']) == [str(scratch_repo / located)], message
     assert 're-added' not in message, message
+    assert_classes_are_status(message, scratch_repo)
 
 
 @pytest.mark.integration
@@ -538,6 +592,7 @@ def test_absence_message_for_tracked_files(scratch_repo: Path, entries: list[str
     assert lines['tracked'].split(':')[0] == f'- tracked {named}', message
     assert 're-added' in lines['tracked'], message
     assert '`del' not in message, message
+    assert_classes_are_status(message, scratch_repo)
 
 
 @pytest.mark.integration
@@ -566,6 +621,7 @@ def test_absence_message_for_mixed_files(scratch_repo: Path, entries: list[str],
     assert (whole in message.splitlines()[-1]) == (not tracked and len(expected) > 1), message
     for path in (Path(p) for line in lines.values() for p in removals(line)):
         assert not any((scratch_repo / t) == path or path in (scratch_repo / t).parents for t in tracked), message
+    assert_classes_are_status(message, scratch_repo)
 
 
 SUFFIX_READDED = ('{name} imports from {path}, which holds files that are not bytecode ({sources}): the module '
@@ -655,26 +711,34 @@ def test_absence_message_falls_back_when_git_fails_midway(scratch_repo: Path, mo
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize('ci, outcome', [
-    pytest.param('true', pytest.fail.Exception, id='ci'),
-    pytest.param(None, pytest.skip.Exception, id='local'),
-    pytest.param('false', pytest.skip.Exception, id='ci-false'),
+@pytest.mark.parametrize('ci, present, outcome', [
+    pytest.param('true', False, pytest.fail.Exception, id='ci'),
+    pytest.param(None, False, pytest.skip.Exception, id='local'),
+    pytest.param('false', False, pytest.skip.Exception, id='ci-false'),
+    pytest.param('true', True, None, id='ci-present'),
+    pytest.param(None, True, None, id='local-present'),
 ])
-def test_a_missing_git_fails_on_ci_and_skips_elsewhere(ci: str | None, outcome: type[BaseException],
+def test_a_missing_git_fails_on_ci_and_skips_elsewhere(ci: str | None, present: bool,
+                                                        outcome: type[BaseException] | None,
                                                         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # need_git never skips on CI: it returns when git is on PATH and fails when it is not. Every
+    # outcome is caught, a skip included, so this test cannot skip itself: a need_git that skips
+    # where it must not fails it.
     if ci is None:
         monkeypatch.delenv('CI', raising=False)
     else:
         monkeypatch.setenv('CI', ci)
-    monkeypatch.setenv('PATH', str(tmp_path / 'empty'))
-    # Caught as BaseException: a skip that escaped a narrower `raises` would skip this test, not fail it.
-    with pytest.raises(BaseException) as raised:
-        need_git()
-    assert raised.type is outcome and 'git is not on PATH' in str(raised.value), raised
-    plant(tmp_path, ['present/git'])
+    plant(tmp_path, ['present/git', 'empty/'])
     (tmp_path / 'present' / 'git').chmod(0o755)
-    monkeypatch.setenv('PATH', str(tmp_path / 'present'))
-    need_git()
+    monkeypatch.setenv('PATH', str(tmp_path / ('present' if present else 'empty')))
+    try:
+        need_git()
+    except BaseException as raised:
+        got: BaseException | None = raised
+    else:
+        got = None
+    assert (type(got) if got is not None else None) is outcome, got
+    assert got is None or 'git is not on PATH' in str(got), got
 
 
 @pytest.mark.integration
@@ -709,15 +773,14 @@ DECOMPOSED = 'cafe\u0301.txt'
     pytest.param('decomposed-name', 'untracked', id='decomposed-name'),
     pytest.param('decomposed-name-unprecomposed', 'untracked', id='decomposed-name-unprecomposed'),
     pytest.param('tracked-decomposed-name', 'tracked', id='tracked-decomposed-name'),
-    pytest.param('nested-repository', 'nested', id='nested-repository'),
     pytest.param('unreadable-directory', 'fallback', id='unreadable-directory'),
     pytest.param('above-ceiling', 'fallback', id='above-ceiling'),
 ])
 def test_absence_message_for_odd_entries(scratch_repo: Path, tmp_path_factory: pytest.TempPathFactory,
                                          monkeypatch: pytest.MonkeyPatch, shape: str, expected: str) -> None:
     # A symlink is a file to git, the location itself included, and a name matches in whichever
-    # Unicode form git prints it. A repository inside is not git's to classify, and the message says
-    # so; a directory nothing can read, or a work tree above GIT_CEILING_DIRECTORIES, falls back.
+    # Unicode form git prints it. A directory nothing can read, or a work tree above
+    # GIT_CEILING_DIRECTORIES, falls back.
     sub = scratch_repo / 'sub'
     top = scratch_repo.parent
     name = f'{scratch_repo.name}.sub'
@@ -737,9 +800,6 @@ def test_absence_message_for_odd_entries(scratch_repo: Path, tmp_path_factory: p
             git_in(top, 'config', 'core.precomposeUnicode', 'false')
         if expected == 'tracked':
             git_in(top, 'add', '--', f'{scratch_repo.name}/sub/{DECOMPOSED}')
-    elif shape == 'nested-repository':
-        plant(sub, ['vendor/mod.py'])
-        git_in(sub / 'vendor', 'init', '-q')
     elif shape == 'unreadable-directory':
         plant(sub, ['__pycache__/mod.cpython-314.pyc', 'locked/'])
         (sub / 'locked').chmod(0)
@@ -756,10 +816,6 @@ def test_absence_message_for_odd_entries(scratch_repo: Path, tmp_path_factory: p
             (sub / 'locked').chmod(0o755)
     if expected == 'fallback':
         assert message == suffix_explanation(name, sub), message
-    elif expected == 'nested':
-        explained, _, reason = message.rpartition('\n')
-        assert explained == suffix_explanation(name, sub), message
-        assert "['sub/vendor/']" in reason and 'nested' in reason, message
     else:
         lines = class_lines(message)
         assert set(lines) == {expected}, message
@@ -784,15 +840,22 @@ def write(path: Path, text: str) -> Path:
     pytest.param('xdg-config', 'ignored', id='xdg-config'),
     pytest.param('gitconfig-over-xdg-config', 'ignored', id='gitconfig-over-xdg-config'),
     pytest.param('git-config-global', 'ignored', id='git-config-global'),
+    pytest.param('git-config-global-empty', 'untracked', id='git-config-global-empty'),
+    pytest.param('include', 'ignored', id='include'),
+    pytest.param('include-if-gitdir', 'ignored', id='include-if-gitdir'),
     pytest.param('repository-own', 'untracked', id='repository-own'),
-    pytest.param('system-config', 'untracked', id='system-config'),
+    pytest.param('repository-own-home', 'ignored', id='repository-own-home'),
+    pytest.param('git-config-count', 'ignored', id='git-config-count'),
+    pytest.param('system-config', 'ignored', id='system-config'),
+    pytest.param('no-system', 'untracked', id='no-system'),
 ])
 def test_absence_message_follows_developer_excludes(scratch_repo: Path, monkeypatch: pytest.MonkeyPatch,
-                                                    tmp_path: Path, setting: str, expected: str) -> None:
-    # The developer's own git status reads a global excludes file that the sandbox's HOME hides; the
-    # explanation reads it too, here from the scratch HOME. A repository's own excludes file still
-    # wins, as it does for git, and a host's system config is never read.
+                                                    setting: str, expected: str) -> None:
+    # The developer's own git decides what is ignored, by every configuration it reads: global and
+    # system files, the files they include, `~` against the developer's HOME, `GIT_CONFIG_*`, and a
+    # repository's own excludes file, which wins. Each row is checked against `git status --ignored`.
     home = Path(os.environ['HOME'])
+    top = scratch_repo.parent
     excludes = write(home / 'excludes', '.DS_Store\n')
     nothing = write(home / 'nothing', '')
     if setting == 'default-ignore':
@@ -812,16 +875,113 @@ def test_absence_message_follows_developer_excludes(scratch_repo: Path, monkeypa
         write(home / '.gitconfig', f'[core]\n\texcludesFile = {nothing}\n')
         chosen = write(home / 'chosen', '[core]\n\texcludesFile = ~/excludes\n')
         monkeypatch.setenv('GIT_CONFIG_GLOBAL', str(chosen))
+    elif setting == 'git-config-global-empty':
+        write(home / '.gitconfig', '[core]\n\texcludesFile = ~/excludes\n')
+        monkeypatch.setenv('GIT_CONFIG_GLOBAL', '')
+    elif setting == 'include':
+        write(home / '.gitconfig', '[include]\n\tpath = ~/.gitconfig.local\n')
+        write(home / '.gitconfig.local', '[core]\n\texcludesFile = ~/excludes\n')
+    elif setting == 'include-if-gitdir':
+        # `gitdir:~/` matches only a repository under the developer's HOME, so HOME is the top here.
+        monkeypatch.setenv('HOME', str(top))
+        write(top / '.gitconfig', '[includeIf "gitdir:~/"]\n\tpath = ~/conditional\n')
+        write(top / 'conditional', '[core]\n\texcludesFile = ~/excludes\n')
+        write(top / 'excludes', '.DS_Store\n')
     elif setting == 'repository-own':
         write(home / '.config' / 'git' / 'ignore', '.DS_Store\n')
-        git_in(scratch_repo.parent, 'config', 'core.excludesFile', str(nothing))
+        git_in(top, 'config', 'core.excludesFile', str(nothing))
+    elif setting == 'repository-own-home':
+        git_in(top, 'config', 'core.excludesFile', '~/excludes')
+    elif setting == 'git-config-count':
+        monkeypatch.setenv('GIT_CONFIG_COUNT', '1')
+        monkeypatch.setenv('GIT_CONFIG_KEY_0', 'core.excludesFile')
+        monkeypatch.setenv('GIT_CONFIG_VALUE_0', str(excludes))
     else:
-        system = write(home / 'system', f'[core]\n\texcludesFile = {excludes}\n')
-        body = (f'[ -n "$GIT_CONFIG_NOSYSTEM" ] || {{ GIT_CONFIG_SYSTEM={shlex.quote(str(system))}; '
-                f'export GIT_CONFIG_SYSTEM; }}\nexec {shlex.quote(str(shutil.which("git")))} "$@"')
-        monkeypatch.setattr(sys.modules[__name__], 'GIT', fake_git(tmp_path, body))
+        write(Path(os.environ['GIT_CONFIG_SYSTEM']), f'[core]\n\texcludesFile = {excludes}\n')
+        if setting == 'no-system':
+            monkeypatch.setenv('GIT_CONFIG_NOSYSTEM', '1')
     message = explain(scratch_repo, ['sub/.DS_Store'], [])
     lines = class_lines(message)
     assert set(lines) == {expected}, message
     assert lines[expected].split(':')[0] == f"- {expected} ['sub/.DS_Store']", message
     assert removals(lines[expected]) == [str(scratch_repo / 'sub')], message
+    assert_classes_are_status(message, scratch_repo)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('shape, expected', [
+    pytest.param('untracked', {'untracked': ['sub/vendor/']}, id='untracked'),
+    pytest.param('untracked-bytecode', {'untracked': ['sub/vendor/']}, id='untracked-bytecode'),
+    pytest.param('ignored', {'ignored': ['sub/vendor/']}, id='ignored'),
+    pytest.param('beside-tracked', {'tracked': ['sub/mod.py'], 'untracked': ['sub/vendor/']}, id='beside-tracked'),
+    pytest.param('gitlink', {'tracked': ['sub/vendor/']}, id='gitlink'),
+])
+def test_absence_message_for_nested_repositories(scratch_repo: Path, shape: str,
+                                                  expected: dict[str, list[str]]) -> None:
+    # Git lists a repository nested inside as one entry and never looks into it: the explanation
+    # names that entry in git's class for it, says why, and says "re-added" only when git tracks it.
+    top = scratch_repo.parent
+    sub = scratch_repo / 'sub'
+    plant(sub, ['vendor/x.pyc' if shape == 'untracked-bytecode' else 'vendor/mod.py'])
+    git_in(sub / 'vendor', 'init', '-q')
+    if shape == 'ignored':
+        write(top / '.gitignore', '__pycache__/\n*.py[cod]\nvendor/\n')
+    elif shape == 'beside-tracked':
+        plant(sub, ['mod.py'])
+        git_in(top, 'add', '--', f'{scratch_repo.name}/sub/mod.py')
+    elif shape == 'gitlink':
+        git_in(sub / 'vendor', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q',
+               '--allow-empty', '-m', 'vendor')
+        git_in(top, 'add', '--', f'{scratch_repo.name}/sub/vendor')
+    importlib.invalidate_caches()
+    name = f'{scratch_repo.name}.sub'
+    assert not module_absent(name)
+    [message] = absence_violations(name)
+    lines = class_lines(message)
+    assert {kind: ast.literal_eval(line.split(':')[0].split(' ', 2)[2]) for kind, line in lines.items()} == expected, \
+        message
+    assert ('re-added' in message) == ('tracked' in expected), message
+    assert "Each of ['sub/vendor/'] is a git repository nested there" in message.splitlines()[-1], message
+    assert_classes_are_status(message, scratch_repo)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('where', ['repository', 'global', 'environment'])
+def test_asking_git_runs_nothing_the_configuration_names(scratch_repo: Path, tmp_path: Path,
+                                                         monkeypatch: pytest.MonkeyPatch, where: str) -> None:
+    # The developer's configuration may name a file-system monitor or hooks; asking git what a file
+    # is runs none of them, whichever config names them, `GIT_CONFIG_*` included.
+    ran = tmp_path / 'ran'
+    program = write(tmp_path / 'hooks' / 'run', f'#!/bin/sh\necho "$0" >> {shlex.quote(str(ran))}\nexit 1\n')
+    program.chmod(0o755)
+    for hook in ('post-index-change', 'reference-transaction', 'post-checkout'):
+        (tmp_path / 'hooks' / hook).symlink_to(program)
+    settings = {'core.fsmonitor': str(program), 'core.hooksPath': str(tmp_path / 'hooks'),
+                'core.untrackedCache': 'true'}
+    if where == 'repository':
+        for key, value in settings.items():
+            git_in(scratch_repo.parent, 'config', key, value)
+    elif where == 'environment':
+        monkeypatch.setenv('GIT_CONFIG_COUNT', str(len(settings)))
+        for i, (key, value) in enumerate(settings.items()):
+            monkeypatch.setenv(f'GIT_CONFIG_KEY_{i}', key)
+            monkeypatch.setenv(f'GIT_CONFIG_VALUE_{i}', value)
+    else:
+        write(Path(os.environ['HOME']) / '.gitconfig',
+              ''.join(f'[{k.split(".")[0]}]\n\t{k.split(".")[1]} = {v}\n' for k, v in settings.items()))
+    message = explain(scratch_repo, ['sub/.DS_Store', 'sub/__pycache__/'], [])
+    assert set(class_lines(message)) == {'untracked', 'ignored'}, message
+    assert not ran.exists(), ran.read_text()
+
+
+@pytest.mark.integration
+def test_git_env_drops_what_points_git_elsewhere() -> None:
+    # The variables git itself clears when it moves into another repository are dropped, all but the
+    # configuration they carry, which is the developer's; that configuration stays.
+    need_git()
+    shown = ask_git(GIT, Path(__file__).parent, ['rev-parse', '--local-env-vars'])
+    assert shown is not None and shown.returncode == 0, shown
+    local = set(shown.stdout.split())
+    assert 'GIT_DIR' in local and 'GIT_INDEX_FILE' in local, local
+    assert {v for v in local if not v.startswith('GIT_CONFIG')} <= REDIRECTING, local - REDIRECTING
+    assert not any(v.startswith('GIT_CONFIG') or v == 'GIT_CEILING_DIRECTORIES' for v in REDIRECTING)

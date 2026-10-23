@@ -17,7 +17,7 @@ set -eu
 export UV_OFFLINE=1
 cd "$(git rev-parse --show-toplevel)"
 V=spec/absence-check-leftover-classification/verify
-BASE=bfa0595  # moved base: rebased onto develop bfa0595 (lock advisories), 2026-10-22
+BASE=90b0938  # moved base: develop 90b0938 (release 0.1.2) merged in, 2026-10-22; was bfa0595, rebased onto 2026-10-22
 phase=${1:?usage: gate.sh P1 or static|tests|nogit|mutants}
 
 fail() { echo "gate[$phase]: $*" >&2; exit 1; }
@@ -45,7 +45,7 @@ tests() {
 nogit() {
     tmp=$(mktemp -d)
     mkdir "$tmp/bin"
-    for program in uv sh dirname mktemp mkdir rm; do
+    for program in uv sh env dirname mktemp mkdir rm; do
         found=$(command -v "$program") || { rm -rf "$tmp"; fail "$program is not on PATH"; }
         ln -s "$found" "$tmp/bin/$program"
     done

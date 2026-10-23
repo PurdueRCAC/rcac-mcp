@@ -217,25 +217,33 @@ import has no effect.
     `module_absent`, `absence_violations`. `TOOL_REGISTRY` and the tools the server actually serves
     (listed by a harness client, `served_tools`) match `EXPECTED_TOOLS` exactly, and the removed
     documentation modules stay unimportable; when one does import, `absence_violations` says where
-    from and asks git, through `bin/sandbox.sh`, what each file there is. A tracked file means the
-    module was re-added, and the message says so with no `del`; an untracked file and an ignored
-    one (the stale checkout below) each get their own line and a `del` that reaches only that
-    class. The classes are the developer's own `git status`: every file is keyed by its path as git
-    prints it (a symlink, the location itself included, is the link git records, never its
-    target; on macOS names are compared composed, whatever `core.precomposeUnicode` says), and the
-    global excludes file the sandbox's HOME hides (`core.excludesFile` from `$GIT_CONFIG_GLOBAL`,
-    `$XDG_CONFIG_HOME/git/config` or `~/.gitconfig`, else `$XDG_CONFIG_HOME/git/ignore`) is read
-    from the test's own HOME and passed in, unless the repository sets its own. The hook
-    variables (`GIT_DIR` and the rest) are dropped, `GIT_CEILING_DIRECTORIES` is kept, and the
-    system config is not read. Where git cannot answer, the message is the old suffix rule's:
-    bytecode alone is a stale checkout, anything else a re-added module. That is the case without
-    git on PATH, without `bin/sandbox.sh` (an sdist), outside a work tree (one above
-    `GIT_CEILING_DIRECTORIES` included), in a `unit` test, which may start no process, when a call
-    fails or lists a file in no class or in two, and when a directory there cannot be read; for a
-    repository nested inside, which git lists as one entry, the message adds that reason. So
-    `test_docs_modules_absent` is `integration` although it drives no CLI, and `-m unit` no longer
-    runs it; the git-backed controls build their own repository under `tmp_path`, with a scratch
-    HOME, and go through `conftest.need_git`, which skips them without git and fails them on CI.
+    from and asks the developer's own git, through `bin/sandbox.sh`, what each file there is. A
+    tracked file means the module was re-added, and the message says so with no `del`; an untracked
+    file and an ignored one (the stale checkout below) each get their own line and a `del` that
+    reaches only that class. The classes are the developer's own `git status --ignored`: every file
+    is keyed by its path as git prints it (a symlink, the location itself included, is the link git
+    records, never its target; on macOS names are compared composed, whatever
+    `core.precomposeUnicode` says), and a repository nested there is the one entry git lists it as,
+    in git's class for it, with a line saying git does not look into it. Git runs with the
+    developer's HOME and XDG directories handed back inside the sandbox and the rest of the
+    environment as it is, so it reads exactly the configuration their `git status` reads (global and
+    system config, `[include]` and `includeIf`, `~` in any value, `GIT_CONFIG_*`, every excludes
+    file); only what points it at another repository is dropped (`GIT_DIR`, `GIT_WORK_TREE`,
+    `GIT_INDEX_FILE` and the rest of what a hook exports, as `git rev-parse --local-env-vars` lists
+    them, and the pathspec-mode variables), and `GIT_CEILING_DIRECTORIES` is kept. Running the
+    developer's git is safe because it only reads: the calls are `rev-parse`, `ls-files` and
+    `check-ignore`, which write nothing; `GIT_OPTIONAL_LOCKS=0` keeps git from refreshing the index;
+    and `core.fsmonitor=false` and `core.hooksPath=/dev/null` on the command line, which outrank
+    every config file, keep anything a config names from running. Where git cannot answer, the
+    message is the old suffix rule's: bytecode alone is a stale checkout, anything else a re-added
+    module. That is the case without git on PATH, without `bin/sandbox.sh` (an sdist), outside a
+    work tree (one above `GIT_CEILING_DIRECTORIES` included), in a `unit` test, which may start no
+    process, when a call fails or lists a file in no class or in two, and when a directory there
+    cannot be read. So `test_docs_modules_absent` is `integration` although it drives no CLI, and
+    `-m unit` no longer runs it; the git-backed controls build their own repository under
+    `tmp_path`, with a scratch HOME and system config so the developer's configuration is never
+    read, and go through `conftest.need_git`, which skips them without git off CI and fails them on
+    CI, where it never skips (its own test catches every outcome, so it cannot skip itself).
     `EXPECTED_TOOLS` is hard-coded, so a tool change edits it in the same
     commit as `SERVER_INSTRUCTIONS` and the README (§ Invariants §9).
   - `tests/test_instructions.py` (`unit`): `instruction_violations`, `guidance_violations`,

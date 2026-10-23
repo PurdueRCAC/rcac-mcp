@@ -20,7 +20,7 @@ mutants   Each way of breaking the explanation turns named tests red. One exact 
           passes first. An `old` string that does not occur exactly once is red: the build moved
           the code, and this table moves with it.
 
-Footprint: one pytest child at a time; under 250 MB; about 4 min for the mutants.
+Footprint: one pytest child at a time; under 250 MB; about 6 min for the mutants.
 """
 
 from __future__ import annotations
@@ -63,7 +63,8 @@ ALLOWED_PREFIXES = ('spec/absence-check-leftover-classification/', 'issues/', 'R
 # What AGENTS.md's test_registry entry says once the change lands, and what it no longer says.
 # Matched as whole words in the entry with its line breaks folded, so a reflow changes nothing.
 ENTRY_MUST = ['tracked', 'untracked', 'ignored', 'need_git', 'integration', 'suffix', 'sandbox.sh', '-m unit']
-ENTRY_GONE = ['any other file means the module was re-added, and the message says so instead of offering a remedy']
+ENTRY_GONE = ['any other file means the module was re-added, and the message says so instead of offering a remedy',
+              "is read from the test's own HOME and passed in", 'the system config is not read']
 
 SKIPPERS = {'skip', 'skipif', 'xfail', 'importorskip'}
 SKIP_HELPERS = {'need_git', 'need_shell'}
@@ -76,6 +77,7 @@ F = 'test_absence_message_falls_back_without_git'
 W = 'test_absence_message_falls_back_when_git_fails_midway'
 O = 'test_absence_message_for_odd_entries'
 X = 'test_absence_message_follows_developer_excludes'
+N = 'test_absence_message_for_nested_repositories'
 
 # (name, file, old, new, ids that must fail[, the JUnit tag a kill shows when not `failure`])
 MUTANTS = [
@@ -91,11 +93,11 @@ MUTANTS = [
     ('guard-not-read', MODULE, "getattr(subprocess.Popen, 'unit_guard', False) or ", '',
      ['test_absence_message_for_leftover_bytecode[pycache-pyc]', 'test_absence_message_for_readded_source[module]'],
      'error'),
-    ('hook-environment-kept', MODULE, "if not k.startswith('GIT_') or k == 'GIT_CEILING_DIRECTORIES'", 'if True',
+    ('hook-environment-kept', MODULE, 'if k not in REDIRECTING}', 'if True}',
      ['test_absence_message_ignores_git_hook_environment[all]', 'test_absence_message_ignores_git_hook_environment[git-dir]']),
     ('raises-without-git', MODULE, '    if program is None:\n        return None\n', '',
      [f'{F}[mixed-no-git]', f'{F}[bytecode-no-git]']),
-    ('git-dir-kept', MODULE, "k == 'GIT_CEILING_DIRECTORIES'", "k in ('GIT_CEILING_DIRECTORIES', 'GIT_DIR')",
+    ('git-dir-kept', MODULE, "    'GIT_DIR', 'GIT_WORK_TREE',", "    'GIT_WORK_TREE',",
      ['test_absence_message_ignores_git_hook_environment[git-dir]']),
     # A failed ls-files read as an answer is not listed: its empty listing leaves every file unclassified,
     # and the completeness check (`unlisted-file-accepted`) already sends that to the fallback.
@@ -103,25 +105,46 @@ MUTANTS = [
      [f'{W}[empty-pycache-check-ignore]']),
     ('symlink-followed', MODULE, "if entry.is_symlink() or not entry.is_dir()", "if not entry.is_dir()",
      ['test_absence_message_for_odd_entries[tracked-symlink]']),
-    ('unlisted-file-accepted', MODULE, "    if any(placed[r] != 1 for r in relative.keys() - inside):",
+    ('unlisted-file-accepted', MODULE, "    if any(placed[r] != 1 for r in relative):",
      "    if False:", [f'{W}[mixed-omits-untracked]']),
     ('listed-twice-accepted', MODULE, 'placed[r] != 1', 'placed[r] < 1', [f'{W}[mixed-lists-twice]']),
-    ('system-config-read', MODULE, "    env['GIT_CONFIG_NOSYSTEM'] = '1'\n", '', [f'{X}[system-config]']),
-    ('ceiling-dropped', MODULE, " or k == 'GIT_CEILING_DIRECTORIES'", '', [f'{O}[above-ceiling]']),
+    ('system-config-skipped', MODULE, "    env['GIT_OPTIONAL_LOCKS'] = '0'\n",
+     "    env['GIT_OPTIONAL_LOCKS'] = '0'\n    env['GIT_CONFIG_NOSYSTEM'] = '1'\n", [f'{X}[system-config]']),
+    ('ceiling-dropped', MODULE, "    'GIT_DIR', 'GIT_WORK_TREE',", "    'GIT_DIR', 'GIT_CEILING_DIRECTORIES', 'GIT_WORK_TREE',",
+     [f'{O}[above-ceiling]']),
     ('location-symlink-followed', MODULE, '    if path.is_symlink() or not path.is_dir():\n        return [path]',
      '    if not path.is_dir():\n        return [path]',
      [f'{O}[tracked-symlink-location]', f'{O}[untracked-symlink-location]']),
     ('top-not-checked', MODULE, '        where.resolve().relative_to(Path(found.stdout.strip()).resolve())\n', '',
      [f'{F}[empty-pycache-git-answers-elsewhere]']),
-    ('nested-reason-dropped', MODULE, '    if nested:\n        return (', '    if False:\n        return (',
-     [f'{O}[nested-repository]']),
-    ('developer-excludes-unread', MODULE, "    return ['-c', f'core.excludesFile={excludes}']", '    return []',
-     [f'{X}[default-ignore]', f'{X}[gitconfig]', f'{X}[git-config-global]']),
-    ('repository-excludes-overridden', MODULE, '    if own.returncode == 0:\n        return []\n', '',
-     [f'{X}[repository-own]']),
-    ('xdg-config-home-unread', MODULE, "os.environ.get('XDG_CONFIG_HOME') or ", '', [f'{X}[xdg-ignore]']),
-    ('gitconfig-before-xdg-config', MODULE, "[config_home / 'git' / 'config', Path.home() / '.gitconfig']",
-     "[Path.home() / '.gitconfig', config_home / 'git' / 'config']", [f'{X}[gitconfig-over-xdg-config]']),
+    ('nested-not-collapsed', MODULE,
+     "    relative = {r: e for r, e in relative.items() if not any(r.startswith(f'{n}/') for n in nested)} | nested\n",
+     '    relative = relative | nested\n', [f'{N}[untracked]', f'{N}[untracked-bytecode]', f'{N}[ignored]']),
+    ('nested-not-explained', MODULE, '    if nested := classes[\'nested\']:', '    if nested := []:',
+     [f'{N}[untracked]', f'{N}[gitlink]']),
+    ('nested-without-git-dir', MODULE, "if r.startswith(f'{n}/') and os.path.lexists(top / '.git'):",
+     "if r.startswith(f'{n}/') and not os.path.lexists(top / '.git'):", [f'{N}[untracked]', f'{N}[beside-tracked]']),
+    # The developer's git reads what the developer's git status reads: HOME, XDG, GIT_CONFIG_*, system.
+    ('home-not-handed-back', MODULE, "'env', *developer_home(), program", "'env', program",
+     [f'{X}[gitconfig]', f'{X}[include]', f'{X}[include-if-gitdir]', f'{X}[repository-own-home]']),
+    ('xdg-not-handed-back', MODULE, "HOME_VARIABLES = ('HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'XDG_DATA_HOME')",
+     "HOME_VARIABLES = ('HOME',)", [f'{X}[default-ignore]', f'{X}[xdg-ignore]', f'{X}[xdg-config]']),
+    ('sandbox-xdg-kept', MODULE, "*(a for k in HOME_VARIABLES if k not in os.environ for a in ('-u', k)),", '',
+     [f'{X}[default-ignore]', f'{X}[xdg-config]']),
+    ('config-variables-dropped', MODULE, 'if k not in REDIRECTING}', "if k not in REDIRECTING and not k.startswith('GIT_CONFIG')}",
+     [f'{X}[git-config-count]', f'{X}[git-config-global]']),
+    ('redirect-unlisted', MODULE, "'GIT_COMMON_DIR', ", '', ['test_git_env_drops_what_points_git_elsewhere']),
+    # Nothing the configuration names runs. The classifier's calls never write the index, so the
+    # hooks path and optional locks guard only a future call that would; their mutants are
+    # equivalent today and not listed.
+    ('fsmonitor-runs', MODULE, "'-c', 'core.fsmonitor=false', ", '',
+     ['test_asking_git_runs_nothing_the_configuration_names[repository]',
+      'test_asking_git_runs_nothing_the_configuration_names[global]',
+      'test_asking_git_runs_nothing_the_configuration_names[environment]']),
+    ('need-git-skips-with-git', CONFTEST, "    if shutil.which('git'):\n        return\n",
+     "    if shutil.which('git'):\n        pytest.skip('git is not on PATH here')\n",
+     ['test_a_missing_git_fails_on_ci_and_skips_elsewhere[ci-present]',
+      'test_a_missing_git_fails_on_ci_and_skips_elsewhere[local-present]']),
     ('need-git-skips-on-ci', CONFTEST, "    if os.environ.get('CI', '').lower() == 'true':\n        pytest.fail('git",
      "    if False:\n        pytest.fail('git", ['test_a_missing_git_fails_on_ci_and_skips_elsewhere[ci]']),
 ]
