@@ -24,7 +24,8 @@ from typing import Any, Sequence
 
 import pytest
 
-from harness import Outcome, call_http, delegate_server, drive, mint, serving, user_map
+from harness import Outcome, call_http, delegate_server, drive, launched_script, mint, serving, user_map
+from rcac_mcp.executor import launch
 from rcac_mcp.executor.delegate import DelegatingExecutor, load_user_map
 from test_no_executor import refusal_violations, report
 
@@ -41,8 +42,9 @@ def delegation_violations(outcome: Outcome, launches: Sequence[Sequence[str]], u
                           command: str) -> list[str]:
     """Return every way a delegated call went wrong; empty means `command` ran once, as `user`.
 
-    `launches` holds every process the call started (the recorded `sudo … -u <user> <shell> -c
-    <command>` argv), and the result the client got must carry the recorder's `<user>|<command>`.
+    `launches` holds every process the call started (the recorded `sudo … -u <user> /bin/bash …
+    <program>` argv, whose program runs the script, read back with `launched_script`), and the
+    result the client got must carry the recorder's `<user>|<command>`.
     """
     violations: list[str] = []
     if outcome.is_error:
@@ -52,10 +54,14 @@ def delegation_violations(outcome: Outcome, launches: Sequence[Sequence[str]], u
     for argv in launches:
         argv = list(argv)
         who = argv[argv.index('-u') + 1] if '-u' in argv[:-1] else argv[0]
+        try:
+            ran = launched_script(argv)[0]
+        except ValueError:
+            ran = argv[-1]
         if who != user:
-            violations.append(f'{argv[-1]!r} ran as {who}, expected {user}')
-        if argv[-1] != command:
-            violations.append(f'launched {argv[-1]!r}, expected {command!r}')
+            violations.append(f'{ran!r} ran as {who}, expected {user}')
+        if ran != command:
+            violations.append(f'launched {ran!r}, expected {command!r}')
     if f'{user}|{command}' not in outcome.text:
         violations.append(f'result lacks {user}|{command}: {outcome.text!r}')
     return violations
@@ -153,7 +159,7 @@ def test_user_map_skips_comments_and_blanks(tmp_path: Path) -> None:
 
 
 def argv(user: str, command: str) -> list[str]:
-    return ['sudo', '-n', '-H', '-u', user, '/bin/sh', '-c', command]
+    return ['sudo', '-n', '-H', '-u', user, *launch.bash_argv(launch.program(command, start='home')[0])]
 
 
 GOOD = Outcome(False, f'ualice|{COMMAND}')

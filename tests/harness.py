@@ -49,14 +49,16 @@ exists, the instructions and tool names the client received, and the methods the
 `MethodLog` saw on that connection. A test then decides whether that is the era it asked for.
 
 **Servers in another process.** `stdio_tools` and `url_tools` list the tools of a real `rcac-mcp`
-process and report the era it negotiated (`Listed`). `stdio_tools` launches the server itself, inside
-FastMCP, where `test_hygiene.py`'s static launch check cannot see it, so it refuses any argv whose
-first element is not this repository's `bin/sandbox.sh`; it closes the server when the client
-exits. `url_tools` reaches a server the test started (under the sandbox, where the static check does
-see the launch) and refuses any host but loopback. Neither is fenced: they make no in-process server
-call, so no executor of this process can run behind them, and the server they reach is its own
-process, contained by the sandbox. Neither writes the era log: the server's `MethodLog` is in
-another process.
+process and report the era it negotiated (`Listed`); `stdio_refusal` connects to one that cannot
+start and returns the error the client got (`Refused`), relying on a JSON-RPC error that answers the
+handshake reaching the caller as `MCPError`, with its `code` and its message as `str()`.
+`stdio_tools` and `stdio_refusal` launch the server themselves, inside FastMCP, where
+`test_hygiene.py`'s static launch check cannot see it, so each refuses any argv whose first element
+is not this repository's `bin/sandbox.sh`; each closes the server when its client exits. `url_tools`
+reaches a server the test started (under the sandbox, where the static check does see the launch)
+and refuses any host but loopback. None of them is fenced: they make no in-process server call, so
+no executor of this process can run behind them, and the server they reach is its own process,
+contained by the sandbox. None writes the era log: the server's `MethodLog` is in another process.
 
 Delegate mode is reached over an in-process ASGI route: a real bearer token goes through the real
 `JWTVerifier` and `AuthExecutorMiddleware`, with no socket and no port. Shared mode and tokenless
@@ -69,8 +71,9 @@ Two rules keep a test honest:
   `MCPServerApp.run()` builds and serves in one context, so anything a construction sets in the
   context reaches the request tasks exactly as it would in production.
 - **The fence.** `serving`, `in_memory`, `http_client`, `call_http` and `negotiate` raise unless
-  `subprocess.Popen` is the unit guard's refuser or the `launches` recorder, so no in-process server
-  call can reach a real `sudo`, in a unit or an integration test.
+  `subprocess.Popen` is the unit guard's refuser, the `launches` recorder or the `executes`
+  fixture's sandbox-only launcher, so no in-process server call can reach a real `sudo`, in a unit
+  or an integration test.
 """
 
 from __future__ import annotations
@@ -79,6 +82,8 @@ import asyncio
 import datetime as dt
 import json
 import os
+import re
+import shlex
 import subprocess
 import weakref
 from contextlib import asynccontextmanager
@@ -95,6 +100,7 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from mcp import MCPError
 
+from rcac_mcp.executor import launch
 from rcac_mcp.executor.base import CommandResult, Executor
 from rcac_mcp.middleware import AuthExecutorMiddleware, SharedExecutorMiddleware
 from rcac_mcp.server import create_mcp_server
@@ -105,7 +111,8 @@ __all__ = ['Outcome', 'drive', 'serving', 'http_client', 'in_memory', 'call', 'c
            'shared_server', 'bare_server', 'JWTVerifier', 'ERA', 'ERA_VARIABLE', 'MODERN_VERSION',
            'select_era', 'era_mismatch', 'session_era', 'rejection_status', 'served_tools',
            'served_instructions', 'served_surface', 'protocol_error', 'Negotiated', 'negotiate', 'Listed',
-           'stdio_tools', 'url_tools', 'SANDBOX', 'LOOPBACK', 'installed_auth', 'StateProbe', 'tool_names']
+           'stdio_tools', 'url_tools', 'Refused', 'stdio_refusal', 'SANDBOX', 'LOOPBACK', 'installed_auth', 'StateProbe', 'tool_names',
+           'launched_script']
 
 T = TypeVar('T')
 
@@ -248,8 +255,9 @@ def drive(coro: Coroutine[Any, Any, T], timeout: float = 30) -> T:
 def _require_fence(verb: str) -> None:
     if not getattr(subprocess.Popen, 'test_fence', False):
         raise RuntimeError(
-            f'harness fence: {verb} needs subprocess.Popen to be the unit guard or the launches '
-            'recorder; request the `launches` fixture (or mark the test unit) before calling a server')
+            f'harness fence: {verb} needs subprocess.Popen to be the unit guard, the launches '
+            'recorder or the executes launcher; request `launches` or `executes` (or mark the test unit) '
+            'before calling a server')
 
 
 def _require_running_loop(builder: str) -> None:
@@ -461,6 +469,38 @@ def stdio_tools(argv: Sequence[str], era: str, env: Mapping[str, str] | None = N
     return drive(_listed(_EraClient(transport, None, era)), timeout)
 
 
+@dataclass(frozen=True)
+class Refused:
+    """The error a client got connecting to a server in another process: its code and its text."""
+
+    code: int
+    message: str
+
+
+async def _refusal(client: _EraClient) -> Refused:
+    try:
+        async with client:
+            pass
+    except MCPError as exc:
+        return Refused(exc.code, str(exc))
+    raise RuntimeError('stdio_refusal: the client connected; the server was expected to refuse every request')
+
+
+def stdio_refusal(argv: Sequence[str], era: str, env: Mapping[str, str] | None = None, timeout: float = 60) -> Refused:
+    """Launch `argv` as a stdio server that cannot start, connect in `era`, and return the error.
+
+    The connect must fail with an MCP error, whose code and text are returned; a connect that
+    succeeds raises. `argv[0]` must be this repository's `bin/sandbox.sh`, as for `stdio_tools`, and
+    the server is stopped when the client exits. Not fenced: the server is another process.
+    """
+    if not argv or Path(argv[0]).resolve() != SANDBOX.resolve():
+        raise ValueError(f'stdio_refusal: the argv must start with {SANDBOX}, which contains the server; '
+                         f'got {list(argv[:1])}')
+    transport = StdioTransport(str(argv[0]), [str(a) for a in argv[1:]],
+                               env=dict(os.environ if env is None else env), keep_alive=False)
+    return drive(_refusal(_EraClient(transport, None, era, check=False)), timeout)
+
+
 def url_tools(url: str, transport: str, era: str, timeout: float = 60) -> Listed:
     """List the tools of the server listening at `url` (`transport` is `http` or `sse`) in `era`.
 
@@ -504,28 +544,77 @@ def user_map(tmp_path: Path, text: str) -> str:
     return str(path)
 
 
+# The launcher's program, as `launch.program` renders it: the prologue, then the start sentinel
+# printed in two halves on both streams, then a subshell that changes to the start and any cwd and
+# runs the body (an `exec` of the argv, or the script run by a fresh bash), then the status and the
+# end record, its nonce in two halves, on both streams.
+_SENTINEL_LINE = re.compile(r'printf %s%s ([0-9a-f]{16}) ([0-9a-f]{16}); printf %s%s \1 \2 >&2')
+_END_LINE = re.compile(r'printf %s%s%s\. ([0-9a-f]{16}) ([0-9a-f]{16}) "\$cluster_mcp_r"')
+_SCRIPT_PREFIX = ('while IFS= read -r cluster_mcp_fn; do export -f -- "$cluster_mcp_fn"; '
+                  'done < <(compgen -A function); unset cluster_mcp_fn; BASH_ENV= ENV= exec /bin/bash --norc -c -- ')
+
+
+def launched_script(argv: Sequence[str]) -> tuple[str | list[str], launch.Marks]:
+    """The command a recorded launch runs, and the nonces its program prints (`launch.Marks`).
+
+    `argv` is any launch whose last element is a launcher program (`sudo … /bin/bash … <program>`,
+    `/bin/bash … <program>`, or `[<program>]` for one an SSH server decoded). The command is the
+    script for a `run_command`-style launch, or the argv words of an argv launch. A last element that
+    is not a launcher program is a `ValueError`.
+    """
+    prog = argv[-1] if argv else ''
+    line = _SENTINEL_LINE.search(prog) if isinstance(prog, str) and prog.startswith('\\unalias -a\n') else None
+    end = _END_LINE.search(prog) if line else None
+    if line is None or end is None:
+        raise ValueError(f'not a launcher program: {prog!r:.120}')
+    marks = launch.Marks((line[1] + line[2]).encode('ascii'), (end[1] + end[2]).encode('ascii'))
+    body = prog[line.end():end.start()]
+    if _SCRIPT_PREFIX in body:
+        words = shlex.split(body[body.index(_SCRIPT_PREFIX) + len(_SCRIPT_PREFIX):].partition('\n')[0])
+        if len(words) != 1:
+            raise ValueError(f'the script is not one word: {words!r:.120}')
+        return words[0], marks
+    # The argv line is the subshell's line starting `exec `; the cd lines before it end `|| exit`.
+    at = body.find('\nexec ')
+    if at < 0:
+        raise ValueError(f'no command in the program: {body!r:.120}')
+    return shlex.split(body[at + len('\nexec '):].partition('\n')[0]), marks
+
+
 @dataclass
 class RecordingExecutor:
-    """An `Executor` that records every call and answers `<name>|<command>` unless given a responder."""
+    """An `Executor` that records every call and answers `<name>|<command>` unless given a responder.
+
+    A call is recorded as given: `('run', command, cwd, timeout)`, with the command a list for an
+    argv and a `str` for a script, and `('write', path, data, append, parent, executable)`; `put`
+    and `get` return `<name>:<destination>`, so a path a tool returns can be traced to this executor.
+    """
 
     name: str
-    responder: Callable[[str], str] | None = None
+    responder: Callable[[Any], str] | None = None
     calls: list[tuple[Any, ...]] = field(default_factory=list)
 
     @property
     def hostname(self) -> str:
         return f'{self.name}.invalid'
 
-    def run(self, command: str, cwd: str | None = None, timeout: float | None = None) -> CommandResult:
-        self.calls.append(('run', command, cwd, timeout))
+    def run(self, command: Sequence[str] | str, cwd: str | None = None, timeout: float | None = None) -> CommandResult:
+        self.calls.append(('run', command if isinstance(command, str) else list(command), cwd, timeout))
         stdout = self.responder(command) if self.responder else f'{self.name}|{command}'
         return CommandResult(stdout=stdout, stderr='', exit_code=0, hostname=self.hostname)
 
-    def put(self, local_path: str, remote_path: str) -> None:
-        self.calls.append(('put', local_path, remote_path))
+    def write(self, path: str, data: bytes, append: bool = False, parent: str | None = None,
+              executable: bool = False) -> CommandResult:
+        self.calls.append(('write', path, data, append, parent, executable))
+        return CommandResult(stdout='', stderr='', exit_code=0, hostname=self.hostname)
 
-    def get(self, remote_path: str, local_path: str) -> None:
+    def put(self, local_path: str, remote_path: str) -> str:
+        self.calls.append(('put', local_path, remote_path))
+        return f'{self.name}:{remote_path}'
+
+    def get(self, remote_path: str, local_path: str) -> str:
         self.calls.append(('get', remote_path, local_path))
+        return f'{self.name}:{local_path}'
 
     def open(self) -> None:
         pass

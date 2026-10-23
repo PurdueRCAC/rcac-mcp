@@ -22,6 +22,7 @@ from cmdkit.logging import Logger, level_by_name, logging_styles
 
 # Internal libs
 from rcac_mcp.server import create_mcp_server
+from rcac_mcp.startup import StartupFailure, answer_until_eof, connect_failure_message
 from rcac_mcp.token import generate_token
 
 # Public interface
@@ -37,6 +38,11 @@ log = Logger.default(name=__name__, level=level_by_name['INFO'], **logging_style
 def print_exception(exc: Exception, status: int) -> int:
     """Log `exc` and return `status`."""
     log.critical(str(exc))
+    return status
+
+
+def exit_reported(exc: Exception, status: int) -> int:
+    """Return `status` for a failure whose message was already reported."""
     return status
 
 
@@ -78,7 +84,7 @@ APP_HELP = f"""\
 
   Execution Modes:
     ssh       Execute commands via SSH (default for stdio, or when --ssh-host is set)
-    local     Execute commands locally via $SHELL (default for http with auth=none)
+    local     Execute commands locally under bash (default for http with auth=none)
     delegate  Execute commands as authenticated user via sudo (http with auth)
 
 Options:
@@ -151,6 +157,7 @@ class MCPServerApp(Application):
     log_critical = log.critical
     log_exception = log.exception
     exceptions = {
+        StartupFailure: partial(exit_reported, status=exit_status.runtime_error),
         ValueError: partial(print_exception, status=exit_status.bad_argument),
         RuntimeError: partial(print_exception, status=exit_status.runtime_error),
         Exception: partial(print_exception, status=exit_status.uncaught_exception),
@@ -230,13 +237,28 @@ class MCPServerApp(Application):
                 raise ValueError(
                     'SSH host required: use --ssh-host or set RCAC_SSH_HOST'
                 )
-            return SSHExecutor(ssh_host)
+            try:
+                return SSHExecutor(ssh_host)
+            except Exception as exc:
+                message = connect_failure_message(ssh_host, exc)
+                self._report_startup_failure(message)
+                raise StartupFailure(message) from exc
 
         elif exec_mode == 'local':
             return LocalShellExecutor()
 
         else:
             raise ValueError(f'Unknown exec mode: {exec_mode}')
+
+    def _report_startup_failure(self, message: str) -> None:
+        """Report why the server cannot start: on stderr at once, then, on stdio, to every request.
+
+        A stdio client that discards stderr still sees the message, as the error answering each
+        request it sends, until it closes the stream.
+        """
+        log.critical(message)
+        if self.transport == 'stdio':
+            answer_until_eof(sys.stdin, sys.stdout, message)
 
 
 def main(argv: List[str] | None = None) -> int:

@@ -21,6 +21,7 @@ import multiprocessing
 import os
 import pty
 import pwd
+import re
 import shutil
 import socket
 import subprocess
@@ -31,6 +32,8 @@ import _posixsubprocess
 import pytest
 
 import harness
+import rcac_mcp
+from rcac_mcp.executor import launch
 
 TESTS = Path(__file__).resolve().parent
 SANDBOX = TESTS.parent / 'bin' / 'sandbox.sh'
@@ -403,6 +406,10 @@ def test_path_shim_shadows_sudo_and_ssh(path_shim: Path) -> None:
     assert os.environ['PATH'].split(os.pathsep)[0] == str(path_shim)
     for program in ('sudo', 'ssh'):
         assert shutil.which(program) == str(path_shim / program), program
+    # A login bash rebuilds PATH; the file BASH_ENV names puts the shim first again.
+    bash_env = Path(os.environ['BASH_ENV'])
+    assert bash_env.parent == path_shim
+    assert bash_env.read_text().startswith(f'PATH={path_shim}:'), bash_env.read_text()
 
 
 # Resolves each name inside the sandbox and runs it only when it resolves into the shim ($1).
@@ -427,6 +434,69 @@ def test_path_shim_reaches_sandboxed_children(path_shim: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == [
         f'{name}|{path_shim / name}|126|refused by the test PATH shim' for name in ('sudo', 'ssh')], result.stdout
+
+
+@pytest.mark.integration
+def test_path_shim_survives_a_login_bash(path_shim: Path) -> None:
+    # The pinned interpreter is a login bash, whose /etc/profile may rebuild PATH (macOS's
+    # path_helper puts /usr/bin first); a command it launches must still resolve the shim.
+    prog, sentinel = launch.program(['/bin/sh', '-c', SHIM_PROBE, 'sh', str(path_shim)])
+    raw_out, raw_err, raw_code, note = launch.run_process([str(SANDBOX), *launch.bash_argv(prog)], None, 60)
+    out, err, code = launch.separate(raw_out, raw_err, raw_code, sentinel, note)
+    assert code == 0, err.decode(errors='replace')
+    assert out.decode().splitlines() == [
+        f'{name}|{path_shim / name}|126|refused by the test PATH shim' for name in ('sudo', 'ssh')], out
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(('argv', 'fragment'), [
+    pytest.param(['/bin/sh', '-c', 'true'], 'does not run /bin/bash', id='not-bash'),
+    pytest.param(['sudo', '-u', 'umapped', '/bin/bash', '-c', 'true'], 'does not start exactly', id='sudo-flags-dropped'),
+    pytest.param(['sudo', '-n', '-H', '-u', 'root', '/bin/bash', '-c', 'true'], 'does not start exactly',
+                 id='sudo-other-user'),
+    pytest.param(['sudo', '-n', '-H', '-u', 'umapped', '/bin/sh', '-c', 'true'], 'does not run /bin/bash',
+                 id='sudo-not-bash'),
+])
+def test_executes_refuses_what_it_does_not_stand_in_for(argv: list[str], fragment: str, executes) -> None:
+    # Refused before anything launches: no process starts for an argv the fence does not accept.
+    with pytest.raises(OSError, match=fragment):
+        launch.run_process(argv, None, 5)
+    assert executes.launched == [] and executes.refused == [argv]
+
+
+@pytest.mark.integration
+def test_executes_launches_only_inside_the_sandbox(executes, path_shim: Path) -> None:
+    from rcac_mcp.executor.delegate import DelegatingExecutor
+    from rcac_mcp.executor.shell import LocalShellExecutor
+
+    local = LocalShellExecutor().run('printf %s "$HOME"', timeout=20)
+    probe = 'printf "%s|%s|%s" "$HOME" "$USER" "$(command -v sudo)"'
+    delegated = DelegatingExecutor('someone', {'someone': executes.user}).run(probe, timeout=20)
+    assert len(executes.launched) == 2, executes.launched
+    for argv in executes.launched:
+        assert argv[:3] == [str(SANDBOX), 'env', '-i'], argv
+        assert 'sudo' not in argv, f'a launch names sudo: {argv!r}'
+    assert local.stdout == str(executes.server_home), local
+    # The stand-in gives the delegated command the mapped user's home and name, and sudo inside it
+    # still resolves to the shim.
+    assert delegated.stdout == f'{executes.mapped_home}|{executes.user}|{path_shim / "sudo"}', delegated
+
+
+@pytest.mark.integration
+def test_executes_opens_the_fence_only_to_sandboxed_launches(executes) -> None:
+    # Under `executes` the harness fence lets an in-process server call through...
+    async def scenario() -> tuple[str, ...]:
+        async with harness.in_memory(harness.bare_server()) as client:
+            return await harness.tool_names(client)
+
+    assert 'write_file' in harness.drive(scenario())
+    # ...because nothing outside bin/sandbox.sh can launch behind it: an unsandboxed argv is refused
+    # before it starts. (Called through a name, since the static check reads literal launches.)
+    unsandboxed = ['/bin/sh', '-c', 'exit 0']
+    launcher = subprocess.Popen
+    with pytest.raises(OSError, match='does not start with'):
+        launcher(unsandboxed)
+    assert executes.refused == [unsandboxed] and executes.launched == []
 
 
 @pytest.mark.unit
@@ -482,3 +552,108 @@ def test_harness_builds_servers_inside_the_running_loop(tmp_path: Path, monkeypa
         assert harness.drive(read()) == 'main'
     finally:
         probe.reset(token)
+
+
+# A feature-scoped spec id (`R#`, `P#`) in a comment, docstring or message of the package or the
+# suite: those restart per feature and live in `spec/`, never in the code (AGENTS.md § Conventions).
+SPEC_ID = re.compile(r'\b[RP][0-9]{1,2}\b')
+
+
+def spec_id_violations(name: str, text: str) -> list[str]:
+    """Every line of `text` that names a feature-scoped spec id."""
+    return [f'{name}:{n}: {line.strip()[:120]}' for n, line in enumerate(text.splitlines(), 1) if SPEC_ID.search(line)]
+
+
+@pytest.mark.unit
+def test_no_spec_ids_in_the_package_or_the_suite() -> None:
+    package = Path(rcac_mcp.__file__).resolve().parent
+    files = sorted(package.rglob('*.py')) + sorted(Path(__file__).resolve().parent.glob('*.py'))
+    assert files, 'no source files found to check'
+    violations = [v for f in files for v in spec_id_violations(str(f), f.read_text())]
+    assert violations == [], 'a spec id names a requirement or phase in the code:\n' + '\n'.join(violations)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(('text', 'found'), [
+    pytest.param('"""Differs from ' + 'R' + '9\'s report."""', True, id='requirement'),
+    pytest.param('# Added in ' + 'P' + '3.', True, id='phase'),
+    pytest.param('x = "R2D2 P100 RP1 HTTP2"', False, id='not-ids'),
+])
+def test_spec_id_check_catches_planted_ids(text: str, found: bool) -> None:
+    assert bool(spec_id_violations('planted', text)) == found
+
+
+# A row that needs a login shell, or a git that runs, runs it or, off CI, skips: `conftest.need_shell`
+# and `conftest.need_git` are the only places that decide, and on CI (where the workflow installs
+# every shell, and git) they fail the row instead. Any other skip in the suite would let a row vanish
+# from CI without failing.
+SKIPPERS = {'skip', 'skipif', 'importorskip', 'xfail'}
+SKIP_HELPERS = {'need_shell', 'need_git'}
+
+
+def skip_violations(name: str, text: str) -> list[str]:
+    """Every skip, conditional skip or expected failure in `text` outside the `SKIP_HELPERS`."""
+    found = []
+    tree = ast.parse(text, name)
+    allowed: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name in SKIP_HELPERS and name.endswith('conftest.py'):
+            allowed |= {n.lineno for n in ast.walk(node) if hasattr(n, 'lineno')}
+    # `pytest.skip.Exception` names the outcome without skipping anything.
+    named = {id(node.value) for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+    for node in ast.walk(tree):
+        word = node.attr if isinstance(node, ast.Attribute) else node.id if isinstance(node, ast.Name) else None
+        if word in SKIPPERS and node.lineno not in allowed and id(node) not in named:
+            found.append(f'{name}:{node.lineno}: {word}')
+    return found
+
+
+@pytest.mark.unit
+def test_only_need_shell_skips() -> None:
+    files = sorted(TESTS.glob('*.py'))
+    assert any(f.name == 'conftest.py' for f in files), 'conftest.py not found'
+    violations = [v for f in files for v in skip_violations(str(f), f.read_text())]
+    assert violations == [], 'a test can skip on CI without failing:\n' + '\n'.join(violations)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(('name', 'text', 'found'), [
+    pytest.param('t.py', 'import pytest\npytest.skip("no zsh")\n', True, id='skip'),
+    pytest.param('t.py', 'import pytest\n@pytest.mark.skipif(True, reason="x")\ndef test(): pass\n', True,
+                 id='skipif'),
+    pytest.param('t.py', 'from pytest import importorskip\nimportorskip("yaml")\n', True, id='importorskip'),
+    pytest.param('t.py', 'def need_shell(s):\n    pytest.skip(s)\n', True, id='need-shell-elsewhere'),
+    pytest.param('conftest.py', 'def need_shell(s):\n    pytest.skip(s)\n', False, id='need-shell'),
+    pytest.param('t.py', 'def need_git():\n    pytest.skip("git")\n', True, id='need-git-elsewhere'),
+    pytest.param('conftest.py', 'def need_git():\n    pytest.skip("git")\n', False, id='need-git'),
+    pytest.param('conftest.py', 'def need_other():\n    pytest.skip("x")\n', True, id='other-helper'),
+    pytest.param('t.py', 'import pytest\nraised = pytest.skip.Exception\n', False, id='outcome-type'),
+])
+def test_skip_check_catches_planted_skips(name: str, text: str, found: bool) -> None:
+    assert bool(skip_violations(name, text)) == found
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(('ci', 'outcome'), [
+    pytest.param('true', pytest.fail.Exception, id='ci'),
+    pytest.param(None, pytest.skip.Exception, id='local'),
+    pytest.param('false', pytest.skip.Exception, id='ci-false'),
+])
+def test_a_missing_shell_fails_on_ci_and_skips_elsewhere(ci: str | None, outcome: type[BaseException],
+                                                         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from conftest import need_shell
+    if ci is None:
+        monkeypatch.delenv('CI', raising=False)
+    else:
+        monkeypatch.setenv('CI', ci)
+    missing = str(tmp_path / 'no-such-shell')
+    # Caught by hand: under pytest.raises a skip that should have been a failure would skip this row.
+    try:
+        need_shell(missing)
+    except BaseException as exc:
+        raised: BaseException | None = exc
+    else:
+        raised = None
+    assert type(raised) is outcome, f'CI={ci}: a missing shell gave {raised!r}, not {outcome.__name__}'
+    assert missing in str(raised), raised
+    need_shell('/bin/sh')

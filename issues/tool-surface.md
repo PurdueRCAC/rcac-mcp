@@ -35,7 +35,7 @@ everyday work — and `run_command` is the one tool nobody can reason about from
 Not deferred — a roadmap cycle in Part I. It renames today's file tools, so it comes after
 [`rename-to-cluster-mcp.md`](rename-to-cluster-mcp.md) and
 [`capability-extras.md`](capability-extras.md) (every import and registration moves once), and it
-is built on the argv executor from [`safe-execution.md`](safe-execution.md).
+is built on the argv executor from [`spec/safe-execution/`](../spec/safe-execution/).
 
 **Pre-existing:** the thin tools and missing annotations are on `main`; the family is new work.
 
@@ -105,7 +105,7 @@ Open questions for shaping:
 
 ## Notes
 
-- Related: [`safe-execution.md`](safe-execution.md) (the executor this builds on),
+- Related: [`spec/safe-execution/`](../spec/safe-execution/) (the executor this builds on),
   [`slurm-capability.md`](slurm-capability.md) (the `job_*` family follows the same rules),
   [`lmod-tool-group.md`](lmod-tool-group.md) (`modules=[…]`), [`xdu-storage.md`](xdu-storage.md)
   (routes `file_find`), [`spec/stack-upgrade/`](../spec/stack-upgrade/) (annotations and `_meta` on the
@@ -115,3 +115,6 @@ Open questions for shaping:
   each served tool's MCP definition gives 26.5K characters for the 25 tools before and 23.5K for the
   23 after (the two were about 3.0K), so the 25.6K-character, 6.4K-token baseline above is about 11%
   high: re-measure it before R8 reports against it.
+- 2026-10-23: `safe-execution` gave `write_file` a `base64` encoding for binary content and left
+  the matching binary read to this family (its GOAL non-goals): `file_read` should return binary
+  content the same way, so a byte-exact round trip needs no `run_command`.

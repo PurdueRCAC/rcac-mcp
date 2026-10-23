@@ -5,6 +5,7 @@
 
 # Type annotations
 from __future__ import annotations
+from collections.abc import Sequence
 from typing import Optional, Type
 from types import TracebackType
 
@@ -12,9 +13,9 @@ from types import TracebackType
 import os
 import shutil
 import socket
-import subprocess
 
 # Internal libs
+from rcac_mcp.executor import launch
 from rcac_mcp.executor.base import CommandResult
 
 # Public interface
@@ -23,18 +24,17 @@ __all__ = ['LocalShellExecutor']
 
 class LocalShellExecutor:
     """
-    Execute commands locally via subprocess.
+    Execute commands on this machine, as the server process's user. Development only.
 
-    Uses $SHELL for command execution, falling back to /bin/sh if not set.
+    Every command runs under the pinned login bash (`executor/launch.py`), never the server's
+    `$SHELL`, and starts in the server process's working directory, whatever a startup file `cd`s to.
     """
 
     _hostname: str
-    _shell: str
 
     def __init__(self) -> None:
         """Initialize local shell executor."""
         self._hostname = socket.gethostname()
-        self._shell = os.environ.get('SHELL', '/bin/sh')
 
     @property
     def hostname(self) -> str:
@@ -51,74 +51,67 @@ class LocalShellExecutor:
 
     def run(
         self,
-        command: str,
+        command: Sequence[str] | str,
         cwd: str | None = None,
         timeout: float | None = None,
     ) -> CommandResult:
         """
-        Execute a command locally.
+        Run a command locally under the pinned login bash (see `Executor.run`).
 
         Args:
-            command: Shell command to execute.
-            cwd: Working directory for command execution.
-            timeout: Maximum time in seconds to wait for completion.
+            command: An argv (each element one literal argument) or a bash script.
+            cwd: Working directory; a leading `~` or `~/` is this user's home.
+            timeout: Seconds to wait; at the deadline the result carries `TIMEOUT_EXIT_CODE`.
 
         Returns:
             CommandResult with stdout, stderr, exit_code, and hostname.
         """
-        # Expand ~ in cwd if provided
-        if cwd:
-            cwd = os.path.expanduser(cwd)
+        return self._run(command, cwd, timeout, None)
 
-        try:
-            result = subprocess.run(
-                [self._shell, '-c', command],
-                cwd=cwd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-            return CommandResult(
-                stdout=result.stdout,
-                stderr=result.stderr,
-                exit_code=result.returncode,
-                hostname=self._hostname,
-            )
-        except subprocess.TimeoutExpired as exc:
-            return CommandResult(
-                stdout=exc.stdout or '',
-                stderr=exc.stderr or f'Command timed out after {timeout}s',
-                exit_code=-1,
-                hostname=self._hostname,
-            )
+    def _run(self, command: Sequence[str] | str, cwd: str | None, timeout: float | None,
+             stdin: bytes | None) -> CommandResult:
+        # The working directory goes into the program text, where no startup file can change it.
+        prog, marks = launch.program(command, cwd, start=os.getcwd())
+        out, err, code, note = launch.run_process(launch.bash_argv(prog), stdin, timeout, marks.end)
+        out, err, code = launch.separate(out, err, code, marks, note)
+        return CommandResult(stdout=launch.decode(out), stderr=launch.decode(err), exit_code=code,
+                             hostname=self._hostname)
 
-    def put(self, local_path: str, remote_path: str) -> None:
+    def write(self, path: str, data: bytes, append: bool = False, parent: str | None = None,
+              executable: bool = False) -> CommandResult:
         """
-        Copy a file locally (local_path -> remote_path).
+        Write `data` to `path`, exactly (see `Executor.write`).
 
-        For local executor, this is just a file copy.
+        The bytes reach a fixed script's stdin, which the launch keeps parked while the login shell
+        initialises, so no startup file can read them; the script writes them to the file in place.
+        """
+        return self._run(launch.write_argv(path, append, parent, executable), None, None, data)
+
+    def put(self, local_path: str, remote_path: str) -> str:
+        """
+        Copy a file locally (local_path -> remote_path) and return the absolute destination.
+
+        Only a leading `~` or `~/` expands, to this process's HOME; a directory destination
+        receives the file under its own name.
 
         Args:
             local_path: Source path.
             remote_path: Destination path.
         """
-        local_path = os.path.expanduser(local_path)
-        remote_path = os.path.expanduser(remote_path)
-        shutil.copy2(local_path, remote_path)
+        return os.path.abspath(shutil.copy2(launch.expand_local(local_path), launch.expand_local(remote_path)))
 
-    def get(self, remote_path: str, local_path: str) -> None:
+    def get(self, remote_path: str, local_path: str) -> str:
         """
-        Copy a file locally (remote_path -> local_path).
+        Copy a file locally (remote_path -> local_path) and return the absolute destination.
 
-        For local executor, this is just a file copy.
+        Only a leading `~` or `~/` expands, to this process's HOME; a directory destination
+        receives the file under its own name.
 
         Args:
             remote_path: Source path.
             local_path: Destination path.
         """
-        remote_path = os.path.expanduser(remote_path)
-        local_path = os.path.expanduser(local_path)
-        shutil.copy2(remote_path, local_path)
+        return os.path.abspath(shutil.copy2(launch.expand_local(remote_path), launch.expand_local(local_path)))
 
     def __enter__(self) -> LocalShellExecutor:
         """Context manager entry."""

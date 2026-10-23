@@ -8,7 +8,11 @@ handshake-era client: every tool's description and input and output schemas, eve
 name, description and MIME type, and the instructions. It was written by
 `spec/stack-upgrade/verify/snapshot.py` run in an archive of that commit, in that commit's own
 locked environment, never on the current stack; the cycle's gates re-derive it there and require
-the committed file to be identical.
+the committed file to be identical. A deliberate surface change since then is a scripted hand-edit
+of the named deltas only, in the snapshot's shape, listed in AGENTS.md § Testing: so far
+`run_command.description`, `write_file.description`, `write_file.properties.encoding`,
+`sbatch.description`, `sbatch.properties.args`, and `description` and `properties.extra_args` on
+each of `sbatch`, `squeue`, `scancel`, `sacct` and `sinfo` (`safe-execution`).
 
 `surface_violations` compares what a client in the selected era is served now (`served_surface`)
 with the snapshot. No tool, argument, required argument, argument type or default, description,

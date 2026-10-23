@@ -19,7 +19,7 @@ ways that cost a job submission. Found while submitting and watching test jobs t
 - **`squeue` on a purged job id exits 1** rather than returning an empty result, so "the job
   finished a while ago" reads as an error.
 - **`script_content` writes into `~/jobs`** under a name derived from the job name, and can't take
-  arguments. ([`safe-execution.md`](safe-execution.md) adds `args` to `sbatch`; this cycle carries
+  arguments. ([`spec/safe-execution/`](../spec/safe-execution/) added `args` to `sbatch`; this cycle carries
   it into the new family.)
 - **Validation errors don't say what to send.** A rejected call names the failed check, not the
   accepted forms.
@@ -36,7 +36,7 @@ loop, one tool call per poll.
 Not deferred — a roadmap cycle in Part I. It is the Slurm capability distribution that
 [`capability-extras.md`](capability-extras.md) makes possible, it follows the naming, annotation and
 budget rules from [`tool-surface.md`](tool-surface.md), and it rides the argv executor from
-[`safe-execution.md`](safe-execution.md).
+[`spec/safe-execution/`](../spec/safe-execution/).
 
 **Pre-existing:** every problem above is on `main` today.
 
@@ -88,7 +88,7 @@ Every validation error names the accepted forms with an example. The remaining s
 - The Purdue wrappers (`jobinfo` and friends) are site commands; the generic `job_info` must not
   depend on them. [`site-extras.md`](site-extras.md) decides whether the site extra enriches
   `job_info` or registers its own view.
-- Related: [`safe-execution.md`](safe-execution.md) (`args`, the executor),
+- Related: [`spec/safe-execution/`](../spec/safe-execution/) (`args`, the executor),
   [`tool-surface.md`](tool-surface.md) (names, annotations, budgets, aliases),
   [`capability-extras.md`](capability-extras.md) (the distribution and its probe),
   [`lmod-tool-group.md`](lmod-tool-group.md) (`modules=[…]`), [`xdu-storage.md`](xdu-storage.md)

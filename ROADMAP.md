@@ -6,7 +6,7 @@ order. Nothing here is a contract — the factory's feature step promotes a seed
 that promotion is where appetite, non-goals and the R-IDs get negotiated with a human.
 
 The first three Parts each end in a release. **Part 0** makes the server safe and useful as it stands and
-ships as 0.1.2. **Part I** is the arc this project is actually on — becoming a general `cluster-mcp`
+ships as 0.1.3. **Part I** is the arc this project is actually on — becoming a general `cluster-mcp`
 rather than a Purdue-specific `rcac-mcp` — and ships as 0.2.0. **Part II** is the hosted mode that
 comes after. **Part III** holds infrastructure work that no release waits on.
 
@@ -27,10 +27,19 @@ seeds; its method lives in the operator's KB.
 
 # Part 0 — Safe and useful as it stands
 
-Three cycles remain, ending in **release 0.1.2**; `stack-upgrade` landed on `develop` on
-2026-10-17 ([`spec/stack-upgrade/`](spec/stack-upgrade/)), and `ci-workflow` on 2026-10-18
-([`spec/ci-workflow/`](spec/ci-workflow/)), so the release gate now runs on every push. The three
-fix what today's users hit, each built on the one before.
+Three cycles remain, ending in **release 0.1.3**: `ssh-reconnect-loop`, then
+`sbatch-script-name-collision`, then `agents-d-instructions`; the resource reads follow it,
+since it retires the cache a read would expose and may settle them outright. `stack-upgrade` landed
+on `develop` on 2026-10-17 ([`spec/stack-upgrade/`](spec/stack-upgrade/)), and `ci-workflow` on
+2026-10-18 ([`spec/ci-workflow/`](spec/ci-workflow/)), so the release gate now runs on every push.
+`safe-execution` landed on 2026-10-23 ([`spec/safe-execution/`](spec/safe-execution/)): every
+tool passes exactly what it was given, under one bash, and the three build on it to fix what
+today's users still hit.
+
+*Corrected 2026-10-23: release 0.1.2 was cut on 2026-10-22 from `develop` `90b0938`, before
+`safe-execution` landed. It carried the CI workflow, the sdist hygiene fix and a lock past two
+dependency advisories, so the release that closes Part 0, and the first to carry its executor
+fixes, is now 0.1.3.*
 
 *Corrected 2026-10-18: release 0.1.1 was cut early, on 2026-10-18 from `develop` `c68adaa`, before
 any of Part 0's fixes landed. It carried the dependency-stack upgrade, the docs strip, the test
@@ -40,33 +49,44 @@ suite and the both-era gates, so the release that closes Part 0 is now 0.1.2.*
 gained the dependency audit first; `ci-workflow`, landing next, mirrors that gate — audit
 included — through its "CI mirrors the gate" check.*
 
+*Corrected 2026-10-17: two small fixes that `safe-execution` found and deferred joined Part 0, right
+after that cycle: a lost SSH connection hangs every later call, and concurrent `sbatch` submissions
+can overwrite each other's script. Both are what today's users hit, and both are small, so they ship
+in the release that closes Part 0 (now 0.1.3) rather than wait for Part I.*
+
 *Corrected 2026-10-17: the `rcac://storage` fix moved under the resource-read entry below. Its
 handler runs `findscratch` and `myquota` through the request's executor, which a read does not get
 yet, so fixing the `TypeError` alone would only change the error a client sees.*
 
-## Every tool passes exactly what it was given
+## A lost SSH connection makes every later call wait forever
 
-Writes aren't byte-exact — `write_file` adds a trailing newline. Paths with spaces or special
-characters are mishandled. `sbatch` has no clean way to pass the script's own arguments.
-Commands mean different things under each user's login shell (zsh versus bash), and a wrong SSH
-host dies inside `initialize` with its reason on stderr only. The fix is one executor change: an
-argv-based API with quoting and `--` before caller-supplied paths, file content over SFTP or stdin,
-one pinned interpreter, one timeout contract, and `args` on `sbatch` so job arguments have a
-supported route. Every tool family in Part I is built on it.
+`SSHExecutor._ensure_connected` reconnects with a backoff whose loop condition stays true once the
+delay reaches its 10 s cap, so after the cluster drops out from under a running server, the next
+tool call retries every 10 s for as long as the server runs instead of failing with the host's
+name. A bounded retry that ends in an error fixes it. Pre-existing. Found by `safe-execution`'s
+planning research, 2026-10-17.
 
-*Horizon: near-term · Depends on: restore-test-coverage (cleared: landed on `develop` 2026-10-16) · Refs: absorbs `executor-timeout-asymmetry`; prerequisite for `agents-d-instructions`, `tool-surface`, `slurm-capability`*
-**Seed:** [`issues/safe-execution.md`](issues/safe-execution.md) · *status: unshaped*
+It comes first now that `safe-execution` has landed, because it is a hang a user sees in `ssh`
+mode, the default, and a small fix: `safe-execution` already bounds the first connect, and this
+bounds the reconnect the same way, so it ships in 0.1.3.
 
-### Absorbed: run() has two different contracts depending on the backend
+*Horizon: near-term · Depends on: safe-execution (its connect timeouts, P3; cleared: landed on `develop` 2026-10-23) · Refs: [`spec/safe-execution/`](spec/safe-execution/) research 02 §4*
+**Seed:** [`issues/ssh-reconnect-loop.md`](issues/ssh-reconnect-loop.md) · *status: unshaped*
 
-`LocalShellExecutor` and `DelegatingExecutor` catch `subprocess.TimeoutExpired` and return a
-`CommandResult` with `exit_code=-1`; `SSHExecutor` passes `timeout` to Fabric and catches nothing, so
-Invoke's `CommandTimedOut` propagates to the caller — in `ssh` mode, the default. The `-1` sentinel
-is separately overloaded with a real SIGHUP death. `safe-execution` reworks the `Executor` protocol
-anyway, so it settles the contract in the same move. Found by the harness port, 2026-08-26.
+## `sbatch` job scripts written in the same second share a name
 
-*Horizon: with safe-execution · Depends on: — · Refs: absorbed by `safe-execution`; all three backends move together*
-**Seed:** [`issues/executor-timeout-asymmetry.md`](issues/executor-timeout-asymmetry.md) · *status: unshaped*
+`sbatch` writes `script_content` to `~/jobs/<job_name>_<timestamp>.sh` with a one-second
+timestamp, so two submissions with the same name in the same second write one file: the first
+job's script on disk is replaced, and two overlapping calls can submit the same content twice. An
+exclusive create, or a unique part in the name, fixes it.
+Pre-existing. Found by `safe-execution`'s planning research, 2026-10-17.
+
+It sits in Part 0, not with the `job_*` family, because today's users submit concurrently (two
+clients of one server, an agent submitting a sweep in a loop) and can clobber each other's script
+now; the fix is small, and waiting for Part I would leave it in place until 0.2.0.
+
+*Horizon: near-term · Depends on: safe-execution (the byte-exact script write; cleared: landed on `develop` 2026-10-23) · Refs: [`spec/safe-execution/`](spec/safe-execution/) research 04 §7, PLAN risk 7; [`issues/slurm-capability.md`](issues/slurm-capability.md), whose `job_submit` inherits the fixed naming*
+**Seed:** [`issues/sbatch-script-name-collision.md`](issues/sbatch-script-name-collision.md) · *status: unshaped*
 
 ## The site's own rules should reach the model unasked
 
@@ -77,7 +97,7 @@ once through the executor, in a priority order so a client that cuts server inst
 thousand characters loses the least, within a configurable budget. A `cluster_context` tool returns
 the full text, the resource stays, and startup never hangs on the read.
 
-*Horizon: near-term · Depends on: stack-upgrade (both protocol eras carry instructions; cleared: landed on `develop` 2026-10-17), safe-execution (the executor it reads through) · Refs: absorbs `context-cache-cross-user`*
+*Horizon: near-term · Depends on: stack-upgrade (both protocol eras carry instructions; cleared: landed on `develop` 2026-10-17), safe-execution (the executor it reads through; cleared: landed on `develop` 2026-10-23) · Refs: absorbs `context-cache-cross-user`*
 **Seed:** [`issues/agents-d-instructions.md`](issues/agents-d-instructions.md) · *status: unshaped*
 
 ### Absorbed: one user's cluster context is served to every other user
@@ -116,9 +136,10 @@ request's executor, so the summary comes back only once a read has one: the two 
 *Horizon: with resource-reads-without-executor · Depends on: — · Refs: absorbed by `resource-reads-without-executor`; the same helper split that `generalize-storage-discovery` needs*
 **Seed:** [`issues/storage-paths-resource-typeerror.md`](issues/storage-paths-resource-typeerror.md) · *status: unshaped*
 
-**Release 0.1.2.** `main` fast-forwards to the released `develop` commit, and everyone who installs
+**Release 0.1.3.** `main` fast-forwards to the released `develop` commit, and everyone who installs
 `main` gets byte-exact writes, literal paths, `sbatch` arguments, one shell's semantics, clear
-connection errors and the site's rules in the instructions — under the name they already use.
+connection errors, a call that fails rather than hangs when the connection drops, job scripts that
+never overwrite each other, and the site's rules in the instructions — under the name they already use.
 Pages outside this repository that name its tools or install line — RCAC-Docs
 `docs/agentic-ai/mcp_servers.md` and `docs/agentic-ai/running_agents/local.md` — are updated when
 the release lands.
@@ -127,10 +148,12 @@ the release lands.
 
 # Part I — Becoming cluster-mcp
 
-Seven cycles that take this from *the Purdue RCAC MCP server* to *an MCP server for HPC clusters,
+Eight cycles that take this from *the Purdue RCAC MCP server* to *an MCP server for HPC clusters,
 with Purdue as one supported site*, ending in **release 0.2.0**. Rename and restructure what stays,
 make capabilities optional, then build each capability on that mechanism — Slurm first, then LMOD
 and xdu as the consumers that prove it generalizes — and finally the site extra that bundles them.
+Ahead of the tool families sits one executor fix, stopping a timed-out command, once its
+measurement is approved.
 
 ## Nothing here should assume Purdue
 
@@ -148,7 +171,7 @@ The environment-variable rename is the sharp edge — `RCAC_SSH_HOST` appears in
 client config, and `bin/sandbox.sh` unsets it by name to fail closed. A deprecation
 window, not a hard break; the old resource URIs are aliased through the same window.
 
-*Horizon: after 0.1.2 · Depends on: the docs strip (cleared: landed on `develop` 2026-10-16), release 0.1.2 (fixes ship under the old name first) · Refs: starts the `SERVER_INSTRUCTIONS` split that `site-extras` finishes*
+*Horizon: after 0.1.3 · Depends on: the docs strip (cleared: landed on `develop` 2026-10-16), release 0.1.3 (fixes ship under the old name first) · Refs: starts the `SERVER_INSTRUCTIONS` split that `site-extras` finishes*
 **Seed:** [`issues/rename-to-cluster-mcp.md`](issues/rename-to-cluster-mcp.md) · *status: unshaped*
 
 ## Capabilities you don't have shouldn't be tools you see
@@ -168,6 +191,22 @@ work around it.
 *Horizon: near-term after the rename · Depends on: the rename (the extras are named `cluster-mcp[…]`, and the workspace exists), stack-upgrade (FastMCP 4's providers are a candidate carrier; cleared: landed on `develop` 2026-10-17) · Refs: prerequisite for every capability entry below*
 **Seed:** [`issues/capability-extras.md`](issues/capability-extras.md) · *status: unshaped*
 
+## A timed-out command may keep running after its call returns
+
+Every mode now returns a result at the deadline, but whether the command stops is open over SSH
+(OpenSSH may ignore the `signal` request, and closing a non-PTY channel stops nothing) and under a
+non-root `delegate` server (TERM reaches only the command, through `sudo`). Measuring it needs a
+long-running process on a login node, outside the read-only dogfood class, so it waits for
+approval. Found by `safe-execution`'s planning research, 2026-10-17.
+
+It sits ahead of the tool families because they lean on bounded calls (a bounded `file_find`, a
+`job_wait` considered), which make a timeout a routine outcome on a shared login node rather than
+an accident. Its measurement needs Geoffrey's approval first; until it has it, nothing below waits
+on it.
+
+*Horizon: mid-term; the measurement needs Geoffrey's approval · Depends on: safe-execution (cleared: landed on `develop` 2026-10-23) · Refs: `AGENTS.md` § Invariants §3; [`spec/safe-execution/`](spec/safe-execution/) PLAN risk 4*
+**Seed:** [`issues/timeout-process-cleanup.md`](issues/timeout-process-cleanup.md) · *status: unshaped*
+
 ## Bespoke tools first, the shell last
 
 The file tools are too thin — `list_directory` costs a round trip per entry, `read_file` has no
@@ -180,8 +219,20 @@ as a net for mistakes, not a security boundary. A `--profile read-only` register
 read-only tools. Aliases versus a clean break for the old names, and names a client can allow-list
 by pattern, are open shaping questions.
 
-*Horizon: mid-term · Depends on: capability-extras (the core distribution it lands in), safe-execution (the argv executor) · Refs: sets the naming, annotation and budget rules every capability follows*
+*Horizon: mid-term · Depends on: capability-extras (the core distribution it lands in), safe-execution (the argv executor; cleared: landed on `develop` 2026-10-23) · Refs: sets the naming, annotation and budget rules every capability follows; absorbs `list-directory-parsing`*
 **Seed:** [`issues/tool-surface.md`](issues/tool-surface.md) · *status: unshaped*
+
+### Absorbed: `list_directory` misreads some entries
+
+`list_directory` parses the column text of `ls -l`, so a name with a newline is split, a symbolic
+link's name carries its `-> target`, a name loses its leading spaces, and a device file's
+`major, minor` size fails the whole call. Parsing a NUL-terminated form fixes all four.
+Pre-existing. Found by `safe-execution`'s planning research, 2026-10-17. The `file_*` family
+rewrites `list_directory` as `file_list`, so the parse is fixed once, in the rewrite, rather than
+patched in a tool about to be replaced.
+
+*Horizon: with tool-surface · Depends on: — · Refs: absorbed by `tool-surface`; [`spec/safe-execution/`](spec/safe-execution/) research 04 §4, PLAN risk 7*
+**Seed:** [`issues/list-directory-parsing.md`](issues/list-directory-parsing.md) · *status: unshaped*
 
 ## A job_* family that accepts what a model naturally sends
 
@@ -192,7 +243,7 @@ typed resources accepting an int or a string, `job_list` and `job_history` accep
 list, a consolidated `job_info`, `job_output`, `job_cancel`, and a bounded `job_wait` considered —
 is the first capability distribution, with validation errors that say what to send.
 
-*Horizon: mid-term · Depends on: capability-extras, tool-surface, safe-execution · Refs: the first consumer of the extras mechanism*
+*Horizon: mid-term · Depends on: capability-extras, tool-surface, safe-execution (cleared: landed on `develop` 2026-10-23) · Refs: the first consumer of the extras mechanism*
 **Seed:** [`issues/slurm-capability.md`](issues/slurm-capability.md) · *status: unshaped*
 
 ## Module systems are the other half of "can I run this"
@@ -266,7 +317,7 @@ the data, with no SSH round trip per call.
 A shared multi-user endpoint — one server that many users authenticate to — is out of scope for
 now.
 
-*Horizon: after 0.2.0 · Depends on: release 0.2.0, stack-upgrade (the HTTP transport; cleared: landed on `develop` 2026-10-17), safe-execution · Refs: adds a mode to the execution-mode ladder (`AGENTS.md` § Invariants §4)*
+*Horizon: after 0.2.0 · Depends on: release 0.2.0, stack-upgrade (the HTTP transport; cleared: landed on `develop` 2026-10-17), safe-execution (cleared: landed on `develop` 2026-10-23) · Refs: adds a mode to the execution-mode ladder (`AGENTS.md` § Invariants §4)*
 **Seed:** [`issues/https-token-mode.md`](issues/https-token-mode.md) · *status: unshaped*
 
 ---
@@ -294,7 +345,7 @@ FastMCP 2 build of the new surface to snapshot, so the only way to update the pi
 it, unchecked. A maintained snapshot command on the current stack, with a one-time re-baseline that
 retires the tolerated-difference list, settles it. Found by `stack-upgrade` P3, 2026-10-17.
 
-*Horizon: before the first cycle that changes the served surface · Depends on: — · Refs: `AGENTS.md` § Invariants §9 says the question is open; first needed by `safe-execution` (`args` on `sbatch`), `tool-surface` or `agents-d-instructions`, whichever lands first*
+*Horizon: before the next cycle that changes the served surface · Depends on: — · Refs: `AGENTS.md` § Invariants §9 says the question is open; `safe-execution` changed the surface first and hand-edited its deltas into the fixture (`AGENTS.md` § Testing); next needed by `tool-surface` or `agents-d-instructions`, whichever lands first*
 **Seed:** [`issues/surface-fixture-after-a-surface-change.md`](issues/surface-fixture-after-a-surface-change.md) · *status: unshaped*
 
 ## Nothing would catch the next silently wrong annotation
@@ -308,6 +359,27 @@ the plan's call. Found by `stack-upgrade`'s GOAL non-goals, carried at retiremen
 
 *Horizon: later · Depends on: — · Refs: runs where the gate runs, so CI picks it up through its mirror of the gate (`ci-workflow`; cleared: landed on `develop` 2026-10-18); [`spec/stack-upgrade/`](spec/stack-upgrade/) pins the one annotation*
 **Seed:** [`issues/annotation-check.md`](issues/annotation-check.md) · *status: unshaped*
+
+## A startup file's background job can delay a result, or reach it over SSH
+
+Startup output never reaches a result, but a background process a startup file leaves running holds
+the call open until it exits or the timeout, and over SSH a job the remote login shell's own rc file
+starts can write into the channel after the sentinel. Neither is separable without a PTY or a
+server-owned session. Found by `safe-execution`'s focused review, 2026-10-17.
+
+- 2026-10-18: the first case is fixed in `safe-execution` (a bounded grace once the command has
+  exited, in all three modes); the SSH rc-file case remains, stated as the documented exception.
+- 2026-10-18 (review cycle 2): the first case now stops once nothing has arrived for the grace,
+  not a fixed grace after the exit, and the result carries a note saying so.
+- 2026-10-22: the first case has no timing rule any more: the call returns at the command's end
+  records on both streams; the SSH rc-file case remains for what such a job writes before them.
+
+It stays here because no release waits on it: neither case shows with the clusters' default
+startup files (`safe-execution` research 01), and the fix is a different launch (a PTY, or a
+session the server owns), larger than a small cycle.
+
+*Horizon: later · Depends on: safe-execution (cleared: landed on `develop` 2026-10-23) · Refs: [`spec/safe-execution/`](spec/safe-execution/) PLAN §2.2a, risk 5*
+**Seed:** [`issues/startup-background-jobs.md`](issues/startup-background-jobs.md) · *status: unshaped*
 
 ## The `integration` marker says it drives the CLI, and not every integration test does
 

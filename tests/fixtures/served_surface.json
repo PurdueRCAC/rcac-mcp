@@ -322,7 +322,7 @@
    }
   },
   "run_command": {
-   "description": "Execute a shell command on the remote system.\n\nArgs:\n    command: The shell command to execute.\n    cwd: Working directory for command execution (supports ~ expansion).\n    timeout: Maximum time in seconds to wait for completion.\n\nReturns:\n    CommandResult containing stdout, stderr, exit_code, and hostname.\n\nExamples:\n    run_command(\"ls -la\")\n    run_command(\"pwd\", cwd=\"~/projects\")\n    run_command(\"sleep 5\", timeout=10)",
+   "description": "Execute a shell command on the remote system.\n\nThe command runs under bash, after the login initialisation (so `module` and the site's tools\nare available whatever the user's login shell). Nothing the initialisation prints is returned,\nwith one exception: over ssh, a background job started by the remote login shell's own rc file\n(zsh's .zshenv, say) can write into the result while the command runs. The result holds all of\nthe command's output, however slowly it arrives, and comes back as soon as the command has\nended: a background job it leaves running does not hold the call, and what that job prints\nafterwards is not returned.\n\nArgs:\n    command: The shell command to execute, as a bash script.\n    cwd: Working directory for command execution; a leading ~ or ~/ is the home of the user the command runs as.\n    timeout: Maximum time in seconds to wait for completion.\n\nReturns:\n    CommandResult containing stdout, stderr, exit_code, and hostname. On timeout, exit_code is\n    -1001 and stdout and stderr hold what was captured before the deadline; -1002 means the\n    command never started; -1003 means the connection was lost before the command's end was\n    reported, so it may have run. A command killed by signal N, or exiting 128+N for such a\n    signal, has exit_code -N.\n\nExamples:\n    run_command(\"ls -la\")\n    run_command(\"pwd\", cwd=\"~/projects\")\n    run_command(\"sleep 5\", timeout=10)",
    "inputSchema": {
     "properties": {
      "command": {
@@ -381,7 +381,7 @@
    }
   },
   "sacct": {
-   "description": "Query Slurm job accounting history.\n\nShows completed and running jobs from the accounting database.\nBy default shows only the current user's jobs with -X (no sub-steps).\n\nArgs:\n    user: Filter by username (-u/--user).\n    account: Filter by account (-A/--account).\n    job_ids: Specific job IDs to query (-j/--jobs).\n    name: Filter by job name (--name).\n    state: Filter by state (-s/--state), e.g., 'COMPLETED', 'FAILED'.\n    starttime: Start of time range (-S/--starttime), e.g., '2024-01-01'.\n    endtime: End of time range (-E/--endtime).\n    format: Output format (-o/--format), e.g., 'JobID,JobName,State,ExitCode'.\n    me: Show only current user's jobs (default: True).\n    extra_args: Additional sacct arguments.\n\nReturns:\n    Job accounting information.\n\nExamples:\n    sacct()\n    sacct(starttime='2024-01-01', state='FAILED')\n    sacct(job_ids=[19804935])\n    sacct(format='JobID,JobName,State,Elapsed,MaxRSS')",
+   "description": "Query Slurm job accounting history.\n\nShows completed and running jobs from the accounting database.\nBy default shows only the current user's jobs with -X (no sub-steps).\n\nArgs:\n    user: Filter by username (-u/--user).\n    account: Filter by account (-A/--account).\n    job_ids: Specific job IDs to query (-j/--jobs).\n    name: Filter by job name (--name).\n    state: Filter by state (-s/--state), e.g., 'COMPLETED', 'FAILED'.\n    starttime: Start of time range (-S/--starttime), e.g., '2024-01-01'.\n    endtime: End of time range (-E/--endtime).\n    format: Output format (-o/--format), e.g., 'JobID,JobName,State,ExitCode'.\n    me: Show only current user's jobs (default: True).\n    extra_args: Additional sacct options, one argument per element (e.g. ['--parsable2']),\n        placed after the options above; an element '--' is refused.\n\nReturns:\n    Job accounting information.\n\nExamples:\n    sacct()\n    sacct(starttime='2024-01-01', state='FAILED')\n    sacct(job_ids=[19804935])\n    sacct(format='JobID,JobName,State,Elapsed,MaxRSS')",
    "inputSchema": {
     "properties": {
      "account": {
@@ -409,7 +409,10 @@
      "extra_args": {
       "anyOf": [
        {
-        "type": "string"
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
        },
        {
         "type": "null"
@@ -507,13 +510,27 @@
    }
   },
   "sbatch": {
-   "description": "Submit a batch job to Slurm.\n\nEither script_path (existing file on cluster) or script_content\n(script text to write) must be provided. If script_content is given,\nthe script is written to ~/jobs/<job_name>_<timestamp>.sh before submission.\n\nArgs:\n    script_path: Path to existing job script on the cluster.\n    script_content: Job script content to write and submit.\n    job_name: Job name (-J/--job-name). Used in script filename if writing.\n    account: Slurm account to charge (-A/--account).\n    partition: Partition to submit to (-p/--partition).\n    qos: Quality of service (-q/--qos), e.g., 'standby'.\n    time: Wall time limit (-t/--time), e.g., '01:00:00'.\n    nodes: Number of nodes (-N/--nodes).\n    ntasks: Number of tasks (-n/--ntasks).\n    cpus_per_task: CPUs per task (-c/--cpus-per-task).\n    mem: Memory per node (--mem), e.g., '4G'.\n    gpus: GPU specification (--gpus), e.g., '1' or 'mi210:2'.\n    constraint: Node constraint (-C/--constraint).\n    output: Stdout file path (-o/--output).\n    error: Stderr file path (-e/--error).\n    extra_args: Additional sbatch arguments as a string.\n\nReturns:\n    The submitted job ID as a string.\n\nExamples:\n    sbatch(script_path='~/jobs/my_job.sh')\n    sbatch(\n        script_content='#!/bin/bash\\n#SBATCH -c 4\\npython train.py',\n        job_name='train',\n        account='mylab',\n        partition='gpu',\n        time='02:00:00',\n    )",
+   "description": "Submit a batch job to Slurm.\n\nEither script_path (existing file on cluster) or script_content\n(script text to write) must be provided. If script_content is given,\nthe script is written byte for byte (no newline added) to\n~/jobs/<job_name>_<timestamp>.sh and made executable before submission.\nEvery value reaches sbatch, or the job script, as exactly one argument.\n\nArgs:\n    script_path: Path to existing job script on the cluster (one literal path).\n    script_content: Job script content to write and submit.\n    args: Arguments for the job script, one per element, passed after its path.\n    job_name: Job name (-J/--job-name). Used in script filename if writing.\n    account: Slurm account to charge (-A/--account).\n    partition: Partition to submit to (-p/--partition).\n    qos: Quality of service (-q/--qos), e.g., 'standby'.\n    time: Wall time limit (-t/--time), e.g., '01:00:00'.\n    nodes: Number of nodes (-N/--nodes).\n    ntasks: Number of tasks (-n/--ntasks).\n    cpus_per_task: CPUs per task (-c/--cpus-per-task).\n    mem: Memory per node (--mem), e.g., '4G'.\n    gpus: GPU specification (--gpus), e.g., '1' or 'mi210:2'.\n    constraint: Node constraint (-C/--constraint).\n    output: Stdout file path (-o/--output).\n    error: Stderr file path (-e/--error).\n    extra_args: Additional sbatch options, one argument per element (e.g. ['--exclusive']),\n        placed after the options above and before the script path; an element '--' is refused.\n\nReturns:\n    The submitted job ID as a string.\n\nExamples:\n    sbatch(script_path='~/jobs/my_job.sh')\n    sbatch(script_path='~/jobs/sweep.sh', args=['--lr', '0.01', 'run one'])\n    sbatch(\n        script_content='#!/bin/bash\\n#SBATCH -c 4\\npython train.py\\n',\n        job_name='train',\n        account='mylab',\n        partition='gpu',\n        time='02:00:00',\n        extra_args=['--mail-type', 'END'],\n    )",
    "inputSchema": {
     "properties": {
      "account": {
       "anyOf": [
        {
         "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "args": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
        },
        {
         "type": "null"
@@ -557,7 +574,10 @@
      "extra_args": {
       "anyOf": [
        {
-        "type": "string"
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
        },
        {
         "type": "null"
@@ -703,7 +723,7 @@
    }
   },
   "scancel": {
-   "description": "Cancel Slurm jobs.\n\nProvide job_ids for specific jobs, or use filters to cancel matching jobs.\nUse me=True to cancel all your jobs (equivalent to scancel --me).\n\nArgs:\n    job_ids: Specific job IDs to cancel.\n    user: Cancel jobs for this user (-u/--user).\n    account: Cancel jobs under this account (-A/--account).\n    partition: Cancel jobs in this partition (-p/--partition).\n    state: Cancel jobs in this state (-t/--state).\n    name: Cancel jobs with this name (-n/--name).\n    me: Cancel all current user's jobs (--me).\n    extra_args: Additional scancel arguments.\n\nReturns:\n    Confirmation message or empty string on success.\n\nExamples:\n    scancel(job_ids=[19804935])\n    scancel(me=True)\n    scancel(state='PENDING', account='mylab')",
+   "description": "Cancel Slurm jobs.\n\nProvide job_ids for specific jobs, or use filters to cancel matching jobs.\nUse me=True to cancel all your jobs (equivalent to scancel --me).\n\nArgs:\n    job_ids: Specific job IDs to cancel.\n    user: Cancel jobs for this user (-u/--user).\n    account: Cancel jobs under this account (-A/--account).\n    partition: Cancel jobs in this partition (-p/--partition).\n    state: Cancel jobs in this state (-t/--state).\n    name: Cancel jobs with this name (-n/--name).\n    me: Cancel all current user's jobs (--me).\n    extra_args: Additional scancel options, one argument per element (e.g. ['--signal', 'USR1']),\n        placed after the options above; an element '--' is refused.\n\nReturns:\n    Confirmation message or empty string on success.\n\nExamples:\n    scancel(job_ids=[19804935])\n    scancel(me=True)\n    scancel(state='PENDING', account='mylab')",
    "inputSchema": {
     "properties": {
      "account": {
@@ -720,7 +740,10 @@
      "extra_args": {
       "anyOf": [
        {
-        "type": "string"
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
        },
        {
         "type": "null"
@@ -902,13 +925,16 @@
    }
   },
   "sinfo": {
-   "description": "Show cluster and partition status.\n\nDisplays information about nodes and partitions including\navailability, state, and resources.\n\nArgs:\n    partition: Filter by partition (-p/--partition).\n    nodes: Filter by node list (-n/--nodes).\n    state: Filter by node state (-t/--states), e.g., 'idle', 'alloc'.\n    format: Output format (-o/--format).\n    extra_args: Additional sinfo arguments.\n\nReturns:\n    Cluster/partition status information.\n\nExamples:\n    sinfo()\n    sinfo(partition='gpu')\n    sinfo(state='idle')",
+   "description": "Show cluster and partition status.\n\nDisplays information about nodes and partitions including\navailability, state, and resources.\n\nArgs:\n    partition: Filter by partition (-p/--partition).\n    nodes: Filter by node list (-n/--nodes).\n    state: Filter by node state (-t/--states), e.g., 'idle', 'alloc'.\n    format: Output format (-o/--format).\n    extra_args: Additional sinfo options, one argument per element (e.g. ['--Node', '--long']),\n        placed after the options above; an element '--' is refused.\n\nReturns:\n    Cluster/partition status information.\n\nExamples:\n    sinfo()\n    sinfo(partition='gpu')\n    sinfo(state='idle')",
    "inputSchema": {
     "properties": {
      "extra_args": {
       "anyOf": [
        {
-        "type": "string"
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
        },
        {
         "type": "null"
@@ -996,7 +1022,7 @@
    }
   },
   "squeue": {
-   "description": "View the Slurm job queue.\n\nBy default shows only the current user's jobs (--me). Set me=False\nand provide user/account to see other jobs.\n\nArgs:\n    user: Filter by username (-u/--user).\n    account: Filter by account (-A/--account).\n    partition: Filter by partition (-p/--partition).\n    state: Filter by job state (-t/--states), e.g., 'PENDING', 'RUNNING'.\n    job_ids: Specific job IDs to query (-j/--jobs).\n    me: Show only current user's jobs (default: True).\n    extra_args: Additional squeue arguments.\n\nReturns:\n    Job queue listing.\n\nExamples:\n    squeue()\n    squeue(state='PENDING')\n    squeue(me=False, account='mylab')\n    squeue(job_ids=[19804935, 19804936])",
+   "description": "View the Slurm job queue.\n\nBy default shows only the current user's jobs (--me). Set me=False\nand provide user/account to see other jobs.\n\nArgs:\n    user: Filter by username (-u/--user).\n    account: Filter by account (-A/--account).\n    partition: Filter by partition (-p/--partition).\n    state: Filter by job state (-t/--states), e.g., 'PENDING', 'RUNNING'.\n    job_ids: Specific job IDs to query (-j/--jobs).\n    me: Show only current user's jobs (default: True).\n    extra_args: Additional squeue options, one argument per element (e.g. ['--long']),\n        placed after the options above; an element '--' is refused.\n\nReturns:\n    Job queue listing.\n\nExamples:\n    squeue()\n    squeue(state='PENDING')\n    squeue(me=False, account='mylab')\n    squeue(job_ids=[19804935, 19804936])\n    squeue(extra_args=['--long'])",
    "inputSchema": {
     "properties": {
      "account": {
@@ -1013,7 +1039,10 @@
      "extra_args": {
       "anyOf": [
        {
-        "type": "string"
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
        },
        {
         "type": "null"
@@ -1181,7 +1210,7 @@
    }
   },
   "write_file": {
-   "description": "Write content to a file.\n\nArgs:\n    path: Path to the file (supports ~ expansion).\n    content: Content to write.\n    append: If True, append to file instead of overwriting.\n    create_dirs: If True, create parent directories if they don't exist.\n\nExamples:\n    write_file(\"~/output.txt\", \"Hello, World!\")\n    write_file(\"~/log.txt\", \"New entry\\n\", append=True)\n    write_file(\"~/new/path/file.txt\", \"content\", create_dirs=True)",
+   "description": "Write content to a file, byte for byte.\n\nThe file receives exactly the bytes sent: no newline is added, and empty content creates an\nempty file (or empties one). Invalid content is refused before the file is touched.\n\nArgs:\n    path: Path to the file (supports ~ expansion).\n    content: Content to write: text, or base64 when encoding is \"base64\".\n    append: If True, append to file instead of overwriting.\n    create_dirs: If True, create parent directories if they don't exist.\n    encoding: How content is given: \"utf-8\" (default; the text is written as its UTF-8 bytes)\n        or \"base64\" (decoded, and the decoded bytes written; use it for binary content). Under\n        \"base64\", spaces, tabs and line breaks are ignored; any other character outside the\n        base64 alphabet, or bad padding, is an error.\n\nExamples:\n    write_file(\"~/output.txt\", \"Hello, World!\")\n    write_file(\"~/log.txt\", \"New entry\\n\", append=True)\n    write_file(\"~/new/path/file.txt\", \"content\", create_dirs=True)\n    write_file(\"~/data.bin\", \"AAEC/w==\", encoding=\"base64\")",
    "inputSchema": {
     "properties": {
      "append": {
@@ -1194,6 +1223,14 @@
      "create_dirs": {
       "default": false,
       "type": "boolean"
+     },
+     "encoding": {
+      "default": "utf-8",
+      "enum": [
+       "utf-8",
+       "base64"
+      ],
+      "type": "string"
      },
      "path": {
       "type": "string"

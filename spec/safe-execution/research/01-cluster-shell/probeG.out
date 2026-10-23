@@ -1,0 +1,56 @@
+===== gautschi
+--- scontrol -- show node -probe
+Node -probe not found
+--- squeue --me -p -probe
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+--- sinfo -p -probe
+PARTITION AVAIL  TIMELIMIT  NODES  STATE NODELIST
+--- sacct -X -n -S now -A -probe
+rc=0
+--- sbatch --version
+slurm 26.05.4
+--- ls --time-style=long-isoa (today's show_hidden flags)
+rc=2
+ls: invalid argument ‘long-isoa’ for ‘time style’
+Valid arguments are:
+--- site tools: non-login vs login bash
+myquota         -c:/usr/local/bin/myquota  -lc:/usr/local/bin/myquota
+findscratch     -c:/usr/local/bin/findscratch  -lc:/usr/local/bin/findscratch
+showpartitions  -c:/usr/local/bin/showpartitions  -lc:/usr/local/bin/showpartitions
+slist           -c:/usr/local/bin/slist  -lc:/usr/local/bin/slist
+sfeatures       -c:/usr/local/bin/sfeatures  -lc:/usr/local/bin/sfeatures
+average_wait    -c:/usr/local/bin/average_wait  -lc:/usr/local/bin/average_wait
+jobinfo         -c:/usr/local/bin/jobinfo  -lc:/usr/local/bin/jobinfo
+jobcmd          -c:MISSING  -lc:<site-scripts>/jobcmd
+jobenv          -c:MISSING  -lc:<site-scripts>/jobenv
+jobscript       -c:MISSING  -lc:<site-scripts>/jobscript
+--- readlink
+readlink (GNU coreutils) 8.32
+===== negishi
+--- scontrol -- show node -probe
+Node -probe not found
+--- squeue --me -p -probe
+             JOBID PARTITION     NAME     USER ST       TIME  NODES NODELIST(REASON)
+--- sinfo -p -probe
+PARTITION AVAIL  TIMELIMIT  NODES  STATE NODELIST
+--- sacct -X -n -S now -A -probe
+rc=0
+--- sbatch --version
+slurm 26.05.4
+--- ls --time-style=long-isoa (today's show_hidden flags)
+rc=2
+ls: invalid argument ‘long-isoa’ for ‘time style’
+Valid arguments are:
+--- site tools: non-login vs login bash
+myquota         -c:/usr/local/bin/myquota  -lc:/usr/local/bin/myquota
+findscratch     -c:/usr/local/bin/findscratch  -lc:/usr/local/bin/findscratch
+showpartitions  -c:/usr/local/bin/showpartitions  -lc:/usr/local/bin/showpartitions
+slist           -c:/usr/local/bin/slist  -lc:/usr/local/bin/slist
+sfeatures       -c:/usr/local/bin/sfeatures  -lc:/usr/local/bin/sfeatures
+average_wait    -c:/usr/local/bin/average_wait  -lc:/usr/local/bin/average_wait
+jobinfo         -c:/usr/local/bin/jobinfo  -lc:/usr/local/bin/jobinfo
+jobcmd          -c:MISSING  -lc:<site-scripts>/jobcmd
+jobenv          -c:MISSING  -lc:<site-scripts>/jobenv
+jobscript       -c:MISSING  -lc:<site-scripts>/jobscript
+--- readlink
+readlink (GNU coreutils) 8.30

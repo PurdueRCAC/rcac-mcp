@@ -28,7 +28,7 @@ and a forwarded port is reachable from the user's own browser, which makes DNS r
 
 Not deferred — the Part II cycle, after release 0.2.0. It is built on the upgraded HTTP transport
 ([`spec/stack-upgrade/`](../spec/stack-upgrade/)) and the safe executor
-([`safe-execution.md`](safe-execution.md)), and it names its command and paths `cluster-mcp`
+([`spec/safe-execution/`](../spec/safe-execution/)), and it names its command and paths `cluster-mcp`
 ([`rename-to-cluster-mcp.md`](rename-to-cluster-mcp.md)).
 
 **Pre-existing:** n/a — new work.
@@ -96,7 +96,7 @@ node needs a real certificate and a site's network approval.
   cycle has to add a distinct, explicit mode to the execution-mode ladder rather than widen an
   existing rung — a human-gate change, rewritten in the same commit as the code.
 - The existing `delegate` mode and `-a jwt|oidc` are otherwise untouched by this cycle.
-- Related: [`spec/stack-upgrade/`](../spec/stack-upgrade/), [`safe-execution.md`](safe-execution.md),
+- Related: [`spec/stack-upgrade/`](../spec/stack-upgrade/), [`spec/safe-execution/`](../spec/safe-execution/),
   [`rename-to-cluster-mcp.md`](rename-to-cluster-mcp.md), [`xdu-storage.md`](xdu-storage.md)
   (index queries benefit most from running next to the data).
 - Found by: roadmap revision, 2026-10-16 (out of cycle).

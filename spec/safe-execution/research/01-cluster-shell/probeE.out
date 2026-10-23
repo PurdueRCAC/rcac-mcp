@@ -1,0 +1,18 @@
+===== gautschi
+--- under bash -l: where the job* tools come from
+jobcmd is <site-scripts>/jobcmd
+jobenv is <site-scripts>/jobenv
+jobscript is <site-scripts>/jobscript
+jobinfo is /usr/local/bin/jobinfo
+--- under zsh -c (today)
+/usr/local/bin/jobinfo
+--- average_wait option loop [site-script text redacted]
+===== negishi
+--- under bash -l: where the job* tools come from
+jobcmd is <site-scripts>/jobcmd
+jobenv is <site-scripts>/jobenv
+jobscript is <site-scripts>/jobscript
+jobinfo is /usr/local/bin/jobinfo
+--- under zsh -c (today)
+/usr/local/bin/jobinfo
+--- average_wait option loop [site-script text redacted]

@@ -1,0 +1,50 @@
+===== gautschi
+--- SSHExecutor.run(script) [login shell from passwd]  exit=0 1.13s
+login=no BASH_ENV= module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=glibc/2.34-nuyxhw7:gcc-runtime/11.4.1-7hex6dy:gmp/6.3.0-hi72rnc:mpfr/4.2.1-zaql3ll:mpc/1.3.1-r44rqhy:gcc/14.1.0:openmpi/5.0.5:xalt/3.1.4:modtree/cpu eqeq=ok ml_list=glibc/2.34-nuyxhw7 <H>,gcc-runtime/11.4.1-7hex6dy <H>,gmp/6.3.0-hi72rnc <H>,mpfr/4.2.1-zaql3ll <H>,mpc/1.3.1-r44rqhy <H>,gcc/14.1.0,openmpi/5.0.5,xalt/3.1.4,modtree/cpu,rcac,
+stderr: ''
+--- SSHExecutor.run(argv)  exit=0
+argv: MODULEPATH=set LOADED=glibc/2.34-nuyxhw7:gcc-runtime/11.4.1-7hex6dy:gmp/6.3.0-hi72rnc:mpfr/4.2.1-zaql3ll:mpc/1.3.1-r44rqhy:gcc/14.1.0:openmpi/5.0.5:xalt/3.1.4:modtree/cpu
+stderr: ''
+--- login shell ($SHELL as sshd set it): /bin/zsh
+--- built ssh exec string (head): exec /bin/bash --posix -c 'p=$(printf %s "$1" | base64 -d && printf .) && exec 57<&0 58>&1 59>&2 </dev/null >/dev/null 2>&1 && exec /bin/bash -l -c -- "${p%.}"' cluster-mcp XHVuYWxpYXMgLWEKdW5zZXQgLWY
+--- sshd-like env -i, /bin/bash -c <built ssh exec string>  exit=0
+login=no BASH_ENV= module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=glibc/2.34-nuyxhw7:gcc-runtime/11.4.1-7hex6dy:gmp/6.3.0-hi72rnc:mpfr/4.2.1-zaql3ll:mpc/1.3.1-r44rqhy:gcc/14.1.0:openmpi/5.0.5:xalt/3.1.4:modtree/cpu eqeq=ok ml_list=glibc/2.34-nuyxhw7 <H>,gcc-runtime/11.4.1-7hex6dy <H>,gmp/6.3.0-hi72rnc <H>,mpfr/4.2.1-zaql3ll <H>,mpc/1.3.1-r44rqhy <H>,gcc/14.1.0,openmpi/5.0.5,xalt/3.1.4,modtree/cpu,rcac,
+stderr: ''
+--- sshd-like env -i, /bin/zsh -c <built ssh exec string>  exit=0
+login=no BASH_ENV= module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=glibc/2.34-nuyxhw7:gcc-runtime/11.4.1-7hex6dy:gmp/6.3.0-hi72rnc:mpfr/4.2.1-zaql3ll:mpc/1.3.1-r44rqhy:gcc/14.1.0:openmpi/5.0.5:xalt/3.1.4:modtree/cpu eqeq=ok ml_list=glibc/2.34-nuyxhw7 <H>,gcc-runtime/11.4.1-7hex6dy <H>,gmp/6.3.0-hi72rnc <H>,mpfr/4.2.1-zaql3ll <H>,mpc/1.3.1-r44rqhy <H>,gcc/14.1.0,openmpi/5.0.5,xalt/3.1.4,modtree/cpu,rcac,
+stderr: ''
+--- sshd-like env -i, /bin/tcsh -c <built ssh exec string>  exit=0
+login=no BASH_ENV= module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=glibc/2.34-nuyxhw7:gcc-runtime/11.4.1-7hex6dy:gmp/6.3.0-hi72rnc:mpfr/4.2.1-zaql3ll:mpc/1.3.1-r44rqhy:gcc/14.1.0:openmpi/5.0.5:xalt/3.1.4:modtree/cpu eqeq=ok ml_list=glibc/2.34-nuyxhw7 <H>,gcc-runtime/11.4.1-7hex6dy <H>,gmp/6.3.0-hi72rnc <H>,mpfr/4.2.1-zaql3ll <H>,mpc/1.3.1-r44rqhy <H>,gcc/14.1.0,openmpi/5.0.5,xalt/3.1.4,modtree/cpu,rcac,
+stderr: ''
+--- sshd-like env -i, /bin/sh -c <built ssh exec string>  exit=0
+login=no BASH_ENV= module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=glibc/2.34-nuyxhw7:gcc-runtime/11.4.1-7hex6dy:gmp/6.3.0-hi72rnc:mpfr/4.2.1-zaql3ll:mpc/1.3.1-r44rqhy:gcc/14.1.0:openmpi/5.0.5:xalt/3.1.4:modtree/cpu eqeq=ok ml_list=glibc/2.34-nuyxhw7 <H>,gcc-runtime/11.4.1-7hex6dy <H>,gmp/6.3.0-hi72rnc <H>,mpfr/4.2.1-zaql3ll <H>,mpc/1.3.1-r44rqhy <H>,gcc/14.1.0,openmpi/5.0.5,xalt/3.1.4,modtree/cpu,rcac,
+stderr: ''
+--- sshd-like env -i, bash_argv(program) (the local/delegate wire)  exit=0
+login=no BASH_ENV= module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=glibc/2.34-nuyxhw7:gcc-runtime/11.4.1-7hex6dy:gmp/6.3.0-hi72rnc:mpfr/4.2.1-zaql3ll:mpc/1.3.1-r44rqhy:gcc/14.1.0:openmpi/5.0.5:xalt/3.1.4:modtree/cpu eqeq=ok ml_list=glibc/2.34-nuyxhw7 <H>,gcc-runtime/11.4.1-7hex6dy <H>,gmp/6.3.0-hi72rnc <H>,mpfr/4.2.1-zaql3ll <H>,mpc/1.3.1-r44rqhy <H>,gcc/14.1.0,openmpi/5.0.5,xalt/3.1.4,modtree/cpu,rcac,
+stderr: ''
+--- cost: 5 x run(["true"]) = 1.59s
+===== negishi
+--- SSHExecutor.run(script) [login shell from passwd]  exit=0 0.64s
+login=no BASH_ENV= module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=gmp/6.2.1:mpfr/4.0.2:mpc/1.1.0:zlib/1.2.13:gcc/12.2.0:numactl/2.0.14:openmpi/4.1.4:xalt/3.0.2:modtree/cpu eqeq=ok ml_list=gmp/6.2.1,mpfr/4.0.2,mpc/1.1.0,zlib/1.2.13,gcc/12.2.0,numactl/2.0.14,openmpi/4.1.4,xalt/3.0.2,modtree/cpu,rcac,
+stderr: ''
+--- SSHExecutor.run(argv)  exit=0
+argv: MODULEPATH=set LOADED=gmp/6.2.1:mpfr/4.0.2:mpc/1.1.0:zlib/1.2.13:gcc/12.2.0:numactl/2.0.14:openmpi/4.1.4:xalt/3.0.2:modtree/cpu
+stderr: ''
+--- login shell ($SHELL as sshd set it): /bin/zsh
+--- built ssh exec string (head): exec /bin/bash --posix -c 'p=$(printf %s "$1" | base64 -d && printf .) && exec 57<&0 58>&1 59>&2 </dev/null >/dev/null 2>&1 && exec /bin/bash -l -c -- "${p%.}"' cluster-mcp XHVuYWxpYXMgLWEKdW5zZXQgLWY
+--- sshd-like env -i, /bin/bash -c <built ssh exec string>  exit=0
+login=no BASH_ENV= module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=gmp/6.2.1:mpfr/4.0.2:mpc/1.1.0:zlib/1.2.13:gcc/12.2.0:numactl/2.0.14:openmpi/4.1.4:xalt/3.0.2:modtree/cpu eqeq=ok ml_list=gmp/6.2.1,mpfr/4.0.2,mpc/1.1.0,zlib/1.2.13,gcc/12.2.0,numactl/2.0.14,openmpi/4.1.4,xalt/3.0.2,modtree/cpu,rcac,
+stderr: ''
+--- sshd-like env -i, /bin/zsh -c <built ssh exec string>  exit=0
+login=no BASH_ENV= module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=gmp/6.2.1:mpfr/4.0.2:mpc/1.1.0:zlib/1.2.13:gcc/12.2.0:numactl/2.0.14:openmpi/4.1.4:xalt/3.0.2:modtree/cpu eqeq=ok ml_list=gmp/6.2.1,mpfr/4.0.2,mpc/1.1.0,zlib/1.2.13,gcc/12.2.0,numactl/2.0.14,openmpi/4.1.4,xalt/3.0.2,modtree/cpu,rcac,
+stderr: ''
+--- sshd-like env -i, /bin/tcsh -c <built ssh exec string>  exit=0
+login=no BASH_ENV= module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=gmp/6.2.1:mpfr/4.0.2:mpc/1.1.0:zlib/1.2.13:gcc/12.2.0:numactl/2.0.14:openmpi/4.1.4:xalt/3.0.2:modtree/cpu eqeq=ok ml_list=gmp/6.2.1,mpfr/4.0.2,mpc/1.1.0,zlib/1.2.13,gcc/12.2.0,numactl/2.0.14,openmpi/4.1.4,xalt/3.0.2,modtree/cpu,rcac,
+stderr: ''
+--- sshd-like env -i, /bin/sh -c <built ssh exec string>  exit=0
+login=no BASH_ENV= module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=gmp/6.2.1:mpfr/4.0.2:mpc/1.1.0:zlib/1.2.13:gcc/12.2.0:numactl/2.0.14:openmpi/4.1.4:xalt/3.0.2:modtree/cpu eqeq=ok ml_list=gmp/6.2.1,mpfr/4.0.2,mpc/1.1.0,zlib/1.2.13,gcc/12.2.0,numactl/2.0.14,openmpi/4.1.4,xalt/3.0.2,modtree/cpu,rcac,
+stderr: ''
+--- sshd-like env -i, bash_argv(program) (the local/delegate wire)  exit=0
+login=no BASH_ENV= module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=gmp/6.2.1:mpfr/4.0.2:mpc/1.1.0:zlib/1.2.13:gcc/12.2.0:numactl/2.0.14:openmpi/4.1.4:xalt/3.0.2:modtree/cpu eqeq=ok ml_list=gmp/6.2.1,mpfr/4.0.2,mpc/1.1.0,zlib/1.2.13,gcc/12.2.0,numactl/2.0.14,openmpi/4.1.4,xalt/3.0.2,modtree/cpu,rcac,
+stderr: ''
+--- cost: 5 x run(["true"]) = 1.49s

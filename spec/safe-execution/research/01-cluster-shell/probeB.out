@@ -1,0 +1,48 @@
+===== gautschi FLAGS=[-l]
+wire: exec /bin/bash -c 'exec /bin/bash -l -c "$(printf %s "$1" | base64 -d)" cluster-mcp' cluster-mcp cHJpbnRmICJsb2dpbj0lcyAiICIkKHNob3B0IC1xIGxvZ2luX3NoZWxsICYmIGVjaG8geWVzIHx8IGVjaG8gbm8pIjsgcHJpb
+--- real zsh login, wire with inner flags [-l]
+login=yes BASH_ENV=<lmod>/init/bash module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=glibc/2.34-nuyxhw7:gcc-runtime/11.4.1-7hex6dy:gmp/6.3.0-hi72rnc:mpfr/4.2.1-zaql3ll:mpc/1.3.1-r44rqhy:gcc/14.1.0:openmpi/5.0.5:xalt/3.1.4:modtree/cpu eqeq=ok ml_list=glibc/2.34-nuyxhw7 <H>,gcc-runtime/11.4.1-7hex6dy <H>,gmp/6.3.0-hi72rnc <H>,mpfr/4.2.1-zaql3ll <H>,mpc/1.3.1-r44rqhy <H>,gcc/14.1.0,openmpi/5.0.5,xalt/3.1.4,modtree/cpu,rcac,
+--- sshd-like env -i, outer /bin/bash -c, inner flags [-l]
+login=yes BASH_ENV=unset module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=glibc/2.34-nuyxhw7:gcc-runtime/11.4.1-7hex6dy:gmp/6.3.0-hi72rnc:mpfr/4.2.1-zaql3ll:mpc/1.3.1-r44rqhy:gcc/14.1.0:openmpi/5.0.5:xalt/3.1.4:modtree/cpu eqeq=ok ml_list=glibc/2.34-nuyxhw7 <H>,gcc-runtime/11.4.1-7hex6dy <H>,gmp/6.3.0-hi72rnc <H>,mpfr/4.2.1-zaql3ll <H>,mpc/1.3.1-r44rqhy <H>,gcc/14.1.0,openmpi/5.0.5,xalt/3.1.4,modtree/cpu,rcac,
+--- sshd-like env -i, outer /bin/zsh -c, inner flags [-l]
+login=yes BASH_ENV=<lmod>/init/bash module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=glibc/2.34-nuyxhw7:gcc-runtime/11.4.1-7hex6dy:gmp/6.3.0-hi72rnc:mpfr/4.2.1-zaql3ll:mpc/1.3.1-r44rqhy:gcc/14.1.0:openmpi/5.0.5:xalt/3.1.4:modtree/cpu eqeq=ok ml_list=glibc/2.34-nuyxhw7 <H>,gcc-runtime/11.4.1-7hex6dy <H>,gmp/6.3.0-hi72rnc <H>,mpfr/4.2.1-zaql3ll <H>,mpc/1.3.1-r44rqhy <H>,gcc/14.1.0,openmpi/5.0.5,xalt/3.1.4,modtree/cpu,rcac,
+--- sshd-like env -i, outer /bin/tcsh -c, inner flags [-l]
+login=yes BASH_ENV=unset module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=glibc/2.34-nuyxhw7:gcc-runtime/11.4.1-7hex6dy:gmp/6.3.0-hi72rnc:mpfr/4.2.1-zaql3ll:mpc/1.3.1-r44rqhy:gcc/14.1.0:openmpi/5.0.5:xalt/3.1.4:modtree/cpu eqeq=ok ml_list=glibc/2.34-nuyxhw7 <H>,gcc-runtime/11.4.1-7hex6dy <H>,gmp/6.3.0-hi72rnc <H>,mpfr/4.2.1-zaql3ll <H>,mpc/1.3.1-r44rqhy <H>,gcc/14.1.0,openmpi/5.0.5,xalt/3.1.4,modtree/cpu,rcac,
+--- sshd-like env -i, outer /bin/sh -c, inner flags [-l]
+login=yes BASH_ENV=unset module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=glibc/2.34-nuyxhw7:gcc-runtime/11.4.1-7hex6dy:gmp/6.3.0-hi72rnc:mpfr/4.2.1-zaql3ll:mpc/1.3.1-r44rqhy:gcc/14.1.0:openmpi/5.0.5:xalt/3.1.4:modtree/cpu eqeq=ok ml_list=glibc/2.34-nuyxhw7 <H>,gcc-runtime/11.4.1-7hex6dy <H>,gmp/6.3.0-hi72rnc <H>,mpfr/4.2.1-zaql3ll <H>,mpc/1.3.1-r44rqhy <H>,gcc/14.1.0,openmpi/5.0.5,xalt/3.1.4,modtree/cpu,rcac,
+===== negishi FLAGS=[-l]
+wire: exec /bin/bash -c 'exec /bin/bash -l -c "$(printf %s "$1" | base64 -d)" cluster-mcp' cluster-mcp cHJpbnRmICJsb2dpbj0lcyAiICIkKHNob3B0IC1xIGxvZ2luX3NoZWxsICYmIGVjaG8geWVzIHx8IGVjaG8gbm8pIjsgcHJpb
+--- real zsh login, wire with inner flags [-l]
+login=yes BASH_ENV=<lmod>/init/bash module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=gmp/6.2.1:mpfr/4.0.2:mpc/1.1.0:zlib/1.2.13:gcc/12.2.0:numactl/2.0.14:openmpi/4.1.4:xalt/3.0.2:modtree/cpu eqeq=ok ml_list=gmp/6.2.1,mpfr/4.0.2,mpc/1.1.0,zlib/1.2.13,gcc/12.2.0,numactl/2.0.14,openmpi/4.1.4,xalt/3.0.2,modtree/cpu,rcac,
+--- sshd-like env -i, outer /bin/bash -c, inner flags [-l]
+login=yes BASH_ENV=unset module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=gmp/6.2.1:mpfr/4.0.2:mpc/1.1.0:zlib/1.2.13:gcc/12.2.0:numactl/2.0.14:openmpi/4.1.4:xalt/3.0.2:modtree/cpu eqeq=ok ml_list=gmp/6.2.1,mpfr/4.0.2,mpc/1.1.0,zlib/1.2.13,gcc/12.2.0,numactl/2.0.14,openmpi/4.1.4,xalt/3.0.2,modtree/cpu,rcac,
+--- sshd-like env -i, outer /bin/zsh -c, inner flags [-l]
+login=yes BASH_ENV=<lmod>/init/bash module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=gmp/6.2.1:mpfr/4.0.2:mpc/1.1.0:zlib/1.2.13:gcc/12.2.0:numactl/2.0.14:openmpi/4.1.4:xalt/3.0.2:modtree/cpu eqeq=ok ml_list=gmp/6.2.1,mpfr/4.0.2,mpc/1.1.0,zlib/1.2.13,gcc/12.2.0,numactl/2.0.14,openmpi/4.1.4,xalt/3.0.2,modtree/cpu,rcac,
+--- sshd-like env -i, outer /bin/tcsh -c, inner flags [-l]
+login=yes BASH_ENV=unset module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=gmp/6.2.1:mpfr/4.0.2:mpc/1.1.0:zlib/1.2.13:gcc/12.2.0:numactl/2.0.14:openmpi/4.1.4:xalt/3.0.2:modtree/cpu eqeq=ok ml_list=gmp/6.2.1,mpfr/4.0.2,mpc/1.1.0,zlib/1.2.13,gcc/12.2.0,numactl/2.0.14,openmpi/4.1.4,xalt/3.0.2,modtree/cpu,rcac,
+--- sshd-like env -i, outer /bin/sh -c, inner flags [-l]
+login=yes BASH_ENV=unset module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=gmp/6.2.1:mpfr/4.0.2:mpc/1.1.0:zlib/1.2.13:gcc/12.2.0:numactl/2.0.14:openmpi/4.1.4:xalt/3.0.2:modtree/cpu eqeq=ok ml_list=gmp/6.2.1,mpfr/4.0.2,mpc/1.1.0,zlib/1.2.13,gcc/12.2.0,numactl/2.0.14,openmpi/4.1.4,xalt/3.0.2,modtree/cpu,rcac,
+===== gautschi FLAGS=[]
+wire: exec /bin/bash -c 'exec /bin/bash  -c "$(printf %s "$1" | base64 -d)" cluster-mcp' cluster-mcp cHJpbnRmICJsb2dpbj0lcyAiICIkKHNob3B0IC1xIGxvZ2luX3NoZWxsICYmIGVjaG8geWVzIHx8IGVjaG8gbm8pIjsgcHJpbnR
+--- real zsh login, wire with inner flags []
+login=no BASH_ENV=<lmod>/init/bash module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH= LOADED=unset eqeq=ok ml_list=No modules loaded,
+--- sshd-like env -i, outer /bin/bash -c, inner flags []
+login=no BASH_ENV=unset module=none LMOD_CMD=unset MODULEPATH= LOADED=unset eqeq=ok ml_list=cluster-mcp: line 1: module: command not found,module-failed,
+--- sshd-like env -i, outer /bin/zsh -c, inner flags []
+login=no BASH_ENV=<lmod>/init/bash module=none LMOD_CMD=unset MODULEPATH= LOADED=unset eqeq=ok ml_list=cluster-mcp: line 1: module: command not found,module-failed,
+--- sshd-like env -i, outer /bin/tcsh -c, inner flags []
+login=no BASH_ENV=unset module=none LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=glibc/2.34-nuyxhw7:gcc-runtime/11.4.1-7hex6dy:gmp/6.3.0-hi72rnc:mpfr/4.2.1-zaql3ll:mpc/1.3.1-r44rqhy:gcc/14.1.0:openmpi/5.0.5:xalt/3.1.4:modtree/cpu eqeq=ok ml_list=cluster-mcp: line 1: module: command not found,module-failed,
+--- sshd-like env -i, outer /bin/sh -c, inner flags []
+login=no BASH_ENV=unset module=none LMOD_CMD=unset MODULEPATH= LOADED=unset eqeq=ok ml_list=cluster-mcp: line 1: module: command not found,module-failed,
+===== negishi FLAGS=[]
+wire: exec /bin/bash -c 'exec /bin/bash  -c "$(printf %s "$1" | base64 -d)" cluster-mcp' cluster-mcp cHJpbnRmICJsb2dpbj0lcyAiICIkKHNob3B0IC1xIGxvZ2luX3NoZWxsICYmIGVjaG8geWVzIHx8IGVjaG8gbm8pIjsgcHJpbnR
+--- real zsh login, wire with inner flags []
+login=no BASH_ENV=<lmod>/init/bash module=function LMOD_CMD=<lmod>/libexec/lmod MODULEPATH= LOADED=unset eqeq=ok ml_list=No modules loaded,
+--- sshd-like env -i, outer /bin/bash -c, inner flags []
+login=no BASH_ENV=unset module=none LMOD_CMD=unset MODULEPATH= LOADED=unset eqeq=ok ml_list=cluster-mcp: module: command not found,module-failed,
+--- sshd-like env -i, outer /bin/zsh -c, inner flags []
+login=no BASH_ENV=<lmod>/init/bash module=none LMOD_CMD=unset MODULEPATH= LOADED=unset eqeq=ok ml_list=cluster-mcp: module: command not found,module-failed,
+--- sshd-like env -i, outer /bin/tcsh -c, inner flags []
+login=no BASH_ENV=unset module=none LMOD_CMD=<lmod>/libexec/lmod MODULEPATH=set LOADED=gmp/6.2.1:mpfr/4.0.2:mpc/1.1.0:zlib/1.2.13:gcc/12.2.0:numactl/2.0.14:openmpi/4.1.4:xalt/3.0.2:modtree/cpu eqeq=ok ml_list=cluster-mcp: module: command not found,module-failed,
+--- sshd-like env -i, outer /bin/sh -c, inner flags []
+login=no BASH_ENV=unset module=none LMOD_CMD=unset MODULEPATH= LOADED=unset eqeq=ok ml_list=cluster-mcp: module: command not found,module-failed,

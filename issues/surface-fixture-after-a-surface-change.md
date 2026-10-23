@@ -55,3 +55,6 @@ move the snapshot script into `tests/` or `bin/`.
 - Related: `spec/stack-upgrade/` (P3 and its amendments); the first cycles that change the served
   surface: `safe-execution` (`args` on `sbatch`), `tool-surface`, `agents-d-instructions`.
 - Found by: `stack-upgrade` P3 (2026-10-17), filed at P7.
+- 2026-10-23: `safe-execution` landed the first deliberate surface change by hand-editing its
+  deltas into the 2.x-shaped fixture (listed in `AGENTS.md` § Testing), so R3's comparison with
+  the `3d010ec` surface has to allow those deltas as well as `TOLERATED`.

@@ -1,0 +1,24 @@
+===== gautschi
+--- profile.d files naming lmod/modules
+/etc/profile.d/00-modulepath.sh
+/etc/profile.d/modules.sh
+/etc/profile.d/z01_default_module.sh
+--- where BASH_ENV comes from (zsh startup files)
+/etc/profile.d/modules.sh
+--- /etc/bashrc sources profile.d for non-login shells? [system-file text redacted; see the brief]
+--- user startup files present (names only) [the account's own files redacted]
+--- startup cost, 5 runs each (seconds)
+bash -c true x5: 0.074225902557373047
+bash -l -c true x5: 1.4716794490814209
+===== negishi
+--- profile.d files naming lmod/modules
+/etc/profile.d/00-modulepath.sh
+/etc/profile.d/modules.sh
+/etc/profile.d/z01_default_module.sh
+--- where BASH_ENV comes from (zsh startup files)
+/etc/profile.d/modules.sh
+--- /etc/bashrc sources profile.d for non-login shells? [system-file text redacted; see the brief]
+--- user startup files present (names only) [the account's own files redacted]
+--- startup cost, 5 runs each (seconds)
+bash -c true x5: 0.012952089309692383
+bash -l -c true x5: 1.2531416416168213

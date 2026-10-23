@@ -14,6 +14,7 @@ from typing import Optional
 
 # Internal libs
 from rcac_mcp.context import get_executor
+from rcac_mcp.scripts import fixed, script_argv
 
 # Public interface
 __all__ = ['RESOURCE_REGISTRY', 'load_cluster_context', 'get_cached_context']
@@ -21,6 +22,9 @@ __all__ = ['RESOURCE_REGISTRY', 'load_cluster_context', 'get_cached_context']
 
 # Cache for cluster context (loaded once per connection)
 _cluster_context_cache: dict[str, str] = {}
+
+# The context files: a maxdepth-1 glob of /etc/agents.d, in `sort` order (§8 of AGENTS.md).
+LIST_CONTEXT = fixed('find /etc/agents.d -maxdepth 1 -name "*.md" -type f 2>/dev/null | sort')
 
 
 def load_cluster_context(executor) -> str:
@@ -44,9 +48,7 @@ def load_cluster_context(executor) -> str:
         return _cluster_context_cache[hostname]
 
     # Find all .md files in /etc/agents.d/
-    find_result = executor.run(
-        'find /etc/agents.d -maxdepth 1 -name "*.md" -type f 2>/dev/null | sort'
-    )
+    find_result = executor.run(script_argv(LIST_CONTEXT, 'cluster_context'))
 
     if find_result.exit_code != 0 or not find_result.stdout.strip():
         # Directory doesn't exist or no files found
@@ -61,7 +63,7 @@ def load_cluster_context(executor) -> str:
             continue
 
         # Read file content
-        cat_result = executor.run(f'cat {filepath}')
+        cat_result = executor.run(['cat', '--', filepath])
         if cat_result.exit_code == 0 and cat_result.stdout.strip():
             # Extract filename for header
             filename = filepath.split('/')[-1]

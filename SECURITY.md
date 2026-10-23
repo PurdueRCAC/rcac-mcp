@@ -51,7 +51,7 @@ rcac-mcp
 
 ```
 ┌─────────────────┐      HTTP        ┌─────────────────┐
-│   MCP Client    │ ◄──────────────► │  rcac-mcp       │ ──► local $SHELL
+│   MCP Client    │ ◄──────────────► │  rcac-mcp       │ ──► local bash
 │                 │                  │  (http server)  │
 └─────────────────┘                  └─────────────────┘
 ```
@@ -91,7 +91,9 @@ and delegates commands to authenticated users.
 - Each request is authenticated via JWT or OIDC
 - User identity is extracted from token claims (`sub`, `email`, or `preferred_username`)
 - Identity is mapped to a local Unix user via the user map file
-- Commands are wrapped with `sudo -n -H -u <local_user> ...`
+- Commands are wrapped with `sudo -n -H -u <local_user> ...`, and start in that user's home
+- File transfers (`upload_file`, `download_file`) also run as the mapped user, through the same
+  `sudo` launch; the server process reads and writes no file on a user's behalf
 - OS-level controls (sudoers, PAM, SELinux, etc.) enforce what each user can do
 
 **Configuration:**

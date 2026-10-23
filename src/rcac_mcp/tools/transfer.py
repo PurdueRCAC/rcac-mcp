@@ -11,6 +11,17 @@ from rcac_mcp.tools import mcp_tool
 from rcac_mcp.context import get_executor
 
 
+def _path(name: str, path: str) -> str:
+    """`path`, or a ValueError naming the parameter when it is empty.
+
+    An empty path names no file, but a copy tool may read it as the current directory (BSD `cp`
+    does) and an SFTP server may resolve it to the login home, so it is refused before anything runs.
+    """
+    if not path:
+        raise ValueError(f'{name} is empty: an empty path names no file')
+    return path
+
+
 @mcp_tool
 def upload_file(local_path: str, remote_path: str) -> str:
     """
@@ -27,14 +38,9 @@ def upload_file(local_path: str, remote_path: str) -> str:
         upload_file("/tmp/data.csv", "~/data/input.csv")
         upload_file("./script.py", "/home/user/scripts/run.py")
     """
+    # The executor reports the absolute path it wrote, computed on the side the file landed on.
     executor = get_executor()
-    executor.put(local_path, remote_path)
-
-    # Return the resolved absolute path
-    result = executor.run(f'readlink -f {remote_path}')
-    if result.exit_code == 0:
-        return result.stdout.strip()
-    return remote_path
+    return executor.put(_path('local_path', local_path), _path('remote_path', remote_path))
 
 
 @mcp_tool
@@ -53,10 +59,6 @@ def download_file(remote_path: str, local_path: str) -> str:
         download_file("~/results/output.csv", "/tmp/output.csv")
         download_file("/var/log/app.log", "./logs/app.log")
     """
-    import os
-
+    # The executor reports the absolute path it wrote, computed on the side the file landed on.
     executor = get_executor()
-    executor.get(remote_path, local_path)
-
-    # Return the resolved absolute path
-    return os.path.abspath(os.path.expanduser(local_path))
+    return executor.get(_path('remote_path', remote_path), _path('local_path', local_path))
