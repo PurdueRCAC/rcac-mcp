@@ -424,6 +424,9 @@ def _plant(home: Path) -> None:
     (home / 'read-only').chmod(0o444)
     (home / 'dangling-dir').symlink_to(home / 'no such dir' / 'file')
     (home / 'dangling-file').symlink_to(home / 'missing-target')
+    (home / 'loop-a').symlink_to(home / 'loop-b')
+    (home / 'loop-b').symlink_to(home / 'loop-a')
+    (home / 'loop-dir').symlink_to('loop-dir')
     for name, mode in (('setuid', 0o4755), ('setgid', 0o2755)):
         (home / name).write_bytes(OLD)
         (home / name).chmod(mode)
@@ -436,13 +439,14 @@ def test_a_write_refuses_what_cat_refuses(target: Target) -> None:
     _plant(home)
     try:
         outcomes = target.write([{'path': f'~/{name}', 'content': PAYLOAD} for name in
-                                 ('read-only', 'dangling-dir', 'dangling-file', 'setuid', 'setgid')])
+                                 ('read-only', 'dangling-dir', 'dangling-file', 'setuid', 'setgid',
+                                  'loop-a', 'loop-dir/x')])
         held = {name: ((home / name).read_bytes() if (home / name).exists() else None,
                        stat.S_IMODE((home / name).stat().st_mode) if (home / name).exists() else None)
                 for name in ('read-only', 'setuid', 'setgid', 'missing-target')}
     finally:
         (home / 'read-only').chmod(0o644)
-    refused_read_only, refused_dangling, dangling_file, setuid, setgid = outcomes
+    refused_read_only, refused_dangling, dangling_file, setuid, setgid, *loops = outcomes
     violations = []
     if not refused_read_only.is_error or 'Permission denied' not in refused_read_only.text:
         violations.append(f'a read-only target was not refused as `cat >` refuses it: {refused_read_only!r:.300}')
@@ -462,4 +466,12 @@ def test_a_write_refuses_what_cat_refuses(target: Target) -> None:
         if outcome.is_error or held[name] != (PAYLOAD.encode(), 0o755):
             violations.append(f'a {name} target kept or lost the wrong bits: {outcome!r:.200}, it holds '
                               f'{held[name][0]!r:.40} with mode {held[name][1]:o}, not 755 as `cat >` leaves it')
+    # A loop of links, as the target or in its directory, is refused for what it is, never as missing.
+    for name, outcome in zip(('loop-a', 'loop-dir/x'), loops):
+        if not outcome.is_error or 'Too many levels of symbolic links' not in outcome.text \
+                or 'does not exist' in outcome.text or 'No such file' in outcome.text:
+            violations.append(f'a write through a loop of links ({name}) was not refused as `cat >` refuses it: '
+                              f'{outcome!r:.300}')
+    if not all((home / name).is_symlink() for name in ('loop-a', 'loop-b', 'loop-dir')):
+        violations.append('a loop of links did not stay links')
     assert violations == [], '\n'.join(violations)

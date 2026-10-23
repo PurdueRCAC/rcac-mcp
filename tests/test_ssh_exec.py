@@ -41,6 +41,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+import paramiko
 import pytest
 
 import argv_echo
@@ -902,6 +903,38 @@ def test_a_lost_connection_is_never_did_not_start(when: str, tmp_path: Path, exe
         violations.append(f'a submission whose connection was lost read as {submitted!r:.300}: it must say the job '
                           'may have been submitted, never that it failed')
     assert violations == [], f'{when}:\n' + '\n'.join(violations)
+
+
+# How long the client's transport is held, once it has woken the channels of a lost connection,
+# before it marks itself inactive (Paramiko does the two in that order).
+UNWIND = 0.05
+
+
+@pytest.mark.integration
+def test_a_lost_link_at_exec_is_lost_while_the_transport_unwinds(tmp_path: Path,
+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    # The wait on the exec request wakes while the transport still reads as active: a lost link
+    # there is still lost, never a refusal raised.
+    unlink = paramiko.Transport._unlink_channel
+
+    def held(transport: paramiko.Transport, chanid: int) -> None:
+        if not transport.server_mode:
+            time.sleep(UNWIND)
+        unlink(transport, chanid)
+
+    monkeypatch.setattr(paramiko.Transport, '_unlink_channel', held)
+    home = (tmp_path / 'home').resolve()
+    home.mkdir()
+    with DroppingSSH(home, '/bin/bash', tmp_path, 'before-the-reply') as server:
+        executor = server.executor()
+        try:
+            result = executor.run(['touch', '--', 'ran'], timeout=30)
+        except Exception as exc:
+            pytest.fail(f'a command whose connection was lost before the reply raised {exc!r} instead of returning')
+        finally:
+            executor.close()
+    assert (home / 'ran').exists(), 'the command did not run, so the drop proves nothing'
+    assert (result.stdout, result.stderr, result.exit_code) == ('', LOST_NOTE, CONNECTION_LOST_EXIT_CODE), result
 
 
 # ---------------------------------------------------------------------------------------------

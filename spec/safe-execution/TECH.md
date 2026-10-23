@@ -3,7 +3,7 @@ slug: safe-execution
 title: Every tool passes exactly what it was given, under one interpreter
 kind: fix
 appetite: big
-status: blocked
+status: in_review
 branch: fix/safe-execution
 base: develop
 current_phase: done
@@ -923,6 +923,38 @@ land in `base.py` and in **all three** backends in one commit (§2); every comma
     each era, the suite `1615 passed` in each, its 13 named mutants killed, both controls correct,
     `--help` exit 0; 8 min 44 s. Every image the full-volume rows attached was detached. Linux,
     bash 5: CI on the pushed head.
+  - **Review cycle 5 remediation (Geoffrey's ruling, 2026-10-22: both items, one commit).**
+    P2 reopened; its gate is already the stored P7 gate.
+    - **Loop message (LOW).** Over SFTP a loop of links reads as a missing file (OpenSSH's
+      `sftp-server` maps ELOOP to "no such file") or a bare `Failure` (the loopback), so a link
+      loop over ssh was refused naming a "missing" directory that exists. `write` now resolves the
+      path itself when staging fails (`ssh._loops`, link by link, `ssh.MAX_LINKS` = 40 as Linux
+      counts) and raises `ELOOP` "Too many levels of symbolic links", as local and delegate say.
+      Error path only: a write that stages costs no extra round trip. **Pin:** two loop rows in
+      `test_a_write_refuses_what_cat_refuses[local|delegate|ssh|ssh-openssh]` (`loop-a`↔`loop-b`
+      as the target, `loop-dir/x` through a self-loop): refused with that text, never "does not
+      exist" or "No such file", the links kept. Red before the fix: `[ssh]` ("Failure") and
+      `[ssh-openssh]` (the missing-directory text) failed, local and delegate passed. The loopback
+      SFTP now stats the directories above its jail (only their status), since a client resolving
+      an absolute link text walks from `/`.
+    - **Exec race (MEDIUM).** Paramiko 5 wakes the wait on an exec request (`Channel._unlink`)
+      before it marks a lost transport inactive, so `is_active()` read straight after could re-raise
+      `EOFError`. `_exec` now lets the transport finish closing (`transport.join(ssh.SETTLE)`,
+      1 s) before it decides: still active is a live server's refusal and raises; anything else is
+      `-1003`. **Pin:** `test_a_lost_link_at_exec_is_lost_while_the_transport_unwinds`, the
+      reviewer's 50 ms held in the client's `Transport._unlink_channel` by monkeypatch, on
+      `DroppingSSH` `before-the-reply`: 20 of 20 runs raised `EOFError` on the pre-fix `ssh.py`,
+      20 of 20 return `-1003` with the note after.
+    - **Mutants.** New (2): `link-loop-named-missing` (killed by `[ssh]` and `[ssh-openssh]`),
+      `lost-link-at-exec-unsettled` (killed by the race pin). `lost-link-at-exec-raised` keeps its
+      anchor. The sweep goes from 183 to 185 cases.
+    - **Texts.** AGENTS §2 (the loop refusal) and §3 (`SETTLE`), § Testing's write-refusal,
+      loopback-SFTP and lost-link entries; `base.py`'s and `ssh.py`'s `write` docstrings and
+      `_exec`'s.
+    - **Gates.** Local, macOS (bash 3.2, OpenSSH `sftp-server`), on the tree of this commit but this
+      note: the stored P7 gate, `1618 passed` in each era, 0 skipped; the sweep green, 185 of 185
+      cases killed and both controls correct; sandboxed `--help` exit 0; 15 min 36 s. P6's rows are
+      not touched, so its gate was not re-run. Linux, bash 5: CI on the pushed head.
 - **Verify:** frontmatter `P2.verify`.
 - **Touches:** `src/rcac_mcp/executor/*`, `src/rcac_mcp/tools/shell.py` (docstring), `src/rcac_mcp/__init__.py` (`APP_HELP` only), `tests/{harness,conftest,ssh_server,test_ssh_exec,test_ssh_smoke,test_executors,test_hygiene,mutants,test_mutations}.py`, `tests/fixtures/served_surface.json`, `AGENTS.md`, `README.md`, `SECURITY.md`, `issues/`, `ROADMAP.md`.
 

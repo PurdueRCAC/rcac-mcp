@@ -50,6 +50,14 @@ INITIAL_RECONNECT_DELAY: float = 0.5  # Initial delay for exponential backoff
 # Seconds to wait for the server to open a session channel.
 OPEN_TIMEOUT: Final = 30.0
 
+# Seconds a transport is given to finish closing once an exec request fails. Paramiko wakes the wait
+# on the request before it marks a lost connection inactive, so only a transport still active after
+# this long is a live server that refused the request.
+SETTLE: Final = 1.0
+
+# How many symbolic links a path may pass through before it is a loop, as Linux counts them (ELOOP).
+MAX_LINKS: Final = 40
+
 # Default bound, in seconds, on each step of connecting: the TCP connect, the server's SSH banner and
 # authentication. A whole number: Fabric truncates the connect timeout to an int, and 0 means none.
 CONNECT_TIMEOUT: Final = 15
@@ -249,6 +257,40 @@ def _is_dir(sftp: SFTPClient, path: str) -> bool:
         return stat.S_ISDIR(sftp.stat(path).st_mode or 0)
     except OSError:
         return False
+
+
+def _loops(sftp: SFTPClient, path: str) -> bool:
+    """Whether resolving SFTP path `path` passes through more than `MAX_LINKS` symbolic links.
+
+    The path is resolved here, a component at a time, by the links' own text, as a kernel resolves
+    it: a server's SFTP reports a loop as a missing file (OpenSSH) or a bare `Failure`. A component
+    that cannot be read ends the walk: that path does not loop.
+    """
+    try:
+        done = '/' if path.startswith('/') else sftp.normalize('.')
+        todo = [part for part in reversed(path.split('/')) if part]
+        links = 0
+        while todo:
+            part = todo.pop()
+            if part == '.':
+                continue
+            if part == '..':
+                done = posixpath.dirname(done)
+                continue
+            step = posixpath.join(done, part)
+            if not stat.S_ISLNK(sftp.lstat(step).st_mode or 0):
+                done = step
+                continue
+            links += 1
+            if links > MAX_LINKS:
+                return True
+            names = sftp.readlink(step) or ''
+            if names.startswith('/'):
+                done = '/'
+            todo.extend(reversed([part for part in names.split('/') if part]))
+    except OSError:
+        return False
+    return False
 
 
 def _staging(sftp: SFTPClient, path: str) -> tuple[str, str | None, bool]:
@@ -480,7 +522,8 @@ class SSHExecutor:
 
         The end of stdin goes at once: the channel carries no byte to the command, so nothing the
         remote login shell's rc files run can read anything from it. A connection lost once the
-        request has gone returns `CONNECTION_LOST_EXIT_CODE`: the command may have run.
+        request has gone returns `CONNECTION_LOST_EXIT_CODE`: the command may have run. A request that
+        fails while the connection stays up (`SETTLE` after the failure) was refused: it raises.
         """
         chan = transport.open_session(timeout=OPEN_TIMEOUT)
         try:
@@ -489,7 +532,9 @@ class SSHExecutor:
                 chan.shutdown_write()
             except (SSHException, EOFError, OSError):
                 # Refused by a live server, the command never ran; but once the request has gone on a
-                # connection that is then lost, it may have.
+                # connection that is then lost, it may have. The transport is first let finish closing:
+                # Paramiko wakes this wait before it marks a lost connection inactive.
+                transport.join(SETTLE)
                 if transport.is_active():
                     raise
                 return b'', b'', CONNECTION_LOST_EXIT_CODE, launch.LOST_NOTE
@@ -510,7 +555,8 @@ class SSHExecutor:
         permission bits but setuid and setgid (a new file gets the mode `cat >` would give it). An
         existing target the user may not write is refused, as `cat >` refuses it. An append adds
         the staged bytes to the target. A symbolic link is followed to the file it names; one whose
-        target's directory does not exist is refused, and stays. A target that is not a regular
+        target's directory does not exist is refused, and stays, and a path that passes through a
+        loop of links is refused as `cat >` refuses it (`Too many levels of symbolic links`). A target that is not a regular
         file, or a regular file in a directory this user may not add to, is written through
         instead, from a staging directory in the login home. A transfer that fails or falls short
         leaves the target untouched; the remote filesystem is then asked the reason (`PROBE`). The
@@ -518,7 +564,8 @@ class SSHExecutor:
 
         Raises:
             OSError: The content could not be staged (the target is a directory or a link whose
-                target's directory does not exist, its directory is missing or closed, a transfer
+                target's directory does not exist, its path passes through a loop of links
+                (`ELOOP`), its directory is missing or closed, a transfer
                 failed or fell short, with the reason); nothing was written.
         """
         if not path:
@@ -530,16 +577,23 @@ class SSHExecutor:
                 made = self.run(launch.fixed_argv(MAKE_PARENT, 'cluster-mcp-write', UserPath(parent)))
                 if made.exit_code != 0:
                     return made
-            target, mode, through = _staging(sftp, _remote(path))
-            near = '.' if through else posixpath.dirname(target) or '.'
+            remote = _remote(path)
             try:
-                directory, staged = _stage(sftp, near)
-            except OSError as exc:
-                if exc.errno not in CLOSED or mode is None or through:
-                    raise
-                # A writable file in a directory closed to new entries: written through, as before.
-                through = True
-                directory, staged = _stage(sftp, '.')
+                target, mode, through = _staging(sftp, remote)
+                near = '.' if through else posixpath.dirname(target) or '.'
+                try:
+                    directory, staged = _stage(sftp, near)
+                except OSError as exc:
+                    if exc.errno not in CLOSED or mode is None or through:
+                        raise
+                    # A writable file in a directory closed to new entries: written through, as before.
+                    through = True
+                    directory, staged = _stage(sftp, '.')
+            except OSError:
+                # SFTP reports a loop as a missing file or a bare failure: name it, as `cat >` does.
+                if _loops(sftp, remote):
+                    raise OSError(errno.ELOOP, 'Too many levels of symbolic links', path) from None
+                raise
             expected = posixpath.join(directory, EXPECTED)
             try:
                 try:

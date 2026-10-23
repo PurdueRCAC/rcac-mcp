@@ -163,9 +163,10 @@ class Executor(Protocol):
 
         Raises:
             OSError: Over `ssh`, the content could not be staged (the target is a directory, a
-                symbolic link whose target's directory does not exist, or its directory is missing
-                or closed to the user, or the transfer failed or fell short, with the reason, such
-                as `No space left on device`); nothing was written.
+                symbolic link whose target's directory does not exist, a path through a loop of
+                links (`ELOOP`), or its directory is missing or closed to the user, or the transfer
+                failed or fell short, with the reason, such as `No space left on device`); nothing
+                was written.
         """
         ...
 

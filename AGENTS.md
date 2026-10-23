@@ -298,8 +298,10 @@ import has no effect.
     what `cat >` refuses and leaves what it leaves, alike in every mode and over ssh with OpenSSH's
     own `sftp-server` (`test_a_write_refuses_what_cat_refuses[local|delegate|ssh|ssh-openssh]`): a
     read-only target is refused with `Permission denied` and unchanged, a link whose target's
-    directory is missing is refused and stays a link (over ssh the error names the target), a link
-    to a missing file creates it, and a setuid or setgid target comes back mode 755. A profile that
+    directory is missing is refused and stays a link (over ssh the error names the target), a loop
+    of links, as the target or in its directory, is refused with `Too many levels of symbolic
+    links` (never as a missing file) and stays, a link to a missing file creates it, and a setuid
+    or setgid target comes back mode 755. A profile that
     exports functions over `cat`, `mkdir` and `chmod` and exports `noclobber` and `pipefail` in
     `SHELLOPTS` changes no write, `create_dirs` or job script (`test_a_profile_cannot_change_a_fixed_script`;
     bash 3.2 refuses an exported `SHELLOPTS`, so locally only the functions half can fail).
@@ -514,7 +516,8 @@ import has no effect.
     before stdin, as sshd does, so a command that starts later meets a broken pipe; its environment
     carries `SSH_CLIENT` and `SSH_CONNECTION`, as sshd's does; it records the bytes each exec received
     on stdin, and its SFTP creates, changes and removes files and directories with the permissions
-    asked for, reads links and resolves them in `normalize`, as OpenSSH's does; it can fail a write
+    asked for, reads links and resolves them in `normalize`, as OpenSSH's does, and stats the
+    directories above its jail, as a client resolving a path from `/` stats them; it can fail a write
     at a size with ENOSPC or EDQUOT, report a short write as done, change a staged byte, or fail a
     staged file's close; with `sftp_server` it relays SFTP to OpenSSH's own `sftp-server` instead).
     `DroppingSSH` runs a command to its end and drops the connection with its output unsent, after
@@ -543,7 +546,10 @@ import has no effect.
     placed (`test_a_staged_file_that_is_not_what_was_sent_is_never_placed[short|changed|close-fails]`),
     and `ssh.cksum` matches POSIX `cksum` and the host's. A connection lost after the command ran,
     or before the exec request was answered, returns `-1003` with its note, never `-1002`, and
-    `sbatch` says the job may have been submitted (`test_a_lost_connection_is_never_did_not_start`). A `.bash_profile` or `.zshenv`
+    `sbatch` says the job may have been submitted (`test_a_lost_connection_is_never_did_not_start`);
+    it is lost, never raised, while Paramiko still marks the transport active after waking the exec
+    request's wait (`test_a_lost_link_at_exec_is_lost_while_the_transport_unwinds`, the transport held
+    50 ms there). A `.bash_profile` or `.zshenv`
     that `cd`s elsewhere does not move the start from the login home; a remote rc file (`.zshenv`,
     or the `.bashrc` bash reads under sshd) that reads stdin in the foreground and from a
     background job (`head -c 1 &`) reads none of a write's content: a 160,000-byte `write_file` and
@@ -1150,9 +1156,12 @@ The two leaf files at the end of this list are footguns, not human-gated paths.
   closed to new entries, is written through instead, staged in the login home; the staging
   directory is removed on every path. A write refuses what `cat >` refuses: an existing target the
   user may not write (`[ -w ]`: a read-only file, another user's file in a group-writable
-  directory) fails with `Permission denied`, and a symbolic link whose target's directory does not
+  directory) fails with `Permission denied`, a symbolic link whose target's directory does not
   exist fails naming that target, the link kept (one to a missing file in an existing directory
-  creates the file, as `cat >` does). A target that is a directory, a missing directory, or a
+  creates the file, as `cat >` does), and a path through a loop of links fails with `Too many
+  levels of symbolic links` (`ELOOP`), as `cat >` fails, the links kept: SFTP reports a loop as a
+  missing file or a bare `Failure`, so `ssh` resolves the path itself, link by link, to name it.
+  A target that is a directory, a missing directory, or a
   transfer that failed or fell short (a full filesystem, a spent quota, a failed close) raises
   `OSError` over `ssh` and leaves the target untouched (the tools report it as a failed write); as
   OpenSSH's SFTP reports only `Failure`, the remote filesystem is then asked the cause, by
@@ -1221,9 +1230,13 @@ The two leaf files at the end of this list are footguns, not human-gated paths.
     `cluster-mcp: the connection was lost; the command may have run` (`launch.LOST_NOTE`). It is
     never `-1002`: a command whose start sentinel had not arrived when the link went may still have
     run. `sbatch` reports it as a submission that may have happened, never as a failure, so an
-    agent checks `squeue` before submitting again. Pinned by `tests/ssh_server.py`'s `DroppingSSH`,
-    which runs the command to its end and drops the connection with its output unsent, after the
-    exec request is answered or before (`test_a_lost_connection_is_never_did_not_start`).
+    agent checks `squeue` before submitting again. A failed exec request raises only when the
+    transport is still active `ssh.SETTLE` (1 s) later, a live server's refusal: Paramiko wakes the
+    request's wait before it marks a lost connection inactive. Pinned by `tests/ssh_server.py`'s
+    `DroppingSSH`, which runs the command to its end and drops the connection with its output
+    unsent, after the exec request is answered or before
+    (`test_a_lost_connection_is_never_did_not_start`, and
+    `test_a_lost_link_at_exec_is_lost_while_the_transport_unwinds` with that unwinding held open).
 - **Nothing the login initialisation prints reaches a result, with one exception.** The launch
   parks the command's streams while the login shell initialises, and every program prints a
   per-call sentinel first; each backend's `run` passes its streams through `launch.separate`, which

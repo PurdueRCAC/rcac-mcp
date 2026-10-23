@@ -32,7 +32,8 @@ An SFTP subsystem serves the same filesystem, starting in the home, as OpenSSH's
 directory is created with the permissions the client asks for (the process umask narrowing them),
 a client can change them, remove a file or an empty directory, read a symbolic link, and
 `normalize` resolves symbolic links. It refuses any path outside `jail` (the test's own temporary tree), so a transfer that
-resolves somewhere else fails loudly instead of touching the real filesystem. Authentication is one generated client key; the client
+resolves somewhere else fails loudly instead of touching the real filesystem; only the directories above the jail can be
+stat'ed, as a client resolving a path from `/` stats them. Authentication is one generated client key; the client
 side is isolated from the developer's SSH setup (`executor()` builds an `SSHExecutor` with no key
 lookup, no agent and an empty SSH config). It can fail a write at a size, as a full filesystem
 or a quota does, report a short write as done, or change a staged byte (`write_limit`,
@@ -136,8 +137,13 @@ class _SFTP(paramiko.SFTPServerInterface):
         resolved = os.path.realpath(real)
         return resolved if resolved == self.jail or resolved.startswith(self.jail + os.sep) else real
 
+    def _above(self, path: str) -> str | None:
+        # A directory the jail is in: only its own status is served, never what it holds.
+        real = os.path.normpath(path) if os.path.isabs(path) else None
+        return real if real is not None and (self.jail + os.sep).startswith(real.rstrip(os.sep) + os.sep) else None
+
     def _stat(self, path: str, how: Any) -> Any:
-        real = self._real(path)
+        real = self._real(path) or self._above(path)
         if real is None:
             return paramiko.SFTP_PERMISSION_DENIED
         try:
