@@ -3,7 +3,7 @@ slug: agents-d-instructions
 title: Serve /etc/agents.d as the server's instructions
 kind: feature
 appetite: big
-status: in_review
+status: blocked
 branch: feature/agents-d-instructions
 base: develop
 current_phase: done
@@ -64,10 +64,10 @@ phases:
   hill: uphill
   verify: sh spec/agents-d-instructions/verify/p4.sh && uv run python spec/agents-d-instructions/remediation/F3-delegate-others.py docs
 review:
-  last_reviewed_commit: ef8322d0b1ee8ad0247d3387389f275e21b190fc
+  last_reviewed_commit: 1e1b9705345bc898095cc2d6acebd71a5becc030
   verdict: changes-requested
-  blocked_reason: CRITICAL budget unit (§9) + 2 LOW + 1 PLAUSIBLE + C12
-  cycle: 1
+  blocked_reason: HIGH C12 partial (group, ancestors, ACL) + 2 LOW
+  cycle: 2
 ---
 
 # TECH.md — Serve /etc/agents.d as the server's instructions
