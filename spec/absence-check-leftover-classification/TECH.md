@@ -29,7 +29,7 @@ phases:
   attempts: 2
   verify: sh spec/absence-check-leftover-classification/verify/gate.sh P1
 review:
-  last_reviewed_commit: a7f3e2844785600ce419eeef1c5f76d8ceec34e6
+  last_reviewed_commit: 6123288fb91b85128415b4891a66e8c17179292f
   verdict: approved
   blocked_reason: ''
   cycle: 4

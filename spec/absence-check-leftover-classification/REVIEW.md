@@ -189,3 +189,25 @@
     `uv.lock`.
 - **Human gate:** none (cycles 1–3 recorded none; `AGENTS.md`'s line is the ruling's item 5).
 - **Verdict: approved**, pinned to `a7f3e28`.
+
+## Landing merge — develop merged in, checked blind; approved (2026-10-23)
+
+- **Why:** the squash onto `develop` (`5cf6e40`) conflicted in `tests/conftest.py` and `ROADMAP.md`:
+  `safe-execution` landed first, with `need_shell` and a static check that admitted only it as a
+  skip. PLAN §5 assigned the reconciliation to whichever cycle landed second.
+- **Merge** `155a4e3`: both helpers kept in `conftest.py` (develop's `SANDBOX`, the same path);
+  `test_hygiene.py`'s check admits `SKIP_HELPERS = {'need_shell', 'need_git'}`, with planted rows
+  for `need_git` in and outside conftest and for a third helper; `AGENTS.md` names both as the
+  suite's only skips; both ROADMAP entries kept. `d51848c` moved the gate's base to `5cf6e40` and
+  admitted `tests/test_hygiene.py` to its scope check.
+- **Checks:** full verify `1718 passed` per era; `gate.sh P1` green, 33 mutants killed; CI
+  40000335422 green on `d51848c`.
+- **Blind merge check** (one reviewer, scoped to the merge): clean. Both parents' conftest
+  definitions survive unchanged; planted skips show the check still fences (a third helper, a skip
+  in a fixture, `need_git` redefined elsewhere are caught); nothing on develop names "the only
+  skip" or anchors on moved text; `1718 passed` per era with `CI=true`. Two LOW, CONFIRMED, fixed
+  in `6123288`: a comment said the workflow installs git (the runner image carries it), and blank
+  lines and a reflow. Not caused by the merge, and filed for the roadmap step: the static skip check
+  admits a helper nested or redefined in conftest, a module whose name ends in `conftest.py`, and
+  `pytest.skip.__call__`.
+- **Verdict: approved**, pinned to `6123288`.
