@@ -3,10 +3,10 @@ slug: agents-d-instructions
 title: Serve /etc/agents.d as the server's instructions
 kind: feature
 appetite: big
-status: in_progress
+status: in_review
 branch: feature/agents-d-instructions
 base: develop
-current_phase: P4
+current_phase: done
 last_updated: '2026-10-23'
 phases:
 - id: P1
@@ -52,7 +52,7 @@ phases:
   verify: sh spec/agents-d-instructions/verify/p3.sh
 - id: P4
   name: Documentation, mutants and the deferral ledger
-  status: pending
+  status: done
   satisfies:
   - R10
   depends_on:
@@ -246,26 +246,38 @@ no executor; the cache is gone; the base instructions are the compact rewrite na
 mutant, and nothing deferred is left unrecorded. R10's evidence is in the repo (`AGENTS.md`,
 `README.md`, `server.py`), not under `spec/`, so the blind reviewer can grade it.
 
-- [ ] `AGENTS.md` § Testing: `test_site.py`, `test_context.py`, `test_site_startup.py`, the new
+- [x] `AGENTS.md` § Testing: `test_site.py`, `test_context.py`, `test_site_startup.py`, the new
       harness verbs, and the three fixture deltas; the Footguns list's `resources.py` entry becomes
       `site.py` (the per-server holder); the Repository map gains `site.py` and `tools/context.py`;
       the Architecture section notes the startup read.
-- [ ] Mutants in `tests/mutants.py`, each run with `--self-check` and killed for its `why`:
+- [x] Mutants in `tests/mutants.py`, each run with `--self-check` and killed for its `why`:
       `site-agents-md-included`, `site-byte-order`, `site-budget-overflow`, `site-read-unbounded`
       (factor 2), `startup-ssh-unbounded`, `context-rereads`, `context-through-executor` (plus the
       re-anchored `instructions-dropped`); a parametrised target is named with its id.
-- [ ] Re-read PLAN § 5 and every phase body above for "known limitation", "left as a follow-up",
+      *Amended at build:* `site-read-unbounded`, `startup-ssh-unbounded` and `context-rereads` had
+      only a bare `assert` to be killed for, so their targets' assertions gained messages naming the
+      contract (`past its 0.3 s bound`, `a hung read held startup`, `what is served changed after
+      startup`); `context-through-executor` plants a run through the request's executor in
+      `tools/context.py` and is killed on the shared rows for `an executor ran`.
+- [x] Re-read PLAN § 5 and every phase body above for "known limitation", "left as a follow-up",
       "do not fix here": each needs an `issues/{slug}.md` (from the KB's `ISSUE.md`,
       `status: unshaped`) and a `ROADMAP.md` entry, or `.security/` if sensitive. Known candidates:
       none deferred by design; the open question on file order is the maintainer's, not a deferral.
-- [ ] Do **not** narrow `resource-reads-without-executor`'s ROADMAP entry or retire the seeds here;
+      *Amended at build:* the re-read found two items PLAN § 5 records and leaves, neither
+      security-sensitive, filed as `issues/site-file-size-cap.md` ("No size cap on a file") and
+      `issues/fastmcp-update-check.md` (FastMCP's startup update check, pre-existing), each with
+      its `ROADMAP.md` entry in Part III.
+- [x] Do **not** narrow `resource-reads-without-executor`'s ROADMAP entry or retire the seeds here;
       that is `code rcac-mcp roadmap` after landing (C10).
-- [ ] Standing last-phase items: the deferral ledger above; no other project-level obligation is
+- [x] Standing last-phase items: the deferral ledger above; no other project-level obligation is
       carried by the previous cycle's last phase in this repo.
 - **Verify:** `sh spec/agents-d-instructions/verify/p4.sh` (`docs_gate.py all`, then the profile's
   full verify). `p4.sh docs` is the pre-push part.
 - **Touches:** `AGENTS.md`, `tests/mutants.py`, `tests/test_mutations.py` (anchors), `ROADMAP.md`
-  and `issues/` only if something was deferred.
+  and `issues/` only if something was deferred. *Amended at build:* also the assertion messages in
+  `tests/test_site.py`, `tests/test_site_startup.py` and `tests/test_context.py` (the mutants'
+  `why`), and `tests/test_context.py`'s two citations of a GOAL clarification, restated as the rule
+  itself (the foreman's ruling on P3: no spec ids in the suite, in spirit).
 
 ---
 

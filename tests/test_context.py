@@ -9,9 +9,9 @@ the same hostname identical text.
 
 In `delegate` mode the tool reaches only a mapped user: the middleware refuses every tool call from
 an authenticated identity absent from the user map, before the body runs (§ Invariants §5), and the
-tool is no exception. The instructions and the resource reach any client that can connect. That is
-the intended behaviour, ruled in the agents-d-instructions GOAL's clarification C11: the site text is
-world-readable administrative markdown, so the difference discloses nothing.
+tool is no exception, while the instructions and `rcac://context` reach any client that can
+connect. That is intended: the site text is world-readable administrative markdown, so the
+difference discloses nothing.
 """
 
 from __future__ import annotations
@@ -160,14 +160,16 @@ def test_a_changed_directory_changes_nothing_served(tmp_path: Path, monkeypatch:
         return seen
 
     seen = drive(scenario())
-    assert seen[0][0] == '<!-- Source: a.md -->\nAlpha.' and len(set(seen)) == 1, seen
+    assert seen[0][0] == '<!-- Source: a.md -->\nAlpha.', seen
+    assert len(set(seen)) == 1, f'what is served changed after startup: {seen}'
 
 
 @pytest.mark.unit
 def test_an_unmapped_user_reads_the_resource_and_is_refused_the_tool(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, launches: list[list[str]], guard) -> None:
-    # Intended, not provisional (agents-d-instructions GOAL, clarification C11): the user map gates
-    # the tool as it gates every tool, and the instructions and the resource reach any client.
+    # Intended, not provisional: the user map gates tool calls in `delegate` mode, this one included,
+    # while the instructions and `rcac://context` reach any client that can connect; the site text is
+    # world-readable administrative markdown, so the difference discloses nothing.
     monkeypatch.setenv('JWT_SECRET', SECRET)
     map_path = user_map(tmp_path, USER_MAP)
     context = SITES['files']

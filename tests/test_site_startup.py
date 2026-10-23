@@ -97,7 +97,8 @@ def test_a_hung_read_does_not_hold_startup(argv: list[str], budget: str | None, 
     if budget:
         argv = [*argv, '--instructions-budget', str(site.minimum_budget(SERVER_INSTRUCTIONS, SENTINEL))]
     observed = start(argv, monkeypatch, tmp_path, caplog, reads, hang=5.0)
-    assert observed['status'] == 0 and observed['seconds'] < 1.0, observed
+    assert observed['status'] == 0, observed
+    assert observed['seconds'] < 1.0, f"a hung read held startup {observed['seconds']:.2f} s, past its 0.5 s bound"
     [built] = observed['built']
     assert built['site'].failed and 'did not finish within 0.5 s' in built['site'].reason
 

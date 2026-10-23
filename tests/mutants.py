@@ -719,6 +719,48 @@ CASES: tuple[Case, ...] = (
          ('test_protocol.py::test_client_era_is_served[legacy-memory]',
           'test_protocol.py::test_client_era_is_served[modern-memory]'),
          'instructions differ'),
+    # The site read skips the assembled AGENTS.md, which repeats the topic files.
+    Case('site-agents-md-included', 'site.py',
+         (("    return fnmatch.fnmatchcase(name, '*.md') and name != EXCLUDED\n",
+           "    return fnmatch.fnmatchcase(name, '*.md')\n"),),
+         ('test_site.py::test_local_read_takes_the_eligible_files_in_byte_order',),
+         'files:'),
+    # The files are ordered by the bytes of their names, whatever the locale.
+    Case('site-byte-order', 'site.py',
+         (("key=lambda f: f.name.encode('utf-8'))", "key=lambda f: f.name.lower())"),),
+         ('test_site.py::test_local_read_takes_the_eligible_files_in_byte_order',),
+         'files:'),
+    # The composed instructions never exceed the budget.
+    Case('site-budget-overflow', 'site.py',
+         (("        if units(_render(base, trial, rest)) <= budget:\n",
+           "        if units(_render(base, trial, rest)) <= budget + 40:\n"),),
+         ('test_site.py::test_compose_keeps_its_contract_at_every_budget[sizes0]',),
+         'over the budget'),
+    # A read that has not finished is abandoned at its bound, not at twice it.
+    Case('site-read-unbounded', 'site.py',
+         (("        return box.get(timeout=timeout)\n", "        return box.get(timeout=timeout * 2)\n"),),
+         ('test_site.py::test_bounded_read_times_out_and_contains_errors',),
+         'past its 0.3 s bound'),
+    # In ssh mode the startup read is bounded too, not only the local one.
+    Case('startup-ssh-unbounded', '__init__.py',
+         (("            return site_context.read_bounded(lambda: site_context.read_remote(executor), 'the cluster')\n",
+           "            return site_context.read_remote(executor)\n"),),
+         ('test_site_startup.py::test_a_hung_read_does_not_hold_startup[ssh]',),
+         'a hung read held startup'),
+    # What a server serves is the text read at startup, whatever the directory holds later.
+    Case('context-rereads', 'site.py',
+         (("    return _SITES[server]\n", "    return read_local() if _SITES[server].files else _SITES[server]\n"),),
+         ('test_context.py::test_a_changed_directory_changes_nothing_served',),
+         'what is served changed after startup'),
+    # The tool answers from the startup text and runs nothing through the request's executor.
+    Case('context-through-executor', 'tools/context.py',
+         (("    return site_of(get_server()).text\n",
+           "    from rcac_mcp.context import get_executor\n"
+           "    get_executor().run(['cat', '--', '/etc/agents.d/a.md'])\n"
+           "    return site_of(get_server()).text\n"),),
+         ('test_context.py::test_tool_and_resource_serve_the_startup_text[shared-files-legacy]',
+          'test_context.py::test_tool_and_resource_serve_the_startup_text[shared-files-modern]'),
+         'an executor ran'),
     # Every tool's served description is its full docstring, as FastMCP 2.x served it; FastMCP 4
     # alone serves only the summary paragraph.
     Case('tool-description-summary-only', 'tools/__init__.py',

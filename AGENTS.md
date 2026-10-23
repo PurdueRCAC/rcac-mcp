@@ -134,7 +134,8 @@ Top-level package `src/rcac_mcp/`:
 | `middleware.py` | `SharedExecutorMiddleware` (ssh/local) and `AuthExecutorMiddleware` (delegate) — both set the per-request executor in `on_call_tool` — and `ToolErrorMiddleware`, the error boundary `create_mcp_server` adds before them, which turns an exception raised around a tool call into a tool error result carrying `str(exc)`. |
 | `auth.py` | `AUTH_MODES` registry: `none` → `None`, `jwt` → `JWTVerifier`, `oidc` → `OIDCProxy`. Enforces the `JWT_SECRET` minimum and OIDC's all-four check. |
 | `token.py` | `ISSUER`/`AUDIENCE`/`ALGORITHM` constants + `generate_token()` (the `--generate-token` path). Signer side of the JWT contract. |
-| `resources.py` | `RESOURCE_REGISTRY` — `rcac://context` (loads `/etc/agents.d/*.md` from the cluster) and `rcac://storage`. |
+| `site.py` | The site context: `/etc/agents.d/*.md` read once at startup (`read_local`, or `READ_SITE` through the shared executor in `ssh` mode, either under `read_bounded`'s `READ_TIMEOUT`), `compose()` of the served instructions within the budget, and `register`/`site_of`, the per-server holder the tool and the resource read. |
+| `resources.py` | `RESOURCE_REGISTRY` — `rcac://context` (the site context read at startup, from `site_of`; runs nothing) and `rcac://storage`. |
 | `executor/base.py` | `Executor` `Protocol` + the `CommandResult` dataclass. The contract all backends satisfy. Also `UserPath` and the reserved exit codes `TIMEOUT_EXIT_CODE` (−1001) and `NOT_STARTED_EXIT_CODE` (−1002). |
 | `executor/launch.py` | The launcher every backend runs commands through: renders an argv or a script into one bash program for the pinned login bash (`program`), the local/delegate stage (`bash_argv`) and the SSH bootstrap (`ssh_command`), `separate` (drops login-initialisation output), and `run_process` (local/delegate processes and their timeouts). |
 | `executor/ssh.py` | `SSHExecutor` — Fabric `Connection` (`~/.ssh/config`-aware, each connect step bounded by `CONNECT_TIMEOUT` unless the SSH config sets it, reconnect with exponential backoff) for the connection; each command on a raw Paramiko channel, transfers over Paramiko's SFTP client. |
@@ -143,6 +144,7 @@ Top-level package `src/rcac_mcp/`:
 | `scripts.py` | `FIXED_SCRIPTS`, `fixed()` and `script_argv()`: the constant bash scripts a tool or resource runs when one call needs a redirection or two steps, every caller value only a positional parameter. The tool tests refuse any other shell text. |
 | `tools/__init__.py` | `TOOL_REGISTRY`, the `@mcp_tool` decorator, and the **import list that makes registration happen**. |
 | `tools/{shell,filesystem,transfer}.py` | Generic backend-agnostic tools: `run_command`, directory/file read+write (`write_file` byte-exact, its content through the executor's `write`, `encoding` `utf-8` or `base64`), `upload_file`/`download_file` (returning the path the executor wrote). |
+| `tools/context.py` | `cluster_context`: the site context read at startup, in full; runs nothing and needs no executor. |
 | `tools/slurm.py` | Slurm tools: `sbatch`, `squeue`, `scancel`, `sacct`, `sinfo`, `scontrol_show_*`, plus RCAC's `slist`/`sfeatures`. |
 | `tools/rcac.py` | Purdue-specific: `myquota`, `storage_paths`, `jobinfo`/`jobcmd`/`jobenv`/`jobscript`, `showpartitions`, `average_wait`. |
 
@@ -185,6 +187,11 @@ Every tool follows the same three-line shape: `get_executor()`, run something, r
 `CommandResult` or a formatted string. Tools are backend-agnostic by construction — that is the whole
 point of the `Executor` protocol, and it is why `run_command` works identically over SSH, locally,
 and under `sudo`.
+
+One read happens before any request: at startup, `run()` reads `/etc/agents.d` once, as the server
+(over the shared executor in `ssh` mode, in this process otherwise), bounded by `site.READ_TIMEOUT`,
+and hands the result to `create_mcp_server`, which composes it into the served instructions and
+holds it for `cluster_context` and `rcac://context` (§8). No request reads the site again.
 
 The contracts each piece keeps — request isolation, the executor protocol, the execution-mode
 ladder, delegation and auth, tool registration, resources, and the agent-facing surface — are
@@ -231,7 +238,39 @@ import has no effect.
     registered tools, and neither it nor `INSTRUCTIONS.md` steers agents toward documentation
     search — that is the separate `rcac-docs-mcp` service, which only the README points to. This
     is §9 made executable; it reads list entries and backticked or snake_case names, so a tool
-    whose name is a plain word, mentioned in bare prose, escapes it.
+    whose name is a plain word, mentioned in bare prose, escapes it. `test_base_leaves_room_for_the_site`
+    holds `SERVER_INSTRUCTIONS` to 1,500 UTF-16 code units, so the default budget has room for site
+    rules (§8, §9).
+  - `tests/test_site.py` (`unit`, `integration`): `read_violations`, `compose_violations`. The site
+    read on a planted directory: every regular `*.md` file directly in it but `AGENTS.md` (dotfiles,
+    `.md`, a space, `-n.md` and `end 0.md` included; `Upper.MD`, a `.txt`, a whitespace-only file, a
+    symlink, a directory and a FIFO named `*.md` left out), in the byte order of the names (`Z.md` and
+    `10-first.md` before lower case), each under its header
+    (`test_local_read_takes_the_eligible_files_in_byte_order`); the missing, empty, only-`AGENTS.md`,
+    not-a-directory, unreadable-directory and unreadable-file states (`test_local_read_states`); every
+    shape of the remote answer, short, malformed or failed (`test_remote_answers`); `READ_SITE` run for real under
+    `bin/sandbox.sh` against the same planted directories, equal to `read_local`
+    (`test_remote_script_matches_local_read`, `integration`); `read_bounded` abandoning a read at its
+    bound and containing its exception; `compose` at every budget from 0 to 1,200 on several
+    layouts (the base never cut, files whole and in order, the note naming exactly the files
+    left out, a later file that fits still served, a budget under the minimum refused naming it),
+    and a budget that serves a good read serves each failed one. A name that is not UTF-8 reads as
+    U+FFFD; where the file system refuses such a name (macOS), the row asserts the refusal, since
+    the suite allows no skip.
+  - `tests/test_site_startup.py` (`unit`, `integration`): `MCPServerApp.main` with the server
+    stubbed reads the site once, through the `SSHExecutor` in `ssh` mode and in this process in
+    `local` and `delegate` modes; a hung read (`local`, `ssh`, and `local` at the smallest budget a
+    good read accepts) still starts within 0.5 s of the bound with the timeout line; the budget's
+    default, flag, variable, precedence and refusals; and the sandboxed CLI exits 2 on a budget too
+    small, naming the minimum (`integration`).
+  - `tests/test_context.py` (`unit`): `context_violations`. `cluster_context` and `rcac://context`
+    return the startup text for every site state (files, missing, empty, unreadable, timed out) on
+    bare and shared servers in both eras, and no executor runs; two delegate users over HTTP, whose
+    stub `DelegatingExecutor`s report one hostname, get identical text and instructions and launch
+    no `sudo`; the served instructions are `compose(SERVER_INSTRUCTIONS, site)`; nothing reads the
+    site after construction, and a directory rewritten and grown mid-session changes nothing served;
+    in `delegate` mode an identity absent from the user map is refused the tool and still gets the
+    instructions and the resource (§8).
   - `tests/test_cli.py`: `flag_violations`. The `integration` cases drive the installed CLI with
     flags it no longer accepts and assert a clean `exit_status.bad_argument` rejection before the
     server starts; the `unit` cases feed `flag_violations` synthetic results it must reject.
@@ -1088,7 +1127,11 @@ The two leaf files at the end of this list are footguns, not human-gated paths.
 - **`__init__.py`** — `_resolve_exec_mode()`, the posture ladder.
 - **`server.py`** — `SERVER_INSTRUCTIONS` (what every model reads) and import-time `MCP_BASE_URL`.
 - **`tools/__init__.py`** — the bottom-of-file import list; a missing entry silently drops a tool.
-- **`resources.py`** — the process-global context cache keyed by a non-unique hostname.
+- **`site.py`** — the per-server holder (`register`/`site_of`, a `WeakKeyDictionary` keyed by the
+  server object): the site context is set once at construction and read by that server's tool and
+  resource, never per user and never keyed by hostname; and `read_bounded`, the bound that holds
+  the startup read in every mode (in `ssh` mode opening a session can wait past the executor's own
+  timeout), so a hung read never holds startup (§8).
 
 ### 1. Per-request executor isolation (`context.py` + `middleware.py`) — highest blast radius [human gate]
 
@@ -1492,7 +1535,8 @@ What each mode means:
   (`tests/test_surface.py`); `safe-execution` changed `run_command.description`,
   `write_file.description`, `write_file.properties.encoding`, `sbatch.properties.args`, and the
   `description` and `properties.extra_args` of `sbatch`, `squeue`, `scancel`, `sacct` and `sinfo`
-  this way.
+  this way, and `agents-d-instructions` changed `instructions`, `tools.cluster_context` and
+  `resources.rcac://context.description`.
 
 ### Conventions (same-commit rules)
 

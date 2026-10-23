@@ -211,7 +211,8 @@ def test_remote_script_matches_local_read(state: str, tmp_path: Path) -> None:
 def test_bounded_read_times_out_and_contains_errors() -> None:
     start = time.monotonic()
     context = site.read_bounded(lambda: time.sleep(3) or site.SiteContext(), 'the cluster', timeout=0.3)
-    assert time.monotonic() - start < 0.5
+    held = time.monotonic() - start
+    assert held < 0.5, f'the read held its caller {held:.2f} s, past its 0.3 s bound'
     assert read_violations(context, [], 'reading /etc/agents.d on the cluster did not finish within 0.3 s', True) == []
     context = site.read_bounded(lambda: 1 / 0, 'the cluster', timeout=5)
     assert read_violations(context, [], 'could not be read (ZeroDivisionError)', True) == []
