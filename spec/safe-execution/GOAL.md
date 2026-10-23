@@ -215,6 +215,11 @@ Broken today → fixed. Tests run without a cluster: the `ssh` path against a st
   a dangling link) and never carries setuid or setgid bits. A link lost after the command may have
   run is reported as its own "may have run" result, never as `-1002` "did not start". Each is
   pinned.
+- **Q:** After the scoped review verified cycle 4's fixes and found one LOW (a loop's refusal
+  message) and one PLAUSIBLE MEDIUM (an exec failure racing the transport's teardown)? —
+  **A (Geoffrey, 2026-10-22):** fix both in one small commit, the foreman verifies them with the
+  reviewer's own probes plus the gates and CI, records it in REVIEW.md, and the cycle lands; no
+  further review cycle.
 
 ## Related materials
 
