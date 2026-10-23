@@ -508,3 +508,23 @@ ruling); `list_directory` paths read from `$PWD`; five seeds filed; and `average
 - The scoped review he allowed verified all four findings fixed and confirmed one new LOW (an error
   message); its one MEDIUM is PLAUSIBLE. A CONFIRMED finding blocks under the rubric, so whether to
   fix both in place and verify them, or to land, is his call.
+
+## Cycle 5's two items — fixed and verified by the foreman; approved (2026-10-23)
+
+- **Ruling:** Geoffrey, 2026-10-22: fix both items in one commit, the foreman verifies them with the
+  reviewer's own probes plus the gates and CI, and the cycle lands without another review cycle.
+- **Fix:** `bbb625d` (`[fix] Build safe-execution P2: loop message and exec race`).
+- **Verification** (scratch clones at `5465485` and `bbb625d`, the cycle-5 reviewer's probes):
+  - the loop (`links.py`, OpenSSH `sftp-server`): before, "names 'loop-b', whose directory does not
+    exist" (and a bare "Failure" in the repo's SFTP model); after, `[Errno 62] Too many levels of
+    symbolic links`, the link intact; the parity test gives ELOOP in local, delegate, ssh and
+    ssh-openssh;
+  - the exec race (`race2.py`, 50 ms sleep in `Transport._unlink_channel`): before, 20 of 20 raise
+    `EOFError`; after, 20 of 20 return `-1003`; without the sleep, 20 of 20 `-1003` in both;
+  - the reviewer's parity test: 4 passed; against its `5465485` results, the only difference is the
+    loop case over ssh; no other outcome or file-state difference, no staging left;
+  - the suite at `bbb625d`: `1618 passed` per era; CI run 39895559996 green on `bbb625d`, 0 skipped.
+- **Human gate:** findings across cycles 1–5 sat in high-blast-radius paths and §2/§3. Geoffrey ruled
+  each escalation (2026-10-22, three times) and this landing; the foreman's sign-off for the
+  remaining paths is recorded with each cycle above.
+- **Verdict: approved**, pinned to `bbb625d`.
