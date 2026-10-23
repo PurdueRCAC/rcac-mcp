@@ -1,6 +1,6 @@
 [project]
 name = "rcac-mcp"
-version = "0.1.1"
+version = "0.1.2"
 description = "Purdue RCAC MCP Server: Enables agentic development with HPC clusters and storage services"
 readme = "README.md"
 requires-python = ">=3.14"
