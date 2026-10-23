@@ -3,7 +3,7 @@ slug: safe-execution
 title: Every tool passes exactly what it was given, under one interpreter
 kind: fix
 appetite: big
-status: in_review
+status: done
 branch: fix/safe-execution
 base: develop
 current_phase: done
