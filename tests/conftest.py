@@ -92,6 +92,7 @@ def need_sftp_server() -> str:
         pytest.fail("OpenSSH's sftp-server is not installed here, and the suite drives it", pytrace=False)
     return found
 
+
 def need_git() -> None:
     """Return if the git on PATH runs; otherwise skip the test, or fail it on CI.
 
@@ -116,7 +117,6 @@ def need_git() -> None:
     if os.environ.get('CI', '').lower() == 'true':
         pytest.fail(f'{reason}, and on CI git must run', pytrace=False)
     pytest.skip(reason)
-
 
 
 SHIM_MESSAGE = 'refused by the test PATH shim'

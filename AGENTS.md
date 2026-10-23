@@ -432,14 +432,13 @@ import has no effect.
     `test_path_shim_survives_a_login_bash`), the harness fence and the build-inside-the-loop rule
     are active. No feature-scoped spec id (`R#`, `P#`) appears in the package or the suite
     (`test_no_spec_ids_in_the_package_or_the_suite`, which reads the imported package, so a planted
-    id in a mutated copy fails it). A row that needs a login shell calls `conftest.need_shell`: off CI
-    a missing shell skips the row; on CI (`CI=true`) it fails it, naming the shell
+    id in a mutated copy fails it). A row that needs a login shell calls `conftest.need_shell`: off
+    CI a missing shell skips the row; on CI (`CI=true`) it fails it, naming the shell
     (`test_a_missing_shell_fails_on_ci_and_skips_elsewhere`). It and `conftest.need_git` (above) are
-    the suite's only skips: no other skip, `skipif`, `importorskip` or `xfail` exists in `tests/*.py`
-    (`test_only_need_shell_skips`, static). A row
-    that drives OpenSSH's own `sftp-server` calls `conftest.need_sftp_server`, which never skips:
-    macOS ships it, the GitHub runner's `ssh` package installs it, and a host without it fails the
-    row, naming it.
+    the suite's only skips: no other skip, `skipif`, `importorskip` or `xfail` exists in
+    `tests/*.py` (`test_only_need_shell_skips`, static). A row that drives OpenSSH's own
+    `sftp-server` calls `conftest.need_sftp_server`, which never skips: macOS ships it, the GitHub
+    runner's `ssh` package installs it, and a host without it fails the row, naming it.
   - `tests/test_protocol.py` (`unit`): `boundary_violations`, `cancellation_violations`,
     `era_violations`. A `PermissionError` (in memory and over HTTP), a `RuntimeError` and an
     `MCPError` raised by middleware around a tool call each arrive as a tool error result whose

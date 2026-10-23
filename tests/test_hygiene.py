@@ -585,8 +585,8 @@ def test_spec_id_check_catches_planted_ids(text: str, found: bool) -> None:
 
 # A row that needs a login shell, or a git that runs, runs it or, off CI, skips: `conftest.need_shell`
 # and `conftest.need_git` are the only places that decide, and on CI (where the workflow installs
-# every shell, and git) they fail the row instead. Any other skip in the suite would let a row vanish
-# from CI without failing.
+# every shell and the runner image carries git) they fail the row instead. Any other skip in the
+# suite would let a row vanish from CI without failing.
 SKIPPERS = {'skip', 'skipif', 'importorskip', 'xfail'}
 SKIP_HELPERS = {'need_shell', 'need_git'}
 
