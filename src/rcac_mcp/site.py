@@ -12,8 +12,15 @@ not served.
 
 The read happens once, before the server is built: over the shared executor in `ssh` mode (the
 cluster's files), in this process in `local` and `delegate` modes (the host's files, read as the
-server and never as a user). It is bounded: a read that has not finished within `READ_TIMEOUT`
-seconds is abandoned, and the server starts with one line saying why no site rules are served.
+server and never as a user). In `delegate` mode the server reads for accounts other than its own, so
+a directory or file that others cannot read is unreadable there, and no user receives text an
+ordinary account could not read; `local` and `ssh` keep the file system's own answer. The read is
+bounded: a read that has not finished within `READ_TIMEOUT` seconds is abandoned, and the server
+starts with one line saying why no site rules are served.
+
+Every length here is in UTF-16 code units (`units`), the budget's own unit: what is reserved, cut
+or checked. A name is shown with each control character (C0, DEL, C1, U+2028, U+2029) as an escape
+(`shown`), so no name can break a header, a reason or the note across lines.
 """
 
 # Type annotations
@@ -28,6 +35,7 @@ import binascii
 import fnmatch
 import os
 import queue
+import stat
 import threading
 
 # Internal libs
@@ -35,8 +43,8 @@ from rcac_mcp.executor.base import TIMEOUT_EXIT_CODE, Executor
 from rcac_mcp.scripts import fixed, script_argv
 
 # Public interface
-__all__ = ['CONVENTION', 'AGENTS_D', 'EXCLUDED', 'READ_TIMEOUT', 'DEFAULT_BUDGET', 'DETAIL_LIMIT', 'HEADING',
-           'READ_SITE', 'SiteFile', 'SiteContext', 'BudgetError', 'units', 'read_local', 'parse_remote',
+__all__ = ['CONVENTION', 'AGENTS_D', 'EXCLUDED', 'READ_TIMEOUT', 'DEFAULT_BUDGET', 'DETAIL_LIMIT', 'NOT_FOR_OTHERS',
+           'HEADING', 'READ_SITE', 'SiteFile', 'SiteContext', 'BudgetError', 'units', 'shown', 'read_local', 'parse_remote',
            'read_remote', 'read_bounded', 'omission_note', 'compose', 'minimum_budget', 'register', 'site_of']
 
 # The convention's path, as every text names it. `AGENTS_D` is where the read looks and `READ_TIMEOUT`
@@ -48,16 +56,24 @@ EXCLUDED: Final = 'AGENTS.md'
 DEFAULT_BUDGET: Final = 4096
 HEADING: Final = f'## Site context ({CONVENTION})'
 
-# The longest detail a reason carries; a longer one (a long file name) is shortened, so every reason
-# fits the room `minimum_budget` keeps for it.
+# The longest detail a reason carries, in UTF-16 code units; a longer one (a long file name) is
+# shortened, so every reason fits the room `minimum_budget` keeps for it.
 DETAIL_LIMIT: Final = 80
+
+# The detail of a directory or file that others cannot read, in `delegate` mode.
+NOT_FOR_OTHERS: Final = 'not readable by others'
 
 # The remote read: every regular `*.md` entry directly in "$1" (dotfiles and a bare `.md` too, as
 # `find -name` matches them), each name and content as one base64 word, so no name or content can
 # forge a line, then a count the parser checks, so an answer cut short reads as unreadable rather
-# than as fewer files. The reset in front of it covers its own list of names, not these three.
+# than as fewer files. The reset in front of it covers its own list of names, not these four. The
+# glob state a login profile can export (`BASHOPTS`, `SHELLOPTS`, `GLOBIGNORE`) is reset here too, so
+# the match is the same whatever it set; an option this bash does not know is skipped.
 READ_SITE = fixed(
-    'unset -f base64 tr test\n'
+    'unset -f base64 shopt tr test\n'
+    'unset GLOBIGNORE\n'
+    'set +f\n'
+    'for o in dotglob nullglob failglob nocaseglob globstar extglob; do shopt -u "$o" 2>/dev/null; done\n'
     'd=$1\n'
     'if [ ! -e "$d" ]; then printf "missing\\n"; exit 0; fi\n'
     'if [ ! -d "$d" ]; then printf "notdir\\n"; exit 0; fi\n'
@@ -86,7 +102,7 @@ class SiteFile:
     @property
     def block(self) -> str:
         """The file as the site context shows it: its header line, then its text."""
-        return f'<!-- Source: {self.name} -->\n{self.text}'
+        return f'<!-- Source: {shown(self.name)} -->\n{self.text}'
 
 
 @dataclass(frozen=True)
@@ -125,7 +141,7 @@ class SiteContext:
 
     @classmethod
     def unreadable(cls, where: str, detail: str) -> SiteContext:
-        """The directory or one of its files could not be read; `detail` is cut to `DETAIL_LIMIT`."""
+        """The directory or one of its files could not be read; `detail` is shown and cut to `DETAIL_LIMIT` units."""
         return cls(reason=f'No site rules are served: {CONVENTION} on {where} could not be read ({_detail(detail)}).',
                    failed=True)
 
@@ -162,19 +178,59 @@ def _name(name: str) -> str:
     return os.fsencode(name).decode('utf-8', 'replace')
 
 
+def _breaks(char: str) -> bool:
+    code = ord(char)
+    return code < 0x20 or 0x7f <= code <= 0x9f or code in (0x2028, 0x2029)
+
+
+def _escape(char: str) -> str:
+    code = ord(char)
+    return f'\\x{code:02x}' if code <= 0xff else f'\\u{code:04x}'
+
+
+def shown(text: str) -> str:
+    """`text` as the site context shows a name: each control character (C0, DEL, C1, U+2028, U+2029)
+    becomes a `\\xNN` or `\\uNNNN` escape, so no name can break a served line."""
+    return ''.join(_escape(c) if _breaks(c) else c for c in text)
+
+
+def _cut(text: str, limit: int) -> str:
+    """`text`, or its longest start that fits `limit` UTF-16 code units with `…` after it."""
+    if units(text) <= limit:
+        return text
+    kept, room = [], limit - units('…')
+    for char in text:
+        room -= units(char)
+        if room < 0:
+            break
+        kept.append(char)
+    return ''.join(kept) + '…'
+
+
 def _detail(text: str) -> str:
-    return text if len(text) <= DETAIL_LIMIT else text[:DETAIL_LIMIT - 1] + '…'
+    return _cut(shown(text), DETAIL_LIMIT)
 
 
 def _why(exc: OSError) -> str:
     return (exc.strerror or type(exc).__name__).lower()
 
 
-def read_local(where: str = 'this host', directory: str | None = None) -> SiteContext:
-    """Read the site files on this host, as this process (`directory` defaults to `AGENTS_D`)."""
+def _others_may(mode: int, bits: int) -> bool:
+    return mode & bits == bits
+
+
+def read_local(where: str = 'this host', directory: str | None = None, *, for_others: bool = False) -> SiteContext:
+    """Read the site files on this host, as this process (`directory` defaults to `AGENTS_D`).
+
+    `for_others` is the read of a server that serves accounts other than its own (`delegate` mode):
+    the directory must let others list and enter it, and each file must let others read it, or the
+    read is unreadable, whatever this process itself may read.
+    """
     directory = AGENTS_D if directory is None else directory
     try:
         entries = list(os.scandir(directory))
+        if for_others and not _others_may(os.stat(directory).st_mode, stat.S_IROTH | stat.S_IXOTH):
+            return SiteContext.unreadable(where, NOT_FOR_OTHERS)
     except FileNotFoundError:
         return SiteContext.missing(where)
     except OSError as exc:
@@ -188,6 +244,8 @@ def read_local(where: str = 'this host', directory: str | None = None) -> SiteCo
             if not (_eligible(name) and entry.is_file(follow_symlinks=False)):
                 continue
             with open(entry.path, 'rb') as stream:
+                if for_others and not _others_may(os.fstat(stream.fileno()).st_mode, stat.S_IROTH):
+                    return SiteContext.unreadable(where, f'{name}: {NOT_FOR_OTHERS}')
                 data = stream.read()
         except OSError as exc:
             return SiteContext.unreadable(where, f'{name}: {_why(exc)}')
@@ -283,7 +341,7 @@ def units(text: str) -> int:
 
 def omission_note(names: list[str]) -> str:
     """The line naming every file left out of the instructions, and the tool that returns them."""
-    return (f'Left out here for length: {", ".join(names)}. '
+    return (f'Left out here for length: {", ".join(shown(n) for n in names)}. '
             f'Call the `cluster_context` tool for the full site context.')
 
 
@@ -309,12 +367,13 @@ def minimum_budget(base: str, site: SiteContext) -> int:
     """The smallest budget `compose` accepts for `site`.
 
     Never less than the base and the longest reason a read can end in, so a budget that serves a good
-    read also serves a failed one: the server starts whatever the read finds. With files, also the
-    smaller of the whole text and the base with the note naming every file.
+    read also serves a failed one: the server starts whatever the read finds. Without files, also
+    the base with this site's own reason, so no path serves more than the budget; with files, also
+    the smaller of the whole text and the base with the note naming every file.
     """
     floor = units(_head(base)) + max(_reserve('the cluster'), _reserve('this host'))
     if not site.files:
-        return floor
+        return max(floor, units(_head(base) + site.reason))
     names = [f.name for f in site.files]
     return max(floor, min(units(_render(base, list(site.files), [])), units(_render(base, [], names))))
 

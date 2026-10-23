@@ -5,13 +5,15 @@
 
 `cluster_context` and `rcac://context` return the text read at startup in every mode and both
 protocol eras, run nothing through any executor, and give two delegate users whose executors report
-the same hostname identical text.
+the same hostname identical text. Each server serves the site it was built with, however many
+servers one process builds.
 
-In `delegate` mode the tool reaches only a mapped user: the middleware refuses every tool call from
-an authenticated identity absent from the user map, before the body runs (§ Invariants §5), and the
-tool is no exception, while the instructions and `rcac://context` reach any client that can
-connect. That is intended: the site text is world-readable administrative markdown, so the
-difference discloses nothing.
+In `delegate` mode the server serves only what others can read: a directory or file that others
+cannot read is served as unreadable, its one line and no site text. The tool reaches only a mapped
+user: the middleware refuses every tool call from an authenticated identity absent from the user
+map, before the body runs (§ Invariants §5), and the tool is no exception, while the instructions
+and `rcac://context` reach any client that can connect. That is intended: what is served there is
+text every account can read, so the difference discloses nothing.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ import pytest
 
 from harness import (Outcome, RecordingExecutor, bare_server, call, delegate_server, drive, http_client, in_memory,
                      mint, read_resource, serving, served_instructions, shared_server, user_map)
-from rcac_mcp import middleware, site
+from rcac_mcp import MCPServerApp, middleware, site
 from rcac_mcp.server import SERVER_INSTRUCTIONS, create_mcp_server
 
 SECRET = 'context-test-secret-0123456789abcdef0123'
@@ -168,8 +170,8 @@ def test_a_changed_directory_changes_nothing_served(tmp_path: Path, monkeypatch:
 def test_an_unmapped_user_reads_the_resource_and_is_refused_the_tool(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, launches: list[list[str]], guard) -> None:
     # Intended, not provisional: the user map gates tool calls in `delegate` mode, this one included,
-    # while the instructions and `rcac://context` reach any client that can connect; the site text is
-    # world-readable administrative markdown, so the difference discloses nothing.
+    # while the instructions and `rcac://context` reach any client that can connect; what is served
+    # there is text every account can read, so the difference discloses nothing.
     monkeypatch.setenv('JWT_SECRET', SECRET)
     map_path = user_map(tmp_path, USER_MAP)
     context = SITES['files']
@@ -185,4 +187,73 @@ def test_an_unmapped_user_reads_the_resource_and_is_refused_the_tool(
     assert seen['tool'].is_error and 'not authorized' in seen['tool'].text, seen['tool']
     assert seen['resource'] == Outcome(False, EXPECTED['files'])
     assert seen['instructions'].text == site.compose(SERVER_INSTRUCTIONS, context)
+    assert launches == [] and guard.refused == []
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('era', ERAS)
+def test_each_server_keeps_its_own_site(era: str, guard) -> None:
+    cases = ['files', 'unreadable', 'missing']
+
+    async def scenario() -> dict[str, tuple[str, str, str]]:
+        # Every server is built before any is asked, so a holder that kept only the last site shows.
+        servers = {case: bare_server(site=SITES[case]) for case in cases}
+        seen = {}
+        for case in [*cases, *reversed(cases)]:
+            async with in_memory(servers[case], era=era) as client:
+                seen[case] = ((await call(client, 'cluster_context', {})).text,
+                              (await read_resource(client, 'rcac://context')).text, client.instructions or '')
+        return seen
+
+    seen = drive(scenario())
+    wrong = {case: got[:2] for case, got in seen.items() if got[:2] != (EXPECTED[case], EXPECTED[case])}
+    assert wrong == {}, f"a server served another server's site: {wrong}"
+    assert all(seen[c][2] == site.compose(SERVER_INSTRUCTIONS, SITES[c]) for c in cases)
+    assert guard.refused == []
+
+
+def _read_as(mode: str) -> site.SiteContext:
+    """The startup read of a server in `mode` (`local` or `delegate`), as `MCPServerApp.run` makes it."""
+    return MCPServerApp.__new__(MCPServerApp)._read_site(mode, None)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('era', ERAS)
+@pytest.mark.parametrize(('private', 'reason'), [
+    pytest.param('b.md', 'b.md: not readable by others', id='file'),
+    pytest.param('.', 'not readable by others', id='directory'),
+])
+def test_delegate_serves_only_what_others_can_read(private: str, reason: str, era: str, tmp_path: Path,
+                                                   monkeypatch: pytest.MonkeyPatch, launches: list[list[str]],
+                                                   guard) -> None:
+    root = tmp_path / 'agents.d'
+    root.mkdir()
+    for name, text in (('a.md', 'Alpha.\n'), ('b.md', 'Bravo.\n')):
+        (root / name).write_text(text)
+        (root / name).chmod(0o644)
+    root.chmod(0o755)
+    (root / private).chmod(0o700 if private == '.' else 0o600)
+    monkeypatch.setattr(site, 'AGENTS_D', str(root))
+    monkeypatch.setenv('JWT_SECRET', SECRET)
+    map_path = user_map(tmp_path, USER_MAP)
+    try:
+        delegated, local = _read_as('delegate'), _read_as('local')
+    finally:
+        root.chmod(0o755)
+    # In `local` mode the server reads as the user it serves, and the file system's answer stands.
+    assert [f.name for f in local.files] == ['a.md', 'b.md'] and not local.failed, local
+
+    async def scenario() -> dict[str, Outcome]:
+        async with serving(delegate_server(map_path, site=delegated)) as app:
+            async with http_client(app, mint(SECRET, sub='alice'), era=era) as client:
+                return {'tool': await call(client, 'cluster_context', {}),
+                        'resource': await read_resource(client, 'rcac://context'),
+                        'instructions': Outcome(False, client.instructions or '')}
+
+    seen = drive(scenario())
+    line = f'No site rules are served: /etc/agents.d on this host could not be read ({reason}).'
+    assert delegated == site.SiteContext(reason=line, failed=True), delegated
+    assert seen['tool'] == Outcome(False, line) and seen['resource'] == Outcome(False, line), seen
+    assert seen['instructions'].text == f'{SERVER_INSTRUCTIONS}\n\n{site.HEADING}\n\n{line}'
+    assert 'Bravo' not in str(seen) and 'Alpha' not in str(seen)
     assert launches == [] and guard.refused == []

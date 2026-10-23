@@ -3,7 +3,7 @@ slug: agents-d-instructions
 title: Serve /etc/agents.d as the server's instructions
 kind: feature
 appetite: big
-status: blocked
+status: in_review
 branch: feature/agents-d-instructions
 base: develop
 current_phase: done
@@ -14,13 +14,14 @@ phases:
   status: done
   satisfies:
   - R3
+  - R4
   - R5
   - R8
   depends_on: []
   parallel: false
   hammerable: false
   hill: uphill
-  verify: sh spec/agents-d-instructions/verify/p1.sh
+  verify: sh spec/agents-d-instructions/verify/p1.sh && uv run python spec/agents-d-instructions/remediation/F1-budget-units.py && uv run python spec/agents-d-instructions/remediation/F2-name-lines.py && uv run python spec/agents-d-instructions/remediation/F5-glob-state.py
 - id: P2
   name: Startup reads once and serves the composed instructions
   status: done
@@ -34,7 +35,7 @@ phases:
   parallel: false
   hammerable: false
   hill: uphill
-  verify: sh spec/agents-d-instructions/verify/p2.sh
+  verify: sh spec/agents-d-instructions/verify/p2.sh && uv run python spec/agents-d-instructions/remediation/F1-budget-units.py && uv run python spec/agents-d-instructions/remediation/F3-delegate-others.py
 - id: P3
   name: cluster_context and the startup-text resource
   status: done
@@ -43,13 +44,14 @@ phases:
   - R5
   - R6
   - R7
+  - R8
   - R9
   depends_on:
   - P2
   parallel: false
   hammerable: false
   hill: uphill
-  verify: sh spec/agents-d-instructions/verify/p3.sh
+  verify: sh spec/agents-d-instructions/verify/p3.sh && uv run python spec/agents-d-instructions/remediation/F3-delegate-others.py && uv run python spec/agents-d-instructions/remediation/F4-per-server.py
 - id: P4
   name: Documentation, mutants and the deferral ledger
   status: done
@@ -60,7 +62,7 @@ phases:
   parallel: false
   hammerable: false
   hill: uphill
-  verify: sh spec/agents-d-instructions/verify/p4.sh
+  verify: sh spec/agents-d-instructions/verify/p4.sh && uv run python spec/agents-d-instructions/remediation/F3-delegate-others.py docs
 review:
   last_reviewed_commit: ef8322d0b1ee8ad0247d3387389f275e21b190fc
   verdict: changes-requested
@@ -146,6 +148,19 @@ checklists below are the work. `code-build` executes the next actionable phase, 
 - The served-surface fixture changes only by `verify/fixture_deltas.py apply`, never by hand; the
   commit that changes it lists the deltas it applied in its body (C10).
 
+**Amendment — review 1 remediation (2026-10-23).** Review cycle 1 returned changes-requested with
+five classes (REVIEW.md → Routing, cycle 1) and GOAL C12. Remediation reopened P1–P4 rather than
+adding phases, and bundles them into one commit: C12's code, its tests and its documentation
+(§8, README) are one same-commit obligation (§ Invariants' opening rule; § Conventions), and
+the class tests, their mutants and § Testing land together. `verify/` stays frozen at the plan
+commit; each reopened phase's gate runs its frozen gate, then the class checkers in
+[`remediation/`](remediation/) (`F1`–`F5`, each evaluating its class's property over planted
+directories through both reads, then the real CLI, then the class's mutants). The frozen p1–p3
+gates were run green on the final tree before reopening, so no gate was retuned to P4's. P1 now
+also satisfies R4 (the composer's unit), P3 also R8 (C12's line served in `delegate` mode).
+`__init__.py`'s `_read_site` (this cycle's own function, high blast radius) gains the
+`delegate` read for others; `_resolve_exec_mode` and every other human-gated file are untouched.
+
 ---
 
 ## Phase P1 — Site reader and composer
@@ -168,8 +183,24 @@ path, and composes instructions within a budget; nothing calls it yet.
       the file system's refusal where it refuses one (macOS). A failed read composes within the
       smallest budget a good read accepts (`test_a_budget_that_serves_a_good_read_serves_a_failed_one`).
 - [x] `tests/test_hygiene.py` stays green: the new launches start with `bin/sandbox.sh`.
+- [x] *Review 1, F1:* every length the composer reserves, cuts or checks is in UTF-16 units (`_cut`
+      by `units`; with no files the minimum also holds the site's own reason), pinned by
+      `test_astral_names_and_reasons_keep_the_budget` (both reads) and
+      `test_every_reason_fits_the_room_kept_for_it`; mutants `site-detail-code-points`,
+      `site-reason-unchecked`.
+- [x] *Review 1, F2:* names are shown through `site.shown` (C0, DEL, C1, U+2028, U+2029 as `\xNN`/
+      `\uNNNN`) in headers, reasons and the note, pinned by `test_a_name_cannot_break_a_served_line`
+      (both reads) and `test_a_name_is_shown_with_its_control_characters_escaped`; mutant
+      `site-name-unescaped`.
+- [x] *Review 1, C12 read:* `read_local(for_others=True)` is unreadable when the directory lacks
+      others' read or search bit or a file others' read bit, pinned by
+      `test_a_read_for_others_keeps_only_what_others_can_read`; mutant `site-others-unchecked`.
+- [x] *Review 1, F5:* `READ_SITE` unsets `GLOBIGNORE`, `set +f`, and `shopt -u` the glob options
+      itself (not `FIXED_RESET`), pinned by `test_remote_read_ignores_the_login_shells_glob_state`
+      (any bash) and `test_remote_read_ignores_exported_shell_options` (`BASHOPTS`, bash ≥ 4.1,
+      through `need_shell`: skips on macOS, runs on CI); mutant `site-glob-state-inherited`.
 - **Verify:** `sh spec/agents-d-instructions/verify/p1.sh` (named tests, then `site_gate.py`'s
-  independent oracle).
+  independent oracle); since review 1, then `remediation/F1`, `F2` and `F5`.
 - **Touches:** `src/rcac_mcp/site.py`, `tests/test_site.py`.
 
 ## Phase P2 — Startup reads once and serves the composed instructions
@@ -200,8 +231,12 @@ small exits 2 naming the minimum.
       delta), listed in the commit body and in `test_surface.py`'s docstring.
 - [x] `AGENTS.md` § Configuration: the variable, the flag, the unit, the default (same commit as
       the flag).
+- [x] *Review 1, C12 wiring:* `_read_site` reads for others in `delegate` mode only (no new
+      `if exec_mode == 'delegate':` line), pinned by `test_startup_reads_once_where_the_mode_says`;
+      mutant `delegate-reads-for-itself`.
 - **Verify:** `sh spec/agents-d-instructions/verify/p2.sh` (named tests in both eras, then
-  `serve_gate.py instructions` driving the real CLI over stdio, then the fixture check).
+  `serve_gate.py instructions` driving the real CLI over stdio, then the fixture check); since
+  review 1, then `remediation/F1` (the real CLI at the minimum budget) and `F3`.
 - **Touches:** `src/rcac_mcp/__init__.py`, `src/rcac_mcp/server.py`, `tests/harness.py`,
   `tests/test_*.py` named above, `tests/mutants.py`, `tests/fixtures/served_surface.json`,
   `AGENTS.md`.
@@ -233,9 +268,16 @@ no executor; the cache is gone; the base instructions are the compact rewrite na
 - [x] `README.md`: tool inventory, the site-context subsection, how to raise both limits.
 - [x] `AGENTS.md` §8 and §9 per PLAN § 2.7 (the contract lands with its section, § Invariants'
       opening rule).
+- [x] *Review 1, C12 served:* `test_delegate_serves_only_what_others_can_read` (a file and the
+      directory others cannot read, both eras: the line, no site text; `local` keeps the files);
+      §8 and README state the rule in the same commit, and the "world-readable" assumption is
+      gone from the live text.
+- [x] *Review 1, F4:* `test_each_server_keeps_its_own_site` (servers built before any is asked,
+      both eras); mutant `site-holder-global`.
 - **Verify:** `sh spec/agents-d-instructions/verify/p3.sh` (named tests in both eras, then
   `serve_gate.py context`: tool, resource and one read over stdio in both eras and over HTTP in
-  `delegate` mode with two users; then the fixture check).
+  `delegate` mode with two users; then the fixture check); since review 1, then `remediation/F3`
+  and `F4`.
 - **Touches:** `src/rcac_mcp/tools/context.py`, `tools/__init__.py`, `resources.py`, `server.py`,
   `tests/test_context.py`, `tests/test_{tools,no_executor,registry,instructions,surface}.py`,
   `tests/fixtures/served_surface.json`, `README.md`, `AGENTS.md`.
@@ -271,8 +313,12 @@ mutant, and nothing deferred is left unrecorded. R10's evidence is in the repo (
       that is `code rcac-mcp roadmap` after landing (C10).
 - [x] Standing last-phase items: the deferral ledger above; no other project-level obligation is
       carried by the previous cycle's last phase in this repo.
+- [x] *Review 1:* § Testing, §8 and the Footguns `site.py` entry describe the five classes'
+      tests and the holder's pin; the seven new mutants are in `tests/mutants.py`, each killed
+      with `--self-check`.
 - **Verify:** `sh spec/agents-d-instructions/verify/p4.sh` (`docs_gate.py all`, then the profile's
-  full verify). `p4.sh docs` is the pre-push part.
+  full verify). `p4.sh docs` is the pre-push part. Since review 1, then
+  `remediation/F3-delegate-others.py docs`.
 - **Touches:** `AGENTS.md`, `tests/mutants.py`, `tests/test_mutations.py` (anchors), `ROADMAP.md`
   and `issues/` only if something was deferred. *Amended at build:* also the assertion messages in
   `tests/test_site.py`, `tests/test_site_startup.py` and `tests/test_context.py` (the mutants'

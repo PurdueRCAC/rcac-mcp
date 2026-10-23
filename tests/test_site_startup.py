@@ -1,7 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Purdue University
 # SPDX-License-Identifier: MIT
 
-"""Startup reads /etc/agents.d once, where the mode says, within its bound, and refuses a budget too small."""
+"""Startup reads /etc/agents.d once, where the mode says, within its bound, and refuses a budget too small.
+
+In `delegate` mode the server reads for other accounts, so its read keeps only what others can read;
+in `local` mode it reads for itself.
+"""
 
 from __future__ import annotations
 
@@ -39,7 +43,7 @@ def start(argv: list[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capl
         return Stub()
 
     def local(*args: Any, **kwargs: Any) -> site.SiteContext:
-        reads.append(('local', None))
+        reads.append(('local', kwargs.get('for_others', False)))
         time.sleep(hang)
         return SENTINEL
 
@@ -65,13 +69,14 @@ def start(argv: list[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capl
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize(('argv', 'where'), [
-    pytest.param(['-t', 'http', '--ssh-host', 'cluster.invalid'], 'remote', id='ssh'),
-    pytest.param(['-t', 'http', '-e', 'local'], 'local', id='local'),
-    pytest.param(['-t', 'http', '-a', 'jwt'], 'local', id='delegate'),
+@pytest.mark.parametrize(('argv', 'where', 'for_others'), [
+    pytest.param(['-t', 'http', '--ssh-host', 'cluster.invalid'], 'remote', None, id='ssh'),
+    pytest.param(['-t', 'http', '-e', 'local'], 'local', False, id='local'),
+    pytest.param(['-t', 'http', '-a', 'jwt'], 'local', True, id='delegate'),
 ])
-def test_startup_reads_once_where_the_mode_says(argv: list[str], where: str, monkeypatch: pytest.MonkeyPatch,
-                                                tmp_path: Path, caplog: pytest.LogCaptureFixture, guard) -> None:
+def test_startup_reads_once_where_the_mode_says(argv: list[str], where: str, for_others: bool | None,
+                                                monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+                                                caplog: pytest.LogCaptureFixture, guard) -> None:
     reads: list[tuple[str, Any]] = []
     if '-a' in argv:
         monkeypatch.setenv('JWT_SECRET', 'startup-test-secret-0123456789abcdef0123')
@@ -80,6 +85,8 @@ def test_startup_reads_once_where_the_mode_says(argv: list[str], where: str, mon
     assert [kind for kind, _ in reads] == [where], reads
     if where == 'remote':
         assert type(reads[0][1]).__name__ == 'SSHExecutor'
+    else:
+        assert reads[0][1] is for_others, f'the read for others was {reads[0][1]}, expected {for_others}'
     assert [b['site'] for b in observed['built']] == [SENTINEL]
     assert guard.refused == []
 

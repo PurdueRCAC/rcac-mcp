@@ -761,6 +761,52 @@ CASES: tuple[Case, ...] = (
          ('test_context.py::test_tool_and_resource_serve_the_startup_text[shared-files-legacy]',
           'test_context.py::test_tool_and_resource_serve_the_startup_text[shared-files-modern]'),
          'an executor ran'),
+    # Each server serves the site it was built with: the holder is keyed by the server, never one
+    # module value that the last server built overwrites.
+    Case('site-holder-global', 'site.py',
+         (("    _SITES[server] = site\n", "    global _ONE\n    _ONE = site\n"),
+          ("    return _SITES[server]\n", "    return _ONE\n")),
+         ('test_context.py::test_each_server_keeps_its_own_site[legacy]',
+          'test_context.py::test_each_server_keeps_its_own_site[modern]'),
+         "another server's site"),
+    # A reason's detail is cut in UTF-16 code units, the budget's unit, not in code points.
+    Case('site-detail-code-points', 'site.py',
+         (("    if units(text) <= limit:\n        return text\n", "    if len(text) <= limit:\n        return text\n"),
+          ("        room -= units(char)\n", "        room -= 1\n")),
+         ('test_site.py::test_astral_names_and_reasons_keep_the_budget[unreadable-local]',
+          'test_site.py::test_astral_names_and_reasons_keep_the_budget[unreadable-remote]'),
+         "needs more than a good read's minimum"),
+    # With no files, the minimum holds the site's own reason, so that path never serves past the budget.
+    Case('site-reason-unchecked', 'site.py',
+         (("        return max(floor, units(_head(base) + site.reason))\n", "        return floor\n"),),
+         ('test_site.py::test_every_reason_fits_the_room_kept_for_it',),
+         'over the budget'),
+    # A name's control characters are shown escaped, so no name breaks a served line.
+    Case('site-name-unescaped', 'site.py',
+         (("    return ''.join(_escape(c) if _breaks(c) else c for c in text)\n", "    return text\n"),),
+         ('test_site.py::test_a_name_cannot_break_a_served_line[files-local]',
+          'test_site.py::test_a_name_cannot_break_a_served_line[unreadable-remote]'),
+         'is not one line'),
+    # A read for others keeps only the files others can read.
+    Case('site-others-unchecked', 'site.py',
+         (("                if for_others and not _others_may(os.fstat(stream.fileno()).st_mode, stat.S_IROTH):\n",
+           "                if False:\n"),),
+         ('test_site.py::test_a_read_for_others_keeps_only_what_others_can_read[private-file-for-others]',),
+         'files:'),
+    # In delegate mode the startup read is a read for others.
+    Case('delegate-reads-for-itself', '__init__.py',
+         (("        for_others = exec_mode == 'delegate'\n", "        for_others = False\n"),),
+         ('test_site_startup.py::test_startup_reads_once_where_the_mode_says[delegate]',),
+         'the read for others was False'),
+    # The remote read resets the glob state a login profile can leave its bash.
+    Case('site-glob-state-inherited', 'site.py',
+         (("    'unset GLOBIGNORE\\n'\n    'set +f\\n'\n", ""),
+          ("    'for o in dotglob nullglob failglob nocaseglob globstar extglob; do shopt -u \"$o\" 2>/dev/null; done\\n'\n",
+           "")),
+         ('test_site.py::test_remote_read_ignores_the_login_shells_glob_state[globignore-files-layout]',
+          'test_site.py::test_remote_read_ignores_the_login_shells_glob_state[dotglob-layout]',
+          'test_site.py::test_remote_read_ignores_the_login_shells_glob_state[failglob-lower-agents]'),
+         'the glob state changed what the remote read found'),
     # Every tool's served description is its full docstring, as FastMCP 2.x served it; FastMCP 4
     # alone serves only the summary paragraph.
     Case('tool-description-summary-only', 'tools/__init__.py',

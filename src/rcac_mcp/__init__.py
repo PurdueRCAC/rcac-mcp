@@ -251,10 +251,14 @@ class MCPServerApp(Application):
         return budget
 
     def _read_site(self, exec_mode: str, executor):
-        """Read /etc/agents.d once: the cluster's over the executor in ssh mode, else this host's."""
+        """Read /etc/agents.d once: the cluster's over the executor in ssh mode, else this host's.
+
+        In delegate mode the server reads for other accounts, so it keeps only what others can read.
+        """
         if exec_mode == 'ssh':
             return site_context.read_bounded(lambda: site_context.read_remote(executor), 'the cluster')
-        return site_context.read_bounded(site_context.read_local, 'this host')
+        for_others = exec_mode == 'delegate'
+        return site_context.read_bounded(lambda: site_context.read_local(for_others=for_others), 'this host')
 
     def _create_executor(self, exec_mode: str):
         """Create executor based on mode."""

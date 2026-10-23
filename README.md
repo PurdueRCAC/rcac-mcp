@@ -38,7 +38,13 @@ in `local` and `delegate` modes), and serves them after its own instructions, so
 site's rules without asking. Files go in whole, each under a
 `<!-- Source: name.md -->` header, in the byte order of their names (`LC_ALL=C sort`): an
 administrator who wants a file first gives it a name that sorts first, such as one starting `00-`.
-An edit takes effect at the next start.
+An edit takes effect at the next start. A control character in a file name (a line break, for
+instance) is shown as an escape such as `\x0a`, so a name always stays on its one line.
+
+In `delegate` mode one server serves many accounts, so it serves only what every account could
+read: if the directory is not readable and searchable by others, or a file is not readable by
+others, the server serves a line saying the rules could not be read instead of any of them. In
+`local` and `ssh` modes the server reads as the user it serves, and the file system decides.
 
 The instructions stay within 4,096 characters by default, because Claude Code cuts server
 instructions there. Whatever does not fit is named, and the `cluster_context` tool (and the

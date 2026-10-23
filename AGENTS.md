@@ -256,13 +256,23 @@ import has no effect.
     left out, a later file that fits still served, a budget under the minimum refused naming it),
     and a budget that serves a good read serves each failed one. A name that is not UTF-8 reads as
     U+FFFD; where the file system refuses such a name (macOS), the row asserts the refusal, since
-    the suite allows no skip.
+    the suite allows no skip. Astral names and reasons, read both ways, keep every budget from 0
+    past the minimum, and a failed read's line fits a good read's minimum
+    (`test_astral_names_and_reasons_keep_the_budget`, `test_every_reason_fits_the_room_kept_for_it`);
+    names with C0, DEL, C1, U+2028 and U+2029 characters, read both ways, break no header, reason
+    or note line (`test_a_name_cannot_break_a_served_line`); a read for others keeps only what
+    others can read, a read for this process the file system's answer
+    (`test_a_read_for_others_keeps_only_what_others_can_read`); and `READ_SITE` finds what
+    `read_local` finds under every glob option, set before it in its bash
+    (`test_remote_read_ignores_the_login_shells_glob_state`) or exported to it as `BASHOPTS` and
+    `GLOBIGNORE` (`test_remote_read_ignores_exported_shell_options`: bash 4.1 or later reads
+    those, so it goes through `need_shell`, and macOS's bash 3.2 skips it while CI runs it).
   - `tests/test_site_startup.py` (`unit`, `integration`): `MCPServerApp.main` with the server
     stubbed reads the site once, through the `SSHExecutor` in `ssh` mode and in this process in
-    `local` and `delegate` modes; a hung read (`local`, `ssh`, and `local` at the smallest budget a
-    good read accepts) still starts within 0.5 s of the bound with the timeout line; the budget's
-    default, flag, variable, precedence and refusals; and the sandboxed CLI exits 2 on a budget too
-    small, naming the minimum (`integration`).
+    `local` and `delegate` modes, a read for others in `delegate` mode only; a hung read (`local`,
+    `ssh`, and `local` at the smallest budget a good read accepts) still starts within 0.5 s of the
+    bound with the timeout line; the budget's default, flag, variable, precedence and refusals; and
+    the sandboxed CLI exits 2 on a budget too small, naming the minimum (`integration`).
   - `tests/test_context.py` (`unit`): `context_violations`. `cluster_context` and `rcac://context`
     return the startup text for every site state (files, missing, empty, unreadable, timed out) on
     bare and shared servers in both eras, and no executor runs; two delegate users over HTTP, whose
@@ -270,7 +280,10 @@ import has no effect.
     no `sudo`; the served instructions are `compose(SERVER_INSTRUCTIONS, site)`; nothing reads the
     site after construction, and a directory rewritten and grown mid-session changes nothing served;
     in `delegate` mode an identity absent from the user map is refused the tool and still gets the
-    instructions and the resource (§8).
+    instructions and the resource (§8); two servers built in one process each serve their own site
+    (`test_each_server_keeps_its_own_site`); and in `delegate` mode, in both eras, a file or the
+    directory that others cannot read serves its one line and no site text, while `local` mode's
+    read of the same directory serves the files (`test_delegate_serves_only_what_others_can_read`).
   - `tests/test_cli.py`: `flag_violations`. The `integration` cases drive the installed CLI with
     flags it no longer accepts and assert a clean `exit_status.bad_argument` rejection before the
     server starts; the `unit` cases feed `flag_violations` synthetic results it must reject.
@@ -1129,9 +1142,13 @@ The two leaf files at the end of this list are footguns, not human-gated paths.
 - **`tools/__init__.py`** — the bottom-of-file import list; a missing entry silently drops a tool.
 - **`site.py`** — the per-server holder (`register`/`site_of`, a `WeakKeyDictionary` keyed by the
   server object): the site context is set once at construction and read by that server's tool and
-  resource, never per user and never keyed by hostname; and `read_bounded`, the bound that holds
+  resource, never per user and never keyed by hostname, never one module value (two servers in one
+  process each serve their own); `read_bounded`, the bound that holds
   the startup read in every mode (in `ssh` mode opening a session can wait past the executor's own
-  timeout), so a hung read never holds startup (§8).
+  timeout), so a hung read never holds startup; `units`, the one measure of every length the
+  budget sees (never `len`); `shown`, the escape every served name goes through;
+  `read_local(for_others=True)`, the `delegate` read that keeps only what others can read; and
+  `READ_SITE`'s glob reset (§8).
 
 ### 1. Per-request executor isolation (`context.py` + `middleware.py`) — highest blast radius [human gate]
 
@@ -1479,24 +1496,41 @@ What each mode means:
   twice.
   Only `AGENTS.md` exactly is skipped. A file whose content is only whitespace is not served; a
   served file loses its trailing whitespace and keeps everything else. A name is its bytes as
-  UTF-8, an invalid byte read as U+FFFD.
+  UTF-8, an invalid byte read as U+FFFD. A name is **shown** with each control character (C0, DEL,
+  C1, U+2028, U+2029) as a `\xNN` or `\uNNNN` escape (`site.shown`) wherever it is served, in
+  its header, a reason and the note, so no name can break a served line; the order stays that of
+  the names themselves, and both reads show a name alike.
 - **The site context is read once, at startup, as the server** (`site.py`), before the server is
   built: over the shared executor in `ssh` mode, in this process on the server's host in `local`
   and `delegate` modes, never as a user. No request reads it again; an edit to `/etc/agents.d`
   takes effect at the next start. The read is bounded by `site.READ_TIMEOUT` (10 s): a read that
   has not finished is abandoned on its daemon thread and the server starts without site rules.
+- **In `delegate` mode the server serves only what others can read.** It reads as itself for
+  accounts other than its own, so a directory without others' read and search bits, or a file
+  without others' read bit, is unreadable (`read_local(for_others=True)`): its one line, and no
+  site text, whatever the server process itself may read. `local` and `ssh` read as the user they
+  serve and keep the file system's own answer.
+- **`READ_SITE` resets the glob state a login profile can export to it** (`BASHOPTS`,
+  `SHELLOPTS`, `GLOBIGNORE`: `dotglob`, `nullglob`, `failglob`, `nocaseglob`, `globstar`,
+  `extglob`, `noglob`) within the script itself, so the remote match never depends on it;
+  `launch.FIXED_RESET` (human-gated) is not widened for it.
 - **The served instructions are the base instructions, then `## Site context (/etc/agents.d)`**
   with the files, in that order, whole, within the instructions budget (§ Configuration). A file
   that does not fit is left out and named, with a pointer to `cluster_context`; a later file that
   fits still goes in. The base is never cut: a budget too small for it and that note refuses to
-  start, naming the minimum. With no files, the section is one line saying why.
+  start, naming the minimum. With no files, the section is one line saying why. Every length the
+  composer reserves, cuts or checks is in UTF-16 code units, the budget's own unit: the files and
+  their headers, the note, and a reason, whose detail is cut to `site.DETAIL_LIMIT` (80) units. So
+  every path (files, none, a failure line) serves at most the budget, and a budget a good read
+  accepts holds any failed read's line.
 - **`cluster_context` and `rcac://context` return the full text read at startup**, whatever the
   budget, in every mode and both eras, and run nothing. A missing directory or no eligible file is
   **not an error**: they return `''`. An unreadable directory or file, or a read past its bound,
   is: they return the same one line the instructions carry.
 - **The text is held per server object** (`site.register`, read through FastMCP's current server),
-  never per host or per user. Nothing is held per host; do not key any
-  new cache on `hostname` alone (§3).
+  never per host or per user; two servers built in one process each serve their own
+  (`test_each_server_keeps_its_own_site`, killing the `site-holder-global` mutant). Nothing is held
+  per host; do not key any new cache on `hostname` alone (§3).
 - **Reading `rcac://context` needs no executor**: its handler returns the held text and calls
   neither `get_executor()` nor `set_executor()` (§1), so it answers in every mode and both eras.
   `rcac://storage` is unchanged: its handler still needs the request's executor, which a resource
@@ -1505,8 +1539,8 @@ What each mode means:
 - **In `delegate` mode the tool reaches only a mapped user.** The middleware refuses every tool call
   from an identity absent from the user map before the body runs (§5), `cluster_context` included,
   while the instructions and `rcac://context` reach any client that can connect. That is
-  intended: the text is world-readable administrative markdown and identical for every user, so
-  the difference discloses nothing. Exempting the tool from the map check is a §5 change.
+  intended: what is served there is text every account can read (above) and identical for every
+  user, so the difference discloses nothing. Exempting the tool from the map check is a §5 change.
 
 ### 9. The agent-facing surface is part of the API (`server.py`) [human gate]
 
