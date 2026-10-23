@@ -160,3 +160,32 @@
 
 - Three cycles without convergence (2 MEDIUM; 1 MEDIUM + 1 LOW; 1 MEDIUM + 4 LOW), on a test's
   diagnostic text. The cycle stops for Geoffrey.
+
+## Cycle 3's five items — fixed and verified by the foreman; approved (2026-10-23)
+
+- **Ruling:** Geoffrey, 2026-10-23 (GOAL, open questions): a fix scoped to the five items; the
+  foreman verifies them with the reviewer's probes plus the gates and CI, and the cycle lands
+  without another review cycle.
+- **Fix:** `a7f3e28` (`[test] Build absence-check-leftover-classification P1: review cycle 3`).
+- **Verification** (scratch clones at `07b8fe0` and `a7f3e28`, a scratch HOME, the cycle-3
+  reviewer's probes plus three new ones for items without a probe):
+  - the gitlink (`submod.py` deinit at and inside the location, `clone_submod.py`, `odd.py` §3):
+    before, the suffix fallback with a `del` remedy in all four shapes; after, `{'tracked':
+    [gitlink]}` and "re-added", no `del`;
+  - the oracle under a real `git commit -a` pre-commit hook, `CI=true`: before, 10 failed / 94
+    passed; after, 114 passed;
+  - a FIFO or socket (`odd.py` §2, `fifo.py`): before, the fallback says "re-added"; after, the
+    ignored line plus its own "unknown" line, a `del` per class;
+  - `need_git` with a git that does not run (`DEVELOPER_DIR=/nonexistent` on `/usr/bin/git`):
+    before, 1 failed and 61 errors; after, 44 passed and 70 skipped off CI, and on CI the failures
+    the gate expects, each naming the cause;
+  - a malformed developer `~/.gitconfig` and `~/.config/git/config`: before,
+    `test_git_env_drops_what_points_git_elsewhere` failed alone; after, 114 passed, plain and CI;
+  - `gate.sh P1` at `a7f3e28`: green in every part; 33 mutants killed, counted independently;
+  - the suite at `a7f3e28`: `799 passed` in each era, plain and with `CI=true`; CI run 39993627899
+    green on `a7f3e28`;
+  - scope: `07b8fe0..a7f3e28` touches only `tests/test_registry.py`, `tests/conftest.py`, the spec
+    and `AGENTS.md` (item 5); nothing under `src/`, `bin/`, `.github/`, `pyproject.toml` or
+    `uv.lock`.
+- **Human gate:** none (cycles 1–3 recorded none; `AGENTS.md`'s line is the ruling's item 5).
+- **Verdict: approved**, pinned to `a7f3e28`.
