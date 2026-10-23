@@ -3,7 +3,7 @@ slug: sbatch-script-name-collision
 title: Give every sbatch job script written from content its own file
 kind: fix
 appetite: small
-status: in_review
+status: blocked
 branch: fix/sbatch-script-name-collision
 base: develop
 current_phase: done
@@ -34,10 +34,10 @@ phases:
   hill: uphill
   verify: sh spec/sbatch-script-name-collision/verify/gate.sh P2
 review:
-  last_reviewed_commit: ''
-  verdict: none
-  blocked_reason: ''
-  cycle: 0
+  last_reviewed_commit: 30801597662820ae588f51feb15c3f9515280558
+  verdict: changes-requested
+  blocked_reason: 'LOW: description omits the job fallback (R5)'
+  cycle: 1
 ---
 
 # TECH.md — Give every sbatch job script written from content its own file
