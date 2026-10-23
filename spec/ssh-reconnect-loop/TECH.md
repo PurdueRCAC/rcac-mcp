@@ -17,6 +17,7 @@ phases:
   - R4
   - R5
   - R6
+  - R7
   depends_on: []
   parallel: false
   hammerable: false
@@ -91,12 +92,14 @@ checklists below are the work. `code-build` executes the next actionable phase, 
 ---
 
 ## Phase P1 — Executor: a reconnect that ends within the bound, reported as not run
-**Satisfies:** R1, R4, R5, R6 · **Depends on:** —
+**Satisfies:** R1, R4, R5, R6, R7 · **Depends on:** —
 **Goal:** `SSHExecutor` gives up a reconnect within three times the connect bound of the call's
 start.
 - On giving up, `run` and `write` return −1002 with `cannot connect to <host>: <cause>`, and `put`
   and `get` raise that message.
 - A connection is published only once it has opened, under a lock.
+- At most one connect attempt is in flight at a time, and a call that arrives during one joins it
+  under its own deadline (R7).
 - Unit rows pin it under an injected clock and real-Fabric construction, and the texts state the
   bound.
 
@@ -104,7 +107,7 @@ start.
       `_cause_class`, `_detail`, `CHAIN_DEPTH`) move from `startup.py` into `executor/ssh.py`.
       `startup.py` and `__init__.py` import them from there. The text is unchanged (PLAN §2.1).
 - [ ] **Add the new pieces.** `RECONNECT_FACTOR`, `ATTEMPT_POLL`, `FINAL_ATTEMPT_LEAD`,
-      `self._lock`, `self._window`, `_bound`, `_new`, `_attempt`, `_release` (the client and the
+      `self._lock`, `self._window`, `self._inflight`, `_bound`, `_new`, `_attempt`, `_release` (the client and the
       gateway chain, outside the lock), `_publish` (returns a transport, refreshes `_window`),
       `_Pending` and `_await`.
   - `open()` runs one `_new()` + `open()` on the calling thread and publishes it.
@@ -113,11 +116,14 @@ start.
   - The fast path returns the transport it captured.
   - `_new()` and `open()` run only on the worker, never on the calling thread.
   - The wait goes through `_await`, every `ATTEMPT_POLL`.
-  - At the deadline the caller owns the outcome under the lock: it publishes or takes a finished
-    outcome, or marks the attempt abandoned and closes `client.get_transport()` and the gateway
-    chain outside the lock.
-  - A late success releases itself.
-  - It catches `except Exception` and re-raises a `BaseException` in the caller.
+  - One attempt in flight (R7): under the lock, a call joins `self._inflight` (`waiters += 1`), or
+    starts the attempt if there is none.
+  - The worker owns its outcome. Under the lock it publishes a success (even with no waiter left)
+    or records a failure, then clears `self._inflight` and sets `done`.
+  - At its own deadline a call leaves (`waiters -= 1`). The last to leave closes
+    `client.get_transport()` and the gateway chain, outside the lock. The slot stays occupied until
+    the worker ends.
+  - The worker catches `except Exception`. A `BaseException` outcome is re-raised by every waiter.
   - `AuthenticationException` gives up at once.
   - Backoff is capped so the last attempt starts at least `FINAL_ATTEMPT_LEAD` before the deadline.
   - The clock is read only as `time.monotonic` and `time.sleep`.
@@ -132,12 +138,12 @@ start.
 - [ ] **Texts** (PLAN §2.3):
   - The bound statement goes in word for word, in the `SSHExecutor` docstring and in AGENTS.md's
     `executor/ssh.py` footgun entry, replacing "reconnect backoff (… never gives up …)".
-  - AGENTS.md §3's −1002 bullet gains the reconnect cause and its stderr. **Only once the foreman
-    has ruled on PLAN's deviation table, row 1.**
+  - AGENTS.md §3's −1002 bullet gains the reconnect cause and its stderr. The foreman approved
+    this at the gate, 2026-10-23 (PLAN deviation table, row 1).
   - AGENTS.md's repository-map rows for `startup.py` and `executor/ssh.py`.
   - `base.py`'s −1002 comment and `Executor.run` Returns, and `put`/`get` `Raises: ConnectionError`.
   - `ssh.py`'s module, constants and method docstrings.
-  - If the foreman rules Q6 the other way, the statement's wording follows the ruling.
+  - The statement reads per executor call, as GOAL Q6 rules.
 - [ ] **Tests** (`tests/test_ssh_exec.py`, a new "A reconnect" section next to "A lost
       connection", marker `unit`). PLAN §2.4 and §6 describe the harness; each row the gate names
       is built here.
@@ -149,6 +155,9 @@ start.
   - **Real `_new()` rows**, needing no socket:
     - `_bound` from ssh_config `ConnectTimeout 30`, and from `connect_kwargs` `timeout` 30;
     - `CanonicalizeHostname` with `socket.gethostbyname` patched to block.
+  - **`test_concurrent_calls_during_a_stall_start_one_attempt`** (R7): K calls during a `'hang'`
+    and during a real `_new()` blocked in canonicalisation each give −1002 at their own bound, and
+    `_new` runs once. A call after they have all left joins the same attempt.
   - **What every row asserts**: `guard.refused == []`. Every R1 row also asserts −1002, never
     −1003, and fake elapsed time no more than the bound.
   - **`test_reconnect_texts_state_the_bound`** pins R5's two texts and the old text's absence.
@@ -158,7 +167,9 @@ start.
     - `ssh-reconnect-unbounded-retry`;
     - `ssh-reconnect-reads-as-lost`;
     - `ssh-reconnect-retries-refused-auth`;
-    - `ssh-reconnect-late-success-leaks`.
+    - `ssh-reconnect-late-success-leaks`;
+    - `ssh-reconnect-attempt-per-call` (R7: each call starts its own attempt; target: the
+      one-attempt row).
   - Re-plants, each named in the commit body:
     - `startup-host-unnamed`, on the helper's new home;
     - `startup-no-connect-timeout`, on `_new`'s `Connection(...)` line;

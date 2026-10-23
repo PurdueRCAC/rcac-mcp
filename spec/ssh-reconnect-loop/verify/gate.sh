@@ -9,7 +9,7 @@
 #   mutants — only the cycle's mutation cases (for a fail-once mutation, or a last-phase rerun).
 #
 # Footprint: one process at a time. pytest takes about 300 MB. tests/mutants.py runs one child copy
-# of the package at a time, about 2 s per case (13 cases, under a minute). Nothing runs in the background, so there is no
+# of the package at a time, about 2 s per case (14 cases, under a minute). Nothing runs in the background, so there is no
 # process tree to clean up. Offline: no real ssh and no host. The in-process SSH server binds
 # 127.0.0.1 only, and the CLI drive goes through bin/sandbox.sh, which fails closed on SSH.
 #
@@ -26,6 +26,7 @@ $T::test_a_reconnect_bound_reads_the_connect_timeout
 $T::test_a_reconnect_attempt_that_hangs_is_abandoned_at_the_bound
 $T::test_a_reconnect_that_blocks_building_the_connection_is_abandoned
 $T::test_concurrent_reconnects_publish_one_connection
+$T::test_concurrent_calls_during_a_stall_start_one_attempt
 $T::test_a_reconnect_that_succeeds_at_the_deadline_is_owned_once
 $T::test_a_failed_reconnect_of_a_transfer_raises_naming_the_host
 $T::test_reconnect_texts_state_the_bound
@@ -37,7 +38,7 @@ $T::test_a_reconnect_failure_reaches_each_tool_as_not_run
 $T::test_sacct_spends_one_reconnect_window
 $T::test_a_reconnect_failure_is_never_cached_as_cluster_context"
 P1_MUTANTS="ssh-reconnect-unbounded-poll ssh-reconnect-unbounded-retry ssh-reconnect-reads-as-lost
-ssh-reconnect-retries-refused-auth ssh-reconnect-late-success-leaks
+ssh-reconnect-retries-refused-auth ssh-reconnect-late-success-leaks ssh-reconnect-attempt-per-call
 startup-host-unnamed startup-no-connect-timeout staged-checksum-unchecked transfer-cause-unnamed"
 P2_MUTANTS="ssh-reconnect-gives-up-for-good sbatch-not-started-reads-as-failed sacct-whoami-unchecked
 context-caches-not-started"

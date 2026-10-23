@@ -64,6 +64,10 @@ it, and the behaviour is pinned by tests that need no real host.
   timeout set by the SSH config changes it.
 - **R6** — The suite SHALL pin R1–R4 using the suite's in-process SSH server or a fake connection,
   never a real host, and these tests SHALL run in the profile's `verify` in both protocol eras.
+- **R7** — WHILE a connect attempt is in flight, the executor SHALL start no other: a call that
+  needs a connection then joins that attempt, waiting under its own R1 bound, so calls arriving
+  during a stall that no attempt can abort (name resolution, the SSH agent) leave at most one
+  attempt running, never one per call. The suite SHALL pin it as R6 pins R1–R4. (Q7)
 
 ## Non-goals (no-gos)
 
@@ -76,8 +80,8 @@ it, and the behaviour is pinned by tests that need no real host.
 - **Retrying the command itself** after a lost connection, or replaying a failed call: the agent
   decides whether to call again.
 - **Coordinating concurrent calls during an outage** beyond each call meeting R1–R3 on its own
-  (for example, sharing one reconnect between them). The plan may, but the contract does not
-  require it.
+  and R7's one attempt in flight. *Amended 2026-10-23 (Q7): sharing one connect attempt is now
+  required.*
 - **The `local` and `delegate` backends**, which hold no connection.
 - **Making the bound configurable** (a flag or environment variable).
 
@@ -105,6 +109,21 @@ Ruled by the foreman at the GOAL gate, 2026-10-23.
 - **Q5** Is the dead-but-unnoticed connection (first non-goal) in scope? — **A:** No. It is not the
   reported hang; if the plan's research finds it unbounded, it is recorded as a seed, not fixed
   here.
+
+Ruled by the foreman at the PLAN/TECH gate, 2026-10-23.
+
+- **Q6** Is R1's bound per tool call or per executor call? — **A:** per executor call. R1's bound
+  is the wait on one failed reconnect window. A tool spends at most one failed window, because
+  every tool stops at its first `-1002`; a tool whose earlier executor call succeeded (including
+  one that reconnected, under R2) may take that call's own time plus one window. No `ContextVar`
+  deadline and no change to `middleware.py`.
+- **Q7** May each call's reconnect leave its own stuck attempt behind? — **A:** No; new
+  requirement R7. An attempt blocked where nothing can abort it (`getaddrinfo`, the SSH agent)
+  outlives its deadline, so per-call attempts would leave N threads after N calls during a DNS
+  stall. The executor keeps at most one connect attempt in flight; a call that arrives while one
+  runs joins it with its own deadline and never starts another. A test shows K concurrent calls
+  during a stall start one attempt, and a mutant (per-call attempts) is caught. Appetite stays
+  `small`.
 
 **Human gate.** The fix lands in `src/rcac_mcp/executor/ssh.py`, which is in the coupled core and on
 the high-blast-radius list (`AGENTS.md` § Factory → Profile, § Invariants → High-blast-radius

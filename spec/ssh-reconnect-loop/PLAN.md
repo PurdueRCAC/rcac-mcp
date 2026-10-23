@@ -1,6 +1,6 @@
 # PLAN — A lost SSH connection fails a call within a bound, never hangs it
 
-> **Status:** Draft for review · **Last updated:** 2026-10-23
+> **Status:** Signed off at the PLAN/TECH gate with the foreman's rulings (§3 bullet, Q6, Q7/R7) · **Last updated:** 2026-10-23
 > **Authoritative technical design.** The *how*. Vision/contract is [`GOAL.md`](GOAL.md);
 > the phased executable roadmap is [`TECH.md`](TECH.md). Backing detail is in
 > [`research/`](research/). Every design element traces to a GOAL R-ID.
@@ -12,7 +12,9 @@ Each call that has to reconnect gets a deadline: three times the connect bound f
 deadline, so no step can hold the call past it, whether DNS, an SSH agent, several keys, or a
 ProxyJump hop. A call that runs out of time returns `NOT_STARTED_EXIT_CODE` with
 `cannot connect to <host>: <cause>`, or raises that message for an SFTP transfer. A connection
-becomes the executor's only once it has opened, under a lock, so the next call starts clean.
+becomes the executor's only once it has opened, under a lock, so the next call starts clean. At
+most one connect attempt is in flight at a time: a call that arrives during one joins it under its
+own deadline (R7), so a stall nothing can abort leaves one thread, not one per call.
 
 The change is centred on `executor/ssh.py`, plus two caller fixes (`sbatch`, `sacct`), a guard in
 `resources.py` and test infrastructure. It stays within `small`: three phases, the first carrying
@@ -32,7 +34,8 @@ the core.
     the deadline.
 - **Kept and documented:** `INITIAL_RECONNECT_DELAY` and `MAX_RECONNECT_DELAY`, as the backoff
   schedule.
-- **`self._lock: threading.Lock`** and **`self._window: float`**, both made in `__init__`.
+- **`self._lock: threading.Lock`**, **`self._window: float`** and **`self._inflight: _Pending | None`**
+  (the one attempt in flight, R7), all made in `__init__`.
 - **`_bound(conn) -> float`** returns
   `max(CONNECT_TIMEOUT, conn.connect_timeout or 0, the explicit connect_kwargs timeout or 0)`.
   Fabric has already resolved `conn.connect_timeout` from the caller's `connect_timeout`, the
@@ -67,52 +70,75 @@ the core.
 - a failure releases the connection and re-raises its own exception, as today, so `startup.py`'s
   message and exit status are unchanged.
 
-**`_ensure_connected(deadline: float) -> Transport | str`.**
+**`_ensure_connected(deadline: float) -> Transport | str`.** It runs at most one connect attempt at a
+time for the whole executor (R7, Q7). A call that arrives while an attempt runs joins it and never
+starts a second one.
 
-- **Fast path.** Capture `self._conn`'s transport once. If it is active, return that transport.
-  Callers use what is returned and never re-read `self._conn`, so another thread's `_publish` can't
-  swap a transport out from under a call (review finding 11).
-- **The loop**, until the reconnect succeeds or gives up:
-  1. **Run one attempt.** `_attempt` runs on a daemon thread named `cluster-mcp-reconnect`. A holder
-     (`_Pending`: a `threading.Event`, the outcome, an `abandoned` flag) carries the result back.
-     The outcome is one of three things:
-     - the `Connection`;
-     - the `Exception`;
-     - or a `BaseException`, which the caller re-raises.
-  2. **Wait for it.** The caller waits through a module function, `_await(event, seconds)`, which is
-     `event.wait(seconds)` in production. It calls it every `ATTEMPT_POLL` and reads the deadline
-     from `time.monotonic()`. A test replaces `_await` to advance the fake clock by `seconds`
-     instead of sleeping (review finding 7).
-  3. **The deadline passes before the event is set.** The caller takes the lock and decides who
-     owns the outcome (review finding 6):
-     - **The worker has finished.** The caller owns the outcome:
-       - publishes a success (a connection that opened in time is used, not wasted);
-       - or takes the exception as the cause.
-     - **The worker hasn't finished.** The caller:
-       - sets `abandoned` and takes a reference to the attempt's connection;
-       - outside the lock, closes `conn.client.get_transport()` and the gateway chain, which aborts
-         kex, auth or a gateway's channel open within about 0.1 s (research 01 §3);
-       - never closes Fabric's `conn.transport`, which stays `None` until `open()` returns.
+- **Fast path.** Capture `self._conn`'s transport once. If it is active, return it. Callers use
+  what is returned and never re-read `self._conn`, so another thread's `_publish` can't swap a
+  transport out from under a call (review finding 11).
+- **The holder.** `_Pending` is shared by everyone waiting on one attempt. It holds:
+  - `done`, a `threading.Event`;
+  - the outcome: the published transport, the `Exception`, or a `BaseException`;
+  - `conn`, which the worker sets as soon as it has built the connection, so a waiter can reach
+    its transport;
+  - `waiters`, a count.
 
-       The worker, on finishing, takes the lock, sees `abandoned`, and releases its own success
-       instead of handing it back. Exactly one side owns every outcome: it is published or
-       released, never neither.
-  4. **Success.** Return `_publish(conn)`.
-  5. **`AuthenticationException`.** Give up at once. Under Q4, the auth timeout and a refusal share
-     that class, and the next call retries.
-  6. **Any other failure.**
-     - **When to stop.** If `now >= deadline − FINAL_ATTEMPT_LEAD`, give up.
-     - **Otherwise, sleep.** The sleep is `min(delay, deadline − FINAL_ATTEMPT_LEAD − now)`, taken
-       through `time.sleep`. The delay then doubles, up to `MAX_RECONNECT_DELAY`.
-     - **What that guarantees.** The last attempt starts no later than `FINAL_ATTEMPT_LEAD` before
-       the deadline. So a host that is back by then is used: the retry window R2 names runs to
+  `self._inflight` holds the attempt in flight, or `None`. Both it and `waiters` change only under
+  `self._lock`.
+- **The loop**, until the call succeeds or gives up:
+  1. **Join or start.** Under the lock:
+     - If `self._inflight` is set, join it: `waiters += 1`.
+     - Otherwise create a `_Pending`, make it `self._inflight` with `waiters = 1`, and start
+       `_attempt` on a daemon thread named `cluster-mcp-reconnect`.
+
+     A call never starts an attempt while another is in flight, so K calls during a stall leave one
+     thread, not K.
+  2. **The worker owns its outcome.** When the attempt ends, the worker takes the lock and records
+     its outcome:
+     - On success it calls `_publish`, which adopts the connection if its transport is active and
+       releases it otherwise. The returned transport is recorded.
+     - On failure it records the exception.
+
+     Then, still under the lock, it clears `self._inflight` and sets `done`. A success that lands
+     after every waiter has left is still published, never leaked: the connection is the
+     executor's whether or not anyone is waiting (review finding 6). No caller ever publishes or
+     releases an attempt's connection itself.
+  3. **Wait.** Each call waits through a module function, `_await(event, seconds)`, which is
+     `event.wait(seconds)` in production. It waits `ATTEMPT_POLL` at a time and checks its own
+     deadline on `time.monotonic()` between waits. A test replaces `_await` to advance the fake
+     clock by `seconds` instead (review finding 7).
+  4. **The call's own deadline passes before `done`.** Under the lock, `waiters -= 1`.
+     - If no waiter is left, the call takes the attempt's `conn` and, outside the lock, closes
+       `conn.client.get_transport()` and the gateway chain. That aborts kex, auth or a gateway's
+       channel open within about 0.1 s (research 01 §3). Fabric's `conn.transport` is never the
+       one closed: it stays `None` until `open()` returns.
+     - The call then gives up, with the last cause it saw, or `timed out`.
+     - The slot stays occupied until the worker finishes. Where nothing can be closed (in DNS or
+       an SSH-agent query), a later call joins that same stuck attempt, waiting under its own
+       deadline, and never starts a second one.
+  5. **Success** (`done`, with a transport). Return it.
+  6. **`AuthenticationException`.** Give up at once. Under Q4, an auth timeout and a refusal share
+     that class, and the next call retries. Every waiter on that attempt gives up with it.
+  7. **Any other failure.**
+     - If `now >= deadline − FINAL_ATTEMPT_LEAD`, give up.
+     - Otherwise, sleep `min(delay, deadline − FINAL_ATTEMPT_LEAD − now)` through `time.sleep`, then
+       double the delay up to `MAX_RECONNECT_DELAY` and go back to step 1.
+     - After a shared failure, the first call to wake starts the next attempt and the rest join it.
+     - The last attempt a call joins or starts begins no later than `FINAL_ATTEMPT_LEAD` before
+       its deadline. A host that is back by then is used: R2's retry window runs to
        `deadline − FINAL_ATTEMPT_LEAD` (review finding 5).
-- **Giving up returns a message, never raises it.** The return value is
-  `connect_failure_message(self._host, cause)`, a `str` (`timed out` when an abandoned attempt has
-  no cause yet). Each caller turns it into its own form.
-- **The clock.** `time.monotonic` and `time.sleep` are read only through the module attribute
-  (`time.…`), and the attempt wait goes through `_await`. A test swaps `ssh.time` and
+- **Giving up returns a message; it never raises.** The message is
+  `connect_failure_message(self._host, cause)`, a `str`. Each caller turns it into its own form.
+- **A `BaseException` outcome** (an interrupt, or a test's tripwire) is re-raised by every waiter.
+- **The clock.** Time is read only through the module attribute, as `time.monotonic` and
+  `time.sleep`, and every wait on an attempt goes through `_await`. A test swaps `ssh.time` and
   `ssh._await` (research 03 §A2).
+- **Research check (Q7).** Neither brief 01 nor brief 02 conflicts with one attempt in flight.
+  - Brief 02 §4 rejected holding the lock across the whole reconnect, because a queued call would
+    exceed its bound. Here the lock is held only for bookkeeping. Each call waits on the shared
+    event under its own deadline, so that objection doesn't apply.
+  - Brief 01's per-call worker thread becomes a per-attempt worker shared by its joiners.
 
 **Callers inside `SSHExecutor`.** Every public method takes its deadline at entry:
 `time.monotonic() + self._window`, computed from the cached window with no I/O (review finding 1).
@@ -153,22 +179,14 @@ together with its helpers `_chain`, `_refused`, `_cause_class`, `_detail` and `C
   context for the process's life (review finding 3).
   - Reads get no executor today (§ Invariants §8), so this is latent. This change would create it.
 
-**One window per executor call, not per tool call: Q6, for the foreman's ruling.**
+**One window per executor call: Q6, as ruled by the foreman (GOAL Q6).**
 
-- **What the design guarantees.**
-  - Each `run`, `write`, `put` and `get` call spends at most one window.
-  - Every tool stops at its first −1002.
-  - So a call that starts during an outage fails within one bound.
-- **Where that falls short of R1's literal wording.** The link can drop between two executor calls
-  of one tool, for example `sbatch`'s `write`, then its `run`; `sacct`'s `whoami`, then `sacct`.
-  The second call then gets a fresh window, so the tool call can last the first call's time plus
-  one bound.
-- **The alternative, a per-tool-call deadline.** That needs a `ContextVar` set and reset in
-  `SharedExecutorMiddleware.on_call_tool`:
-  - it touches `middleware.py`, which is §1 and high blast radius;
-  - it is still unmet for direct executor use outside a tool call.
-- **The plan builds the per-executor-call reading** unless the foreman rules otherwise. R5's
-  statement names it ("from the start of the call that finds the connection lost"). See §5.
+- R1's bound is the wait on one failed reconnect window.
+- Each `run`, `write`, `put` and `get` spends at most one window, and every tool stops at its first
+  −1002, so a tool spends at most one failed window.
+- A tool whose earlier executor call succeeded may take that call's own time plus one window. That
+  includes a call that reconnected, under R2.
+- There is no `ContextVar` deadline, and `middleware.py` doesn't change.
 
 ### 2.3 Texts (same-commit; R5)
 
@@ -258,7 +276,8 @@ executor-level row, or a tool row under the watchdog.
   - `ssh-reconnect-unbounded-retry`: the deadline check after a failure is dropped.
   - `ssh-reconnect-reads-as-lost`: a failed reconnect returns −1003.
   - `ssh-reconnect-retries-refused-auth`: Q4's give-up-at-once is dropped.
-  - `ssh-reconnect-late-success-leaks`: the worker hands back a success after `abandoned`.
+  - `ssh-reconnect-late-success-leaks`: a success that lands after every waiter left is neither published nor released.
+  - `ssh-reconnect-attempt-per-call`: each call starts its own attempt instead of joining the one in flight (R7).
 - **New in P2:**
   - `ssh-reconnect-gives-up-for-good`: a failure is remembered across calls.
   - `sbatch-not-started-reads-as-failed`.
@@ -274,12 +293,13 @@ executor-level row, or a tool row under the watchdog.
 
 | R-ID | Design element(s) that satisfy it |
 |------|-----------------------------------|
-| R1 | §2.1: a deadline taken at each executor call's entry, with no I/O; attempts, construction included, on a worker abandoned at the deadline; `connect_failure_message`. §2.2: every tool stops at its first −1002 (`sacct`, `sbatch`, the context loader); per-executor-call reading pending Q6. Both eras, through tool rows. |
+| R1 | §2.1: a deadline taken at each executor call's entry, with no I/O; attempts, construction included, on a worker that a call stops waiting for at its own deadline; `connect_failure_message`. §2.2: every tool stops at its first −1002 (`sacct`, `sbatch`, the context loader); per executor call, as Q6 rules. Both eras, through tool rows. |
 | R2 | §2.1: every non-auth failure is retried until `deadline − FINAL_ATTEMPT_LEAD`; `_publish` hands the call a fresh transport, and the command runs on the normal path. |
 | R3 | §2.1: `_publish` runs only on success, so a failed or auth-refused connection never reads as connected; nothing is cached as failed; the fast path re-checks the transport on every call. |
 | R4 | §2.1: −1002 with `the command was not run`, never −1003 and never through `launch.separate`; `nothing was transferred` for SFTP. §2.2: `sbatch` says "not submitted" on both its paths. |
 | R5 | §2.3: the bound statement in the `SSHExecutor` docstring and in AGENTS.md's `executor/ssh.py` footgun entry, replacing the defect's text and saying how ssh_config `ConnectTimeout` changes the bound; pinned by a text test. |
 | R6 | §2.4: unit rows under `FakeClock` with fakes and real `_new()`; integration rows on `LoopbackSSH` with `refuse` and `serve_again`; tool rows through the era-switched harness. All run in the profile's `verify`, in both eras. |
+| R7 | §2.1: `self._inflight`, where a call joins the attempt in flight and never starts a second, and the worker owns its outcome; §2.4/§6: K concurrent calls during a stall start one attempt; the mutant `ssh-reconnect-attempt-per-call`. |
 
 ## 3. Invariant gate (AGENTS.md constitution check)
 
@@ -325,9 +345,9 @@ Walked before research (from the GOAL) and again against this design.
 
 | Deviation | Why needed | Simpler alternative rejected because |
 |-----------|-----------|--------------------------------------|
-| **§3's −1002 bullet (a [human gate] contract text) gains a third cause**, a reconnect that could not be made, with its own stderr line. Q3 ruled "no new reserved code, so §3 is unchanged"; the code set is unchanged, but the bullet enumerates −1002's causes and their exact stderr, so its text must change in the same commit. **Needs the foreman's ruling.** | Q3 fixes −1002 as the code; a −1002 whose cause §3 does not list would make §3 false. | Leaving §3's text alone: the review grades §3 violations as CRITICAL, and the code would contradict it. |
+| **§3's −1002 bullet (a [human gate] contract text) gains a third cause**, a reconnect that could not be made, with its own stderr line. Q3 ruled "no new reserved code, so §3 is unchanged"; the code set is unchanged, but the bullet enumerates −1002's causes and their exact stderr, so its text must change in the same commit. **Approved by the foreman at the PLAN/TECH gate, 2026-10-23**, who holds the human gate under the autonomy decision. It documents a new cause of an existing code, so Q3's "no new code" holds. | Q3 fixes −1002 as the code; a −1002 whose cause §3 does not list would make §3 false. | Leaving §3's text alone: the review grades §3 violations as CRITICAL, and the code would contradict it. |
 | Each connect attempt runs on a worker thread, abandoned at the deadline. | DNS, the SSH agent, per-key auth and a ProxyJump channel have no usable bound (research 01 §1), so Q1's 45 s can't be honoured by per-step timeouts. | Per-step timeouts plus "no new attempt after the window": the bound would read "about 45 s, longer if DNS, the agent, several keys or a jump host stall", which fails R1 as worded. |
-| A lock around publishing `self._conn`. | Concurrent reconnects today hand one call another's half-open connection (an `AttributeError` that names no host, which fails R1) and leak live connections (research 02 §4). | Holding the lock across the whole reconnect: a call queued behind another's window would exceed its own bound. |
+| A lock around the published connection and the one attempt in flight (R7). | Concurrent reconnects today hand one call another's half-open connection (an `AttributeError` that names no host, which fails R1) and leak live connections (research 02 §4). R7 needs one attempt in flight, so calls during a stall don't pile up threads. | Holding the lock across the whole reconnect: a call queued behind another's window would exceed its own bound. Here the lock covers only bookkeeping, and each call waits on the shared attempt under its own deadline. |
 | Changes outside `executor/ssh.py`: `tools/slurm.py`, `resources.py`, `startup.py` (import), `__init__.py` (import), `base.py` docstrings, `tests/ssh_server.py`, `tests/mutants.py`. | R4 needs `sbatch`'s wording on both its paths. R1 needs every tool to stop at its first −1002, and `sacct` would spend two windows. The `resources.py` cache would turn a −1002 into a permanent empty or truncated context. | Fixing only `ssh.py`: R1 and R4 would fail at tool level. |
 
 ## 4. Rabbit holes (resolved)
@@ -373,7 +393,7 @@ MEDIUM, 2 LOW. Every one is folded in.
 | 3 | MED | The bound is per executor call, while R1 says per tool call. Multi-call tools and the context loader could spend several windows. | Every tool stops at its first −1002; the context loader stops on any −1002 and caches nothing. The remaining gap, a loss between two executor calls of one tool, goes to the foreman as **Q6** (§2.2, §5). |
 | 4 | MED | `sbatch` with `script_content` meets the outage at `write`, so it never said "not submitted". | Both of `sbatch`'s paths map −1002 to "not submitted", and the row covers both. |
 | 5 | MED | With the sleep capped exactly at the deadline, no attempt ran in the window's last ~10 s, so a host back late in the window failed R2. | `FINAL_ATTEMPT_LEAD` (2 s): the last attempt starts at least that long before the deadline, and R5's text says so. An R2 row brings the host back 40 s in. |
-| 6 | MED | Who owned a success that landed just as the deadline passed was unclear, and closing a transport inside the lock could block other calls. | The caller checks completion under the lock and owns a finished outcome. `abandoned` is set only for an unfinished one. All closing happens outside the lock. A deterministic row puts the deadline at the instant of success. |
+| 6 | MED | Who owned a success that landed just as the deadline passed was unclear, and closing a transport inside the lock could block other calls. | At the gate R7 changed this: the worker owns every outcome under the lock. It publishes a success, even one with no waiter left, and records a failure; waiters only read. All closing happens outside the lock. A deterministic row puts the deadline at the instant of success. |
 | 7 | MED | The "hang" advanced the clock on its own cadence, so its timing was nondeterministic. `Runaway` on a worker or a FastMCP thread could be lost, or kill the server, and a mutant could hang the gate. | `_await` is a module function that the fake clock replaces. `Runaway` runs only on the test thread. Tool rows run under a real-time watchdog. Mutants target executor-level rows. |
 | 8 | MED | With fakes alone, `_bound`'s attribute and abandonment's choice of transport went untested. A growth row asserting only "≤ 90 s" passes a `_bound` that ignores the timeout. | Real-`_new()` rows for ssh_config `ConnectTimeout 30` and `connect_kwargs` `timeout` 30. The growth row asserts an attempt after 45 s. An integration row abandons a real stalled handshake with `CONNECT_TIMEOUT` patched to 1. |
 | 9 | MED | ProxyJump attempts leaked authenticated bastion sessions, and an abandoned worker could wait up to an hour on a gateway channel. | `_release` walks the gateway chain on failure, on abandonment and on replacing a dead connection. Abandonment closes the gateways too, which ends a channel-open wait. Risk 3 is corrected. |
@@ -382,24 +402,19 @@ MEDIUM, 2 LOW. Every one is folded in.
 
 ## 5. Risks & open questions
 
-1. **For the foreman: §3's text change** (deviation table, first row).
-2. **For the foreman: Q6, one window per executor call or per tool call** (§2.2).
-   - The plan builds the per-executor-call reading:
-     - every tool stops at its first −1002, so an outage present at a call's start fails within
-       one bound;
-     - a link lost between two executor calls of one tool can add at most one further bound.
-   - A strict per-tool-call bound needs a `ContextVar` deadline set in `middleware.py`
-     (§1, high blast radius).
-   - Either way it is a GOAL clarification, not a deviation: the table never bends an R-ID.
-3. **An abandoned attempt thread can outlive its call.**
-   - Abandonment closes the client's transport and any gateway's, which ends kex, auth and a
-     gateway channel's open within about 0.1 s.
-   - Inside DNS, an SSH-agent query, a `Match exec` command or the TCP connect, there is nothing
-     to close. The thread runs until that step returns, which for TCP connect is bounded by the
-     connect bound.
-   - It is a daemon thread, it never publishes, and it releases what it opened.
-   - Each call runs at most one attempt at a time, so threads accumulate only while calls keep
-     arriving faster than the stuck step returns.
+1. **Ruled: §3's text change is approved** (deviation table, first row).
+2. **Ruled: Q6, the bound is per executor call** (§2.2, GOAL Q6).
+3. **A stuck attempt can outlive the calls waiting on it** (R7 limits it to one).
+   - When the last waiter leaves, it closes the client's transport and any gateway's, which ends
+     kex, auth or a gateway channel's open within about 0.1 s.
+   - Inside DNS, an SSH-agent query, a `Match exec` command or the TCP connect there is nothing to
+     close. The worker runs until that step returns; for TCP connect, that is the connect bound.
+   - Calls that arrive meanwhile join the stuck attempt, so the executor never holds more than one.
+   - The cost of R7: while that one attempt is stuck, a new call can't start a fresh one, so it
+     fails at its own bound even if the host has come back. Once the step returns, the slot clears
+     and the next call tries again (R3).
+   - It is a daemon thread. Its success is published, its failure is recorded, and a connection
+     it opened but didn't publish is released.
 4. **Q4's choice: any `AuthenticationException` ends the reconnect at once, the auth timeout
    included.** A transient auth stall then fails that call quickly instead of waiting out the
    window, and the next call retries. This also keeps a refused key from being retried about eight
@@ -427,11 +442,15 @@ MEDIUM, 2 LOW. Every one is folded in.
   - **Auth refused** gives up after one attempt.
   - **The bound grows.** `connect_timeout=30` gives an attempt after 45 s and a give-up at 90 s or
     before. A real `_new()` resolves `_bound` to 30 from ssh_config and from `connect_kwargs`.
-  - **Hangs.** An attempt that never returns is abandoned at the bound. Its late success is
-    released, never published.
+  - **Hangs.** A call waiting on an attempt that never returns gives up at its bound. When the
+    attempt is released later, its success is published, never leaked.
+  - **One attempt in flight (R7).** K concurrent calls during a stall (a `'hang'`, or a real
+    `_new()` blocked in canonicalisation) start one attempt. Each gives −1002 at its own bound,
+    within K × `ATTEMPT_POLL` of fake time, since the calls share one clock. A call arriving after
+    they have all left joins the same attempt, still one. Releasing it clears the slot.
   - **A real `_new()` that blocks in canonicalisation** still gives −1002 at the bound.
   - **Concurrency.** Concurrent reconnects publish one connection. A success at the deadline's
-    instant is published or released, never neither.
+    instant is published, never lost.
   - **Transfers.** `put` and `get` raise `ConnectionError` with the text, and `write` returns −1002.
 - **Unit rows, tool level**, through `_tool` in the selected era, under a real-time watchdog:
   - `run_command`;
