@@ -3,7 +3,7 @@ slug: safe-execution
 title: Every tool passes exactly what it was given, under one interpreter
 kind: fix
 appetite: big
-status: in_review
+status: blocked
 branch: fix/safe-execution
 base: develop
 current_phase: done
@@ -104,10 +104,10 @@ phases:
   attempts: 1
   verify: uv lock --check && uv run pytest -q && CLUSTER_MCP_TEST_ERA=modern uv run pytest -q && sh spec/safe-execution/verify/sweep.sh && bin/sandbox.sh uv run rcac-mcp --help
 review:
-  last_reviewed_commit: 227a7bb12991716fba2fcc306a2e7de393f81e3f
+  last_reviewed_commit: 5465485e3bf79653fe1b854ad4e789baffdc45d1
   verdict: changes-requested
-  blocked_reason: 'Cycle 4 (named exception) not clean: CRITICAL silent SFTP failure, HIGH link-loss -1002, MEDIUM replace semantics; stopped for Geoffrey'
-  cycle: 4
+  blocked_reason: 'Scoped review: 4 findings fixed; new LOW (loop message) CONFIRMED, MEDIUM PLAUSIBLE (exec race); for Geoffrey'
+  cycle: 5
 ---
 
 # TECH.md — Every tool passes exactly what it was given, under one interpreter

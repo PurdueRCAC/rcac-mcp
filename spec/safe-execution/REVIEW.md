@@ -461,3 +461,50 @@ ruling); `list_directory` paths read from `$PWD`; five seeds filed; and `average
   attacked held; what failed are SFTP failure paths (error propagation, replace permissions, a
   dangling link) and one link-loss misreport, all in `executor/ssh.py` and §2/§3. The foreman's
   options to him are in the KB log of 2026-10-22.
+
+## Review cycle 5 — scoped verification; the four findings are fixed (2026-10-22)
+
+- **Reviewed commit:** 5465485e3bf79653fe1b854ad4e789baffdc45d1 (the fix `2f19ba0` plus develop's 0.1.2
+  bump) · **Mode:** scoped to verifying cycle 4's four findings and what their fixes touched, per
+  Geoffrey's ruling of 2026-10-22; 227a7bb as "before". CI run 39890362304 green.
+- **Finding 1 (CRITICAL) — fixed.** Against the real OpenSSH `sftp-server` through a
+  fault-injecting relay on 4 MB HFS+ images: 8 KiB and 32 KiB free → "No space left on device; the
+  file is unchanged", target 416 B kept, no staging, `sbatch` refuses to submit (before: target 0 B,
+  an empty script submitted); injected EDQUOT, short write, changed byte and failing close each
+  refused with the target unchanged. The `cksum` check agreed with `/usr/bin/cksum` on 57 sizes from
+  0 to 33,554,433 bytes; a hostile profile (functions over `cksum`, `mv`, `cat`; umask 077;
+  noclobber, errexit, nounset) changed nothing; 12 concurrent writes on 8 threads exact.
+- **Finding 2 (HIGH) — fixed.** Nine drop points: every lost case `-1003` with `LOST_NOTE` and the
+  partial output kept; both records sent → the real exit; `sbatch` "may have been submitted: check
+  squeue…", never "Failed" (before: `-1002` "did not start", or `EOFError`).
+- **Finding 3 (MEDIUM) — fixed.** A 32-case probe in local, delegate, ssh and ssh with OpenSSH's
+  `sftp-server`: identical outcomes and files in every mode (0444 refused, a link into a missing
+  directory refused and kept, setuid/setgid dropped).
+- **Finding 4 (LOW) — fixed.** The split-record and full-stop mutants die in both loops; the
+  delegate SIGKILL row passes with the new stand-in.
+- `verify` in the reviewer's clone: `1615 passed` per era, 0 skipped.
+
+### [LOW/CONFIRMED] A symlink loop's refusal names the wrong cause over ssh
+
+- **Where:** `src/rcac_mcp/executor/ssh.py:273-279`.
+- **Failure scenario:** over OpenSSH's `sftp-server` a loop is correctly refused and kept, but the
+  message reads "the symbolic link names 'loop-b', whose directory does not exist", where local
+  and delegate say "Too many levels of symbolic links".
+
+### [MEDIUM/PLAUSIBLE] A lost link can still raise at `exec_command`
+
+- **Where:** `src/rcac_mcp/executor/ssh.py:493` (`if transport.is_active(): raise`).
+- **Scenario:** paramiko 5 wakes the waiting channel before it marks the transport inactive, so a
+  drop before the exec reply could re-raise `EOFError` instead of returning `-1003`. Not reproduced
+  naturally (0 of 300); 20 of 20 with a 50 ms sleep instrumented into `Transport._unlink_channel`.
+
+### Pre-existing, not counted
+
+- At 0 bytes free the staging `mkdir` fails first and the write reports a bare `OSError: Failure`
+  (227a7bb the same); the target is untouched.
+
+## Stopped for Geoffrey — cycle 5
+
+- The scoped review he allowed verified all four findings fixed and confirmed one new LOW (an error
+  message); its one MEDIUM is PLAUSIBLE. A CONFIRMED finding blocks under the rubric, so whether to
+  fix both in place and verify them, or to land, is his call.
