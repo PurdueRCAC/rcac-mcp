@@ -78,3 +78,52 @@
 ## Human-gate triggers
 
 - None (`tests/test_registry.py` and `tests/conftest.py` are not on the high-blast-radius list).
+
+## Review cycle 2 — changes-requested (2026-10-22)
+
+- **Reviewed commit:** b5b25dcea9b20e299b53ca4d850f4106b925f088 · **Mode:** a fresh blind pass. CI run
+  39872447715 green (773 per era, git 2.55); `verify` and `CI=true` in both eras 773 each.
+- **Cycle 1's routing held** for symlinked locations, NFD names, nested-repository detection and
+  the four mutants; the global-excludes class did not: rebuilding git's configuration by hand
+  misses what git itself resolves.
+
+### [MEDIUM/CONFIRMED] Rebuilding git's excludes by hand diverges from the developer's `git status`
+
+- **Where:** `tests/test_registry.py:120` (`ask_git` under the sandbox `HOME`), `:126-151`
+  (`developer_excludes`); AGENTS.md:223 ("the classes are the developer's own `git status`").
+- **Failure scenario:** git expands `~` against the sandbox's `HOME`, so `[include] path =
+  ~/.gitconfig.local`, `[includeIf "gitdir:~/src/"]` and a repository's own `core.excludesFile =
+  ~/…` all go unread: a globally ignored `.DS_Store` (`!!` in `git status --ignored`) is reported
+  "untracked". LOW siblings with the same cause: an empty `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_COUNT`
+  pairs, and the system config.
+- **Evidence:** a scratch `HOME` with `[include] path=~/.gitconfig.local` → `git status --ignored`
+  `!! src/rcac_mcp/docs/`; the test → `untracked ['docs/.DS_Store']`; `--no-includes` and dropping
+  global excludes from `check-ignore` survive as mutants.
+
+### [LOW/CONFIRMED] A repository nested inside a location still says "re-added"
+
+- **Where:** `tests/test_registry.py:202`, `:217`.
+- **Failure scenario:** `!! pkg/sub/vendor/` (or `??` holding only `x.pyc`): the suffix rule
+  counts `vendor/.git/HEAD` as source and the message says "the module has been re-added",
+  against R1 and R2.
+
+### Coverage observation
+
+- `need_git` made to always skip survives under `CI=true` (`37 passed, 51 skipped`): the unit test
+  of the helper calls `need_git()` itself and so skips.
+
+## Routing (each as its class) — cycle 2
+
+1. **Ask the developer's own git, don't rebuild its configuration.** Run the read-only queries
+   (`status --ignored`, `check-ignore`, `ls-files`) with the developer's real environment and
+   configuration (HOME, XDG, includes, `GIT_CONFIG_*`, system config), removing only what
+   redirects the repository (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, …) and disabling what
+   could execute (`core.fsmonitor`, `core.hooksPath`), so every class equals what `git status
+   --ignored` shows the developer. Tests use scratch HOMEs; the real one is never written.
+2. **No fallback message says "re-added" for something git does not track,** a nested repository
+   included.
+3. **`need_git` never skips on CI, pinned** by a test that cannot skip itself.
+
+## Human-gate triggers — cycle 2
+
+- None.
