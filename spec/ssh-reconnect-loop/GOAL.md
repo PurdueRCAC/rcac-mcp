@@ -48,7 +48,7 @@ it, and the behaviour is pinned by tests that need no real host.
 - **R1** — IF the SSH connection has been lost after startup and cannot be re-established, THEN a
   tool call that needs it SHALL fail within the stated bound (R5) of the call's start with an error
   naming the host and the cause, in both protocol eras, rather than not returning.
-  `[NEEDS CLARIFICATION: Q1 the bound; Q2 the tool's own timeout; Q3 the error's form]`
+  (Q1–Q3)
 - **R2** — WHEN the connection has been lost and the host becomes reachable again within the retry
   window, a tool call SHALL succeed with the same result it would give on an unbroken connection,
   with no retry by the client.
@@ -58,7 +58,7 @@ it, and the behaviour is pinned by tests that need no real host.
 - **R4** — WHEN a tool call fails under R1, its error SHALL make clear that the command was not
   started (for `sbatch`, that nothing was submitted), so it is distinguishable from the
   `CONNECTION_LOST_EXIT_CODE` (`-1003`) result, which means the command may have run.
-  `[NEEDS CLARIFICATION: Q3]`
+  (Q3)
 - **R5** — The bound in R1 SHALL be stated in `AGENTS.md`, replacing the `executor/ssh.py` footgun
   entry that today names this defect, and in the `SSHExecutor` docstring, including how a connect
   timeout set by the SSH config changes it.
@@ -69,7 +69,7 @@ it, and the behaviour is pinned by tests that need no real host.
 
 - **A connection that is dead but not yet noticed** (a half-open link the transport still reports
   as active, so no reconnect starts). No keepalive or dead-peer detection here; if it proves a real
-  hang, it is a new seed. `[NEEDS CLARIFICATION: Q5]`
+  hang, it is a new seed. (Q5)
 - **A connection lost while a command runs.** That is `safe-execution`'s `-1003` result and stays as
   it is.
 - **The connect at startup** (`safe-execution` R9) and the `CONNECT_TIMEOUT` value: unchanged.
@@ -83,29 +83,28 @@ it, and the behaviour is pinned by tests that need no real host.
 
 ## Clarifications
 
-Open, for the foreman's ruling at the GOAL gate (2026-10-23). Each carries the shaper's proposed
-answer; none is settled.
+Ruled by the foreman at the GOAL gate, 2026-10-23.
 
-- **Q1** `[NEEDS CLARIFICATION]` What is the bound in R1? — **Proposed:** 45 s from the call's
-  start with the default connect bound (`CONNECT_TIMEOUT`, 15 s), so the error arrives before the
-  60 s default request timeout of the MCP TypeScript SDK's client (the shaper's recollection; the
-  plan confirms it). Where an ssh_config `ConnectTimeout` or a caller's `connect_timeout` sets a
-  longer connect bound, the stated bound may grow with it, and R5's text says how.
-- **Q2** `[NEEDS CLARIFICATION]` Does a tool's own `timeout` argument shorten the reconnect? —
-  **Proposed:** No. The reconnect bound and the command `timeout` are independent: the `timeout`
-  governs the command once it has been sent, as `Executor.run` documents today.
-- **Q3** `[NEEDS CLARIFICATION]` What form does the R1/R4 error take? — **Proposed:** an MCP tool
-  error (the call's error result, as any tool exception gives today), never a `CommandResult` with
-  a new reserved exit code. Its text uses the startup failure's form, `cannot connect to <host>:
-  <cause>` (`startup.connect_failure_message`), followed by a statement that the command was not
-  run. No new reserved code, so § Invariants §3 is unchanged.
-- **Q4** `[NEEDS CLARIFICATION]` Should a failure that retrying cannot fix (authentication refused,
-  unknown host or alias) fail at once rather than use the whole window? — **Proposed:** the plan's
-  call; whichever it chooses, every failure class meets R1's bound and R3's next-call retry.
-- **Q5** `[NEEDS CLARIFICATION]` Is the dead-but-unnoticed connection (first non-goal) in scope? —
-  **Proposed:** No. From the code, such a call looks bounded by the session-open wait
-  (`OPEN_TIMEOUT`, 30 s; not reproduced by the shaper) and is not the reported hang; if the plan's
-  research finds it hangs unbounded, it is recorded as a seed, not fixed here.
+- **Q1** What is the bound in R1? — **A:** 45 s from the call's start with the default connect
+  bound (`CONNECT_TIMEOUT`, 15 s), so the error arrives before a client's default request timeout
+  (60 s in the MCP TypeScript SDK; the plan confirms the figure and cites it). Where an ssh_config
+  `ConnectTimeout` or a caller's `connect_timeout` sets a longer connect bound, the stated bound may
+  grow with it, and R5's text says how.
+- **Q2** Does a tool's own `timeout` argument shorten the reconnect? — **A:** No. The reconnect
+  bound and the command `timeout` are independent: the `timeout` governs the command once it has
+  been sent, as `Executor.run` documents today.
+- **Q3** What form does the R1/R4 error take? — **A:** what the agent sees is fixed, the mechanism
+  is the plan's: the result names the host and the cause in the startup failure's form
+  (`cannot connect to <host>: <cause>`) and says the command was not run. A call that returns a
+  `CommandResult` reports it with the existing not-started code (`NOT_STARTED_EXIT_CODE`, `-1002`),
+  the suite's one meaning for "nothing ran"; a call with no `CommandResult` (an SFTP transfer)
+  raises it as the tool's error. No new reserved code, so § Invariants §3 is unchanged.
+- **Q4** Should a failure that retrying cannot fix (authentication refused, unknown host or alias)
+  fail at once rather than use the whole window? — **A:** the plan's call; whichever it chooses,
+  every failure class meets R1's bound and R3's next-call retry.
+- **Q5** Is the dead-but-unnoticed connection (first non-goal) in scope? — **A:** No. It is not the
+  reported hang; if the plan's research finds it unbounded, it is recorded as a seed, not fixed
+  here.
 
 **Human gate.** The fix lands in `src/rcac_mcp/executor/ssh.py`, which is in the coupled core and on
 the high-blast-radius list (`AGENTS.md` § Factory → Profile, § Invariants → High-blast-radius
