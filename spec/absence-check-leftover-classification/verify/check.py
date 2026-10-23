@@ -57,7 +57,8 @@ BASE_IDS = [
 ]
 
 # Paths the change may touch; everything else matches the base.
-ALLOWED = {MODULE, CONFTEST, 'AGENTS.md'}
+# tests/test_hygiene.py: safe-execution's skip check admits need_git at the merge (PLAN §5, landed second).
+ALLOWED = {MODULE, CONFTEST, 'AGENTS.md', 'tests/test_hygiene.py'}
 ALLOWED_PREFIXES = ('spec/absence-check-leftover-classification/', 'issues/', 'ROADMAP.md')
 
 # What AGENTS.md's test_registry entry says once the change lands, and what it no longer says.

@@ -17,7 +17,7 @@ set -eu
 export UV_OFFLINE=1
 cd "$(git rev-parse --show-toplevel)"
 V=spec/absence-check-leftover-classification/verify
-BASE=90b0938  # moved base: develop 90b0938 (release 0.1.2) merged in, 2026-10-22; was bfa0595, rebased onto 2026-10-22
+BASE=5cf6e40  # moved base: develop 5cf6e40 (safe-execution) merged in, 2026-10-23; was 90b0938 (2026-10-22), bfa0595 before
 phase=${1:?usage: gate.sh P1 or static|tests|foreign|nogit|mutants}
 
 fail() { echo "gate[$phase]: $*" >&2; exit 1; }
