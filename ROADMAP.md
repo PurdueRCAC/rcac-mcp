@@ -207,6 +207,25 @@ on it.
 *Horizon: mid-term; the measurement needs Geoffrey's approval · Depends on: safe-execution (cleared: landed on `develop` 2026-10-23) · Refs: `AGENTS.md` § Invariants §3; [`spec/safe-execution/`](spec/safe-execution/) PLAN risk 4*
 **Seed:** [`issues/timeout-process-cleanup.md`](issues/timeout-process-cleanup.md) · *status: unshaped*
 
+## A dead SSH link that still reads as connected holds file transfers without limit
+
+When the link to the cluster goes silent without a reset, nothing marks it dead: keepalive is off
+and the transport stays active. No reconnect starts, so the bounded reconnect from
+`ssh-reconnect-loop` never runs. The cost depends on the tool:
+
+- the SFTP tools wait up to an hour to open a channel, and then without limit;
+- each command waits 30 s and fails with Paramiko's error rather than the host's name;
+- a command whose channel was already open waits without limit when it has no timeout.
+
+Pre-existing. Found by `ssh-reconnect-loop`'s planning research, 2026-10-23, and ruled out of
+that cycle's scope.
+
+It sits with the timeout entry above because both are about a call that a client sees hang on a
+dead or stuck remote end.
+
+*Horizon: near-term after `ssh-reconnect-loop` · Depends on: ssh-reconnect-loop (its published-connection lifecycle) · Refs: [`spec/ssh-reconnect-loop/`](spec/ssh-reconnect-loop/) research 03 §B*
+**Seed:** [`issues/ssh-half-open-link.md`](issues/ssh-half-open-link.md) · *status: unshaped*
+
 ## Bespoke tools first, the shell last
 
 The file tools are too thin — `list_directory` costs a round trip per entry, `read_file` has no
