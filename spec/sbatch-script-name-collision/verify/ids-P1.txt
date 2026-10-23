@@ -1,0 +1,42 @@
+# P1's test ids, relative to tests/. The gate runs exactly these, in both protocol eras, and fails on
+# an id missing from the report, run twice, skipped, errored or failed. A test added or renamed for
+# P1 changes this file in the same commit.
+#
+# Two same-second calls get their own paths (same name, no name, names alike once sanitised).
+test_sbatch.py::test_same_second_scripts_get_their_own_paths[same-name]
+test_sbatch.py::test_same_second_scripts_get_their_own_paths[no-name]
+test_sbatch.py::test_same_second_scripts_get_their_own_paths[sanitised-alike]
+# Overlapping calls, through one server and through two servers on one home, each submit their own bytes.
+test_sbatch.py::test_overlapping_submissions_each_submit_their_own_script[local-one-server]
+test_sbatch.py::test_overlapping_submissions_each_submit_their_own_script[local-two-servers]
+test_sbatch.py::test_overlapping_submissions_each_submit_their_own_script[delegate-one-server]
+test_sbatch.py::test_overlapping_submissions_each_submit_their_own_script[delegate-two-servers]
+# Separate server processes, identical in clock, process id and host name, name their scripts apart.
+test_sbatch.py::test_separate_server_processes_name_scripts_apart
+# Same-second calls through every backend: own bytes, executable, the job id, files already there kept.
+test_writes.py::test_same_second_scripts_keep_their_own_bytes[local]
+test_writes.py::test_same_second_scripts_keep_their_own_bytes[delegate]
+test_writes.py::test_same_second_scripts_keep_their_own_bytes[ssh]
+# Existing rows that read the script's name or bytes, kept green under the new form.
+test_sbatch.py::test_script_content_is_written_then_submitted[plain]
+test_sbatch.py::test_script_content_is_written_then_submitted[path-and-shell]
+test_sbatch.py::test_script_content_is_written_then_submitted[leading-dash]
+test_sbatch.py::test_script_content_is_written_then_submitted[no-name]
+test_sbatch.py::test_sbatch_receives_each_value_as_one_argument[local]
+test_sbatch.py::test_sbatch_receives_each_value_as_one_argument[delegate]
+test_writes.py::test_job_scripts_are_byte_exact[local]
+test_writes.py::test_job_scripts_are_byte_exact[delegate]
+test_writes.py::test_job_scripts_are_byte_exact[ssh]
+test_writes.py::test_a_profile_cannot_change_a_fixed_script[local]
+test_writes.py::test_a_profile_cannot_change_a_fixed_script[delegate]
+test_writes.py::test_a_profile_cannot_change_a_fixed_script[ssh]
+test_literal_args.py::test_literal_argument[local-sbatch-script_content]
+test_literal_args.py::test_literal_argument[delegate-sbatch-script_content]
+test_literal_args.py::test_literal_argument[ssh-sbatch-script_content]
+# The planted cases still apply, and the suite's own rules hold for the new tests.
+test_mutations.py::test_mutation_anchor_applies[script-name-per-second]
+test_mutations.py::test_mutation_anchor_applies[script-name-process-counter]
+test_mutations.py::test_mutation_anchor_applies[script-content-newline]
+test_hygiene.py::test_cli_drives_are_sandboxed
+test_hygiene.py::test_no_spec_ids_in_the_package_or_the_suite
+test_surface.py::test_served_surface_matches_baseline

@@ -1,0 +1,11 @@
+# P2's test ids, relative to tests/. The gate runs exactly these, in both protocol eras, and fails on
+# an id missing from the report, run twice, skipped, errored or failed. A test added or renamed for
+# P2 changes this file in the same commit.
+#
+# The docstring's stated form is the form the tool writes.
+test_sbatch.py::test_the_docstring_states_the_script_path_the_tool_writes
+# The served surface matches the fixture with its one named delta, and the fixture keeps its shape.
+test_surface.py::test_served_surface_matches_baseline
+test_surface.py::test_surface_fixture_is_the_baseline_shape
+test_mutations.py::test_mutation_anchor_applies[script-token-short]
+test_hygiene.py::test_no_spec_ids_in_the_package_or_the_suite
