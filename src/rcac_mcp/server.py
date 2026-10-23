@@ -64,54 +64,43 @@ async def serve_icon(request: Request) -> FileResponse:
 
 
 SERVER_INSTRUCTIONS: Final[str] = """\
-RCAC MCP Server provides tools for interacting with Purdue's
-Research Computing resources and HPC clusters.
+RCAC MCP Server: tools for working on an HPC cluster. Prefer a dedicated tool
+below to run_command when one fits. The site context section after this one
+carries the cluster's own rules; follow them.
 
-Storage Paths:
-When users reference "scratch", "depot", or "home" storage:
-- Home: /home/<user> or $HOME (25GB, private, for configs and small files)
-- Scratch: /scratch/<cluster>/<user> or $CLUSTER_SCRATCH (high-performance,
-  large but purged regularly - use for job I/O, not long-term storage).
-  Run `findscratch` to get the exact path.
-- Depot: /depot/<group> where <group> is the allocation name. Users may have
-  access to multiple depot spaces. Use the `myquota` tool to discover all
-  available depot paths - look for "depot" type entries in the output.
-- Use the `storage_paths` tool to resolve all storage locations at once.
+Shell and files:
+- run_command: Execute a shell command
+- list_directory: List a directory
+- read_file: Read a file
+- write_file: Write a file
+- upload_file: Copy a file to the cluster
+- download_file: Copy a file from the cluster
 
-General Tools:
-- run_command: Execute shell commands
-- list_directory: List directory contents
-- read_file: Read file contents
-- write_file: Write content to files
-- upload_file: Upload files to the remote system
-- download_file: Download files from the remote system
+Site and storage:
+- cluster_context: The cluster's rules from /etc/agents.d, in full
+- storage_paths: Resolve home, scratch and depot paths
+- myquota: Storage spaces, usage and quotas
 
-RCAC-Specific Tools:
-- storage_paths: Get resolved paths for home, scratch, and depot spaces
-- myquota: Show storage spaces, usage, and quotas
-- jobinfo: Get detailed job information (RCAC)
-- jobcmd: Get the command submitted for a job
-- jobenv: Get environment variables for a job
-- jobscript: Get the full submission script for a job
-- showpartitions: Show available partitions and status
-- average_wait: Show queue wait time statistics
-
-Slurm Job Management:
+Jobs:
 - sbatch: Submit a batch job (script path or content)
-- squeue: View the job queue (default: your jobs)
-- scancel: Cancel jobs by ID or filter
-- sacct: Query job accounting history
+- squeue: View the job queue
+- scancel: Cancel jobs
+- sacct: Job accounting history
+- jobinfo: Detailed job information (RCAC)
+- jobcmd: The command a job was submitted with
+- jobenv: A job's environment variables
+- jobscript: A job's submission script
+- scontrol_show_job: Slurm's view of a job
 
-Slurm Cluster Status:
-- sinfo: Show cluster and partition status
-- scontrol_show_job: Detailed job info from Slurm
-- scontrol_show_node: Detailed node info for diagnostics
-- slist: Show Slurm accounts and usage (RCAC)
-- sfeatures: Show node features/constraints (RCAC)
+Cluster status:
+- sinfo: Cluster and partition status
+- showpartitions: Partitions and their status
+- average_wait: Queue wait time statistics
+- scontrol_show_node: Node details for diagnostics
+- slist: Slurm accounts and usage (RCAC)
+- sfeatures: Node features and constraints (RCAC)
 
-Resources:
-- rcac://context: Cluster-specific context loaded from /etc/agents.d/*.md
-- rcac://storage: User's resolved storage paths (home, scratch, depots)\
+Resources: rcac://context (the site context in full) and rcac://storage.\
 """
 
 

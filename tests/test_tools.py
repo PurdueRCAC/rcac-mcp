@@ -13,9 +13,10 @@ outside the executor.
 
 A tool hands the executor an argv, never a command string (only `run_command` passes a script), and
 a shell argv may run only a registered fixed script (`rcac_mcp.scripts.FIXED_SCRIPTS`), so no
-caller value is ever formatted into shell text. The filesystem, Slurm and site tools and the context
-resource are also pinned to their exact argvs, with each path a `UserPath`: each option value is its
-own element, after its option, and a positional value follows `--`.
+caller value is ever formatted into shell text. The filesystem, Slurm and site tools are also
+pinned to their exact argvs, with each path a `UserPath`: each option value is its own element,
+after its option, and a positional value follows `--`. A tool in `EXECUTORLESS` runs nothing and
+reaches no executor; test_context.py pins it instead.
 """
 
 from __future__ import annotations
@@ -27,7 +28,6 @@ from typing import Any, Callable, Sequence
 import pytest
 
 from harness import Outcome, RecordingExecutor, call, drive, in_memory, shared_server
-from rcac_mcp import resources
 from rcac_mcp.executor import UserPath
 from rcac_mcp.scripts import script_argv, script_of
 from rcac_mcp.tools import filesystem
@@ -110,6 +110,10 @@ class ToolCase:
         return None if self.expect is None else self.expect.replace(TMP, str(tmp_path))
 
 
+# Tools that run nothing: they answer from what the server read at startup, so they reach no
+# executor, and test_context.py pins them instead.
+EXECUTORLESS: frozenset[str] = frozenset({'cluster_context'})
+
 TOOL_CASES: dict[str, ToolCase] = {
     'average_wait': ToolCase({'partition': 'wait-partition'}, 'wait-partition'),
     'download_file': ToolCase({'remote_path': '/remote/results.csv', 'local_path': f'{TMP}/results.csv'},
@@ -182,7 +186,7 @@ def tool_violations(outcome: Outcome, calls: Sequence[tuple[Any, ...]], refused:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize('tool', sorted(EXPECTED_TOOLS))
+@pytest.mark.parametrize('tool', sorted(EXPECTED_TOOLS - EXECUTORLESS))
 def test_tool_reaches_only_the_installed_executor(tool: str, tmp_path: Path, guard) -> None:
     case = TOOL_CASES[tool]
     executor = RecordingExecutor('installed', responder=case.responder)
@@ -203,7 +207,9 @@ def test_tool_reaches_only_the_installed_executor(tool: str, tmp_path: Path, gua
 
 @pytest.mark.unit
 def test_tool_cases_cover_expected_tools() -> None:
-    assert set(TOOL_CASES) == set(EXPECTED_TOOLS), sorted(set(TOOL_CASES) ^ set(EXPECTED_TOOLS))
+    assert EXECUTORLESS <= EXPECTED_TOOLS, sorted(EXECUTORLESS - EXPECTED_TOOLS)
+    covered = EXPECTED_TOOLS - EXECUTORLESS
+    assert set(TOOL_CASES) == covered, sorted(set(TOOL_CASES) ^ covered)
 
 
 GOOD = Outcome(False, f'{ANSWER} for sinfo')
@@ -471,26 +477,3 @@ def test_argv_check_catches_drift() -> None:
     assert any('argv differs' in v for v in argv_violations([_run(['cat', '/f'])], [_run(['cat', '--', '/f'])]))
     assert any('not a UserPath' in v for v in argv_violations([_run(['cat', '--', '/f'])], [_run(['cat', '--', '/f'])],
                                                              [(0, 2)]))
-
-
-@pytest.mark.unit
-def test_context_resource_lists_with_a_fixed_script(guard) -> None:
-    files = {'/etc/agents.d/a b.md': 'alpha\n', '/etc/agents.d/z.md': 'zulu\n'}
-
-    def respond(command: Sequence[str] | str) -> str:
-        if script_of(command) == resources.LIST_CONTEXT:
-            return ''.join(f'{name}\n' for name in files)
-        return files.get(command[-1], '') if not isinstance(command, str) else ''
-
-    executor = RecordingExecutor('context-resource', responder=respond)
-    resources.clear_context_cache(executor.hostname)
-    try:
-        context = resources.load_cluster_context(executor)
-    finally:
-        resources.clear_context_cache(executor.hostname)
-    expected = [_run(script_argv(resources.LIST_CONTEXT, 'cluster_context')),
-                *[_run(['cat', '--', name]) for name in files]]
-    violations = argv_violations(executor.calls, expected)
-    violations += tool_violations(Outcome(False, context), executor.calls, guard.refused,
-                                  '<!-- Source: a b.md -->\nalpha\n\n<!-- Source: z.md -->\nzulu')
-    assert violations == [], '\n'.join(violations)

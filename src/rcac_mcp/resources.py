@@ -4,100 +4,21 @@
 """MCP resources for cluster context and configuration.
 
 Resources provide read-only access to data that can be used as context
-for LLM interactions. The primary resource is cluster_context which
-loads markdown files from /etc/agents.d/ on the remote cluster.
+for LLM interactions. The primary resource is cluster_context, which
+serves the /etc/agents.d markdown the server read once at startup.
 """
 
 # Type annotations
 from __future__ import annotations
-from typing import Optional
+
+# External libs
+from fastmcp.server.dependencies import get_server
 
 # Internal libs
-from rcac_mcp.context import get_executor
-from rcac_mcp.scripts import fixed, script_argv
+from rcac_mcp.site import site_of
 
 # Public interface
-__all__ = ['RESOURCE_REGISTRY', 'load_cluster_context', 'get_cached_context']
-
-
-# Cache for cluster context (loaded once per connection)
-_cluster_context_cache: dict[str, str] = {}
-
-# The context files: a maxdepth-1 glob of /etc/agents.d, in `sort` order (§8 of AGENTS.md).
-LIST_CONTEXT = fixed('find /etc/agents.d -maxdepth 1 -name "*.md" -type f 2>/dev/null | sort')
-
-
-def load_cluster_context(executor) -> str:
-    """
-    Load context files from /etc/agents.d/*.md on the remote cluster.
-
-    Files are concatenated in sorted order with headers indicating
-    the source file. Empty result if directory doesn't exist or
-    contains no .md files.
-
-    Args:
-        executor: The executor to use for loading context.
-
-    Returns:
-        Concatenated markdown content from all context files.
-    """
-    hostname = executor.hostname
-
-    # Check cache first
-    if hostname in _cluster_context_cache:
-        return _cluster_context_cache[hostname]
-
-    # Find all .md files in /etc/agents.d/
-    find_result = executor.run(script_argv(LIST_CONTEXT, 'cluster_context'))
-
-    if find_result.exit_code != 0 or not find_result.stdout.strip():
-        # Directory doesn't exist or no files found
-        _cluster_context_cache[hostname] = ''
-        return ''
-
-    files = find_result.stdout.strip().split('\n')
-    context_parts = []
-
-    for filepath in files:
-        if not filepath:
-            continue
-
-        # Read file content
-        cat_result = executor.run(['cat', '--', filepath])
-        if cat_result.exit_code == 0 and cat_result.stdout.strip():
-            # Extract filename for header
-            filename = filepath.split('/')[-1]
-            context_parts.append(f'<!-- Source: {filename} -->\n{cat_result.stdout.strip()}')
-
-    context = '\n\n'.join(context_parts)
-    _cluster_context_cache[hostname] = context
-    return context
-
-
-def get_cached_context(hostname: str) -> Optional[str]:
-    """
-    Get cached context for a hostname if available.
-
-    Args:
-        hostname: The cluster hostname.
-
-    Returns:
-        Cached context string, or None if not cached.
-    """
-    return _cluster_context_cache.get(hostname)
-
-
-def clear_context_cache(hostname: Optional[str] = None) -> None:
-    """
-    Clear the context cache.
-
-    Args:
-        hostname: Specific hostname to clear, or None to clear all.
-    """
-    if hostname:
-        _cluster_context_cache.pop(hostname, None)
-    else:
-        _cluster_context_cache.clear()
+__all__ = ['RESOURCE_REGISTRY']
 
 
 # Resource registry for server to register
@@ -107,31 +28,24 @@ RESOURCE_REGISTRY = []
 
 def _cluster_context_resource() -> str:
     """
-    Cluster-specific context and guidelines for AI agents.
+    The site context read from /etc/agents.d when the server started.
 
-    This resource contains markdown documentation loaded from
-    /etc/agents.d/*.md on the connected cluster. It provides
-    cluster-specific information such as:
-
-    - Available software modules and recommended versions
-    - Cluster-specific policies and best practices
-    - Storage paths and quota information
-    - Partition configurations and job limits
-    - Any other guidance for AI agents working on this cluster
+    Every `*.md` file directly in /etc/agents.d but the assembled `AGENTS.md`, each under a
+    `<!-- Source: name.md -->` header, in byte order of their names: exactly what the
+    `cluster_context` tool returns. Nothing is read or run here, so the read needs no executor.
 
     Returns:
-        Markdown content with cluster-specific context, or empty
-        string if no context files are available.
+        The site context as Markdown, an empty string when the site publishes no rules, or the
+        one-line reason the files could not be read.
     """
-    executor = get_executor()
-    return load_cluster_context(executor)
+    return site_of(get_server()).text
 
 
 # Register the resource
 RESOURCE_REGISTRY.append({
     'uri': 'rcac://context',
     'name': 'cluster_context',
-    'description': 'Cluster-specific context and guidelines loaded from /etc/agents.d/*.md',
+    'description': 'The site context read from /etc/agents.d at startup: every *.md file but AGENTS.md',
     'handler': _cluster_context_resource,
 })
 

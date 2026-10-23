@@ -23,6 +23,7 @@ from rcac_mcp.tools import TOOL_REGISTRY
 # Every tool change edits this set in the same commit as SERVER_INSTRUCTIONS and the README.
 EXPECTED_TOOLS: frozenset[str] = frozenset({
     'average_wait',
+    'cluster_context',
     'download_file',
     'jobcmd',
     'jobenv',

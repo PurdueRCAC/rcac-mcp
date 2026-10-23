@@ -259,19 +259,19 @@ import has no effect.
     Sequential calls on one server, shared and delegate, show that each executor middleware sets
     the executor on every call, not only the first (§1).
   - `tests/test_no_executor.py` (`unit`): `refusal_violations`. A call with no executor for its
-    request (a bare server, every tool; a tokenless delegate call), including right after and while
+    request (a bare server, every tool but `EXECUTORLESS`; a tokenless delegate call), including right after and while
     another request did set one, fails where the client sees it with `No executor configured`, and
     nothing runs. Any error is not enough: the stated reason is required (§1).
   - `tests/test_tools.py` (`unit`): `TOOL_CASES`, `tool_violations`, `argv_violations`. Every
-    `EXPECTED_TOOLS` tool, on a `SharedExecutorMiddleware` server, reaches only the installed
+    `EXPECTED_TOOLS` tool but `EXECUTORLESS` (`cluster_context`, which runs nothing and answers
+    from the startup read), on a `SharedExecutorMiddleware` server, reaches only the installed
     executor, carries its own argument there and returns the executor's answer (§1, §7). A tool
     hands the executor an argv: a command string is `passed a command string` (only `run_command`
     is `PASSES_A_SCRIPT`), and a shell argv
     whose `-c` text is not in `rcac_mcp.scripts.FIXED_SCRIPTS` is an `unregistered script`, so a
     value formatted into shell text fails like a command string. `write_file` hands its content to
-    the executor's `write`, never to an argv. The filesystem tools, the transfers, the Slurm and site tools and the
-    `rcac://context` loader are pinned to their exact argvs (`test_filesystem_argvs`,
-    `test_slurm_and_site_argvs`, `test_context_resource_lists_with_a_fixed_script`), each path a
+    the executor's `write`, never to an argv. The filesystem tools, the transfers, and the Slurm and site tools
+    are pinned to their exact argvs (`test_filesystem_argvs`, `test_slurm_and_site_argvs`), each path a
     `UserPath`: each option value is its own element after its option, and a positional value
     (`sbatch`'s script, `scontrol show node`'s name, `scancel`'s job ids) follows `--`. An empty
     optional scalar (an option's value, an optional positional such as `scontrol show node`'s name,
@@ -437,7 +437,9 @@ import has no effect.
     `write_file.description`, `write_file.properties.encoding`, `sbatch.properties.args`, and
     `description` and `properties.extra_args` on each of `sbatch`, `squeue`, `scancel`, `sacct`
     and `sinfo`; (`agents-d-instructions`) `instructions`, the base composed with the harness's
-    site context (`harness.SITE`).
+    site context (`harness.SITE`); `tools.cluster_context`, the new tool in `myquota`'s schema
+    shape (no argument, a `str` result) with its docstring as the description; and
+    `resources.rcac://context.description`, the resource's new description.
     `TOLERATED` names the four differences FastMCP 4 introduces, each with its cause and accepted
     only in its own shape: an argument `description` where there was none, `additionalProperties`
     added as exactly `false`, output `$defs` inlined, and a `description` on an inlined output node
@@ -1420,29 +1422,55 @@ What each mode means:
 - Tool return values are serialized by FastMCP. Returning a `@dataclass` (`CommandResult`,
   `StoragePaths`) is supported and used; returning an arbitrary object is not.
 
-### 8. Resources and the `/etc/agents.d/*.md` convention (`resources.py`)
+### 8. Resources and the `/etc/agents.d/*.md` convention (`resources.py`, `site.py`)
 
 - `RESOURCE_REGISTRY` (`resources.py`) exposes `rcac://context` and `rcac://storage`.
 - **`/etc/agents.d/*.md` is a deliberate, external, cross-site convention** — cluster administrators
   drop markdown there and any conforming client picks it up. Files are found with a `maxdepth 1`
-  glob and concatenated in `sort` order with a `<!-- Source: {filename} -->` header each. Do not
-  change the path, the glob, the ordering, or the header format without treating it as a
-  compatibility break; the intent is to get *other* centers to adopt it.
-- A missing directory or empty result is **not an error** — it caches and returns `''`.
-- **`_cluster_context_cache` is a process-global dict keyed by `executor.hostname`.** In delegate mode
-  every user's executor reports the same `socket.gethostname()`, so the first user's context is served
-  to all subsequent users. That is a known defect with a filed seed, not a design choice — do not
-  build new per-user state on this cache, and do not key any new cache on `hostname` alone.
-- **A resource read gets no executor.** Both executor middlewares set it in `on_call_tool` only, so
-  reading `rcac://context` fails with `No executor configured` in every mode and both protocol
-  eras (it did on FastMCP 2 too). It fails closed. That is a known defect with a filed seed
-  (`issues/resource-reads-without-executor.md`), not a design choice; a fix that sets an executor
-  for reads makes the cache above reachable across users in delegate mode, so it lands with or
-  after that cache's retirement. Never satisfy a read with an executor that is not the request's
-  own (§1).
+  glob (regular files only; a symlink is not read) and concatenated in `sort` order, the byte order
+  of the names (`LC_ALL=C sort`), with a `<!-- Source: {filename} -->` header each. Do not change
+  the path, the glob, the ordering, or the header format without treating it as a compatibility
+  break; the intent is to get *other* centers to adopt it.
+- **The server skips the assembled `AGENTS.md`**, a deliberate, documented narrowing: where a site
+  assembles one, it is a preamble plus the same topic files, so reading it would serve every rule
+  twice.
+  Only `AGENTS.md` exactly is skipped. A file whose content is only whitespace is not served; a
+  served file loses its trailing whitespace and keeps everything else. A name is its bytes as
+  UTF-8, an invalid byte read as U+FFFD.
+- **The site context is read once, at startup, as the server** (`site.py`), before the server is
+  built: over the shared executor in `ssh` mode, in this process on the server's host in `local`
+  and `delegate` modes, never as a user. No request reads it again; an edit to `/etc/agents.d`
+  takes effect at the next start. The read is bounded by `site.READ_TIMEOUT` (10 s): a read that
+  has not finished is abandoned on its daemon thread and the server starts without site rules.
+- **The served instructions are the base instructions, then `## Site context (/etc/agents.d)`**
+  with the files, in that order, whole, within the instructions budget (§ Configuration). A file
+  that does not fit is left out and named, with a pointer to `cluster_context`; a later file that
+  fits still goes in. The base is never cut: a budget too small for it and that note refuses to
+  start, naming the minimum. With no files, the section is one line saying why.
+- **`cluster_context` and `rcac://context` return the full text read at startup**, whatever the
+  budget, in every mode and both eras, and run nothing. A missing directory or no eligible file is
+  **not an error**: they return `''`. An unreadable directory or file, or a read past its bound,
+  is: they return the same one line the instructions carry.
+- **The text is held per server object** (`site.register`, read through FastMCP's current server),
+  never per host or per user. Nothing is held per host; do not key any
+  new cache on `hostname` alone (§3).
+- **Reading `rcac://context` needs no executor**: its handler returns the held text and calls
+  neither `get_executor()` nor `set_executor()` (§1), so it answers in every mode and both eras.
+  `rcac://storage` is unchanged: its handler still needs the request's executor, which a resource
+  read does not get (`issues/resource-reads-without-executor.md`). Never satisfy a read with an
+  executor that is not the request's own (§1).
+- **In `delegate` mode the tool reaches only a mapped user.** The middleware refuses every tool call
+  from an identity absent from the user map before the body runs (§5), `cluster_context` included,
+  while the instructions and `rcac://context` reach any client that can connect. That is
+  intended: the text is world-readable administrative markdown and identical for every user, so
+  the difference discloses nothing. Exempting the tool from the map check is a §5 change.
 
 ### 9. The agent-facing surface is part of the API (`server.py`) [human gate]
 
+- **The served instructions are `SERVER_INSTRUCTIONS` followed by the site context** (§8), composed
+  once by `create_mcp_server(…, site=…, budget=…)` within the instructions budget (§ Configuration;
+  default 4096, Claude Code's cut). `SERVER_INSTRUCTIONS` is the base: it is never cut, and §9's
+  rules below govern it alone, not the site's text after it.
 - `SERVER_INSTRUCTIONS` (`server.py`) is what every connecting model reads before choosing a tool.
   **Adding, renaming, or removing a tool — any tool change — updates `SERVER_INSTRUCTIONS` in the
   same commit** — a tool the instructions do not mention is a tool agents will not reach for, and an

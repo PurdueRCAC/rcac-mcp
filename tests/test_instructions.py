@@ -13,15 +13,15 @@ import pytest
 
 from harness import SITE, served_instructions
 from rcac_mcp.server import SERVER_INSTRUCTIONS, create_mcp_server
-from rcac_mcp.site import HEADING, compose
+from rcac_mcp.site import HEADING, compose, units
 from rcac_mcp.tools import TOOL_REGISTRY
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# Backticked or snake_case terms in the instructions that are not tools: `findscratch` is a shell
-# command on the cluster. Every entry must occur in the text and must not be a registered tool.
-NON_TOOL_TERMS: frozenset[str] = frozenset({'findscratch'})
+# Backticked or snake_case terms in the instructions that are not tools (none today). Every entry
+# must occur in the text and must not be a registered tool.
+NON_TOOL_TERMS: frozenset[str] = frozenset()
 
 # Documentation-search guidance: the words doc, docs, documentation, any doc_ identifier, and
 # "user guide(s)". Documentation search is served by a separate service, not by this server.
@@ -133,3 +133,9 @@ def test_cross_check_catches_mutation(text: str, extra_allow: tuple[str, ...], e
     assert instruction_violations(SERVER_INSTRUCTIONS, names) == []
     violations = instruction_violations(text, names, NON_TOOL_TERMS | set(extra_allow))
     assert expected in violations, violations
+
+
+@pytest.mark.unit
+def test_base_leaves_room_for_the_site() -> None:
+    # The base is never cut; at the default budget it must leave room for a site file and the note.
+    assert units(SERVER_INSTRUCTIONS) <= 1500, units(SERVER_INSTRUCTIONS)

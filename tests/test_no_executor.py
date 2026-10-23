@@ -13,6 +13,9 @@ request's executor to this one.
 
 Servers are built inside the driven coroutine, as production builds and serves in one context, so a
 construction that set an executor would reach these calls exactly as it would in production.
+
+A tool in `EXECUTORLESS` runs nothing: it answers from what the server read at startup, needs no
+executor, and is pinned by test_context.py instead.
 """
 
 from __future__ import annotations
@@ -27,7 +30,7 @@ from harness import (Outcome, RecordingExecutor, Rendezvous, bare_server, call, 
                      http_client, in_memory, launched_script, mint, serving, shared_server, user_map)
 from rcac_mcp.executor import launch
 from test_registry import EXPECTED_TOOLS
-from test_tools import TOOL_CASES
+from test_tools import EXECUTORLESS, TOOL_CASES
 
 # What `get_executor()` raises with when the request's context holds no executor.
 NO_EXECUTOR = 'No executor configured'
@@ -97,7 +100,7 @@ def report(violations: list[str]) -> str:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize('tool', sorted(EXPECTED_TOOLS))
+@pytest.mark.parametrize('tool', sorted(EXPECTED_TOOLS - EXECUTORLESS))
 def test_tool_without_executor_middleware_fails(tool: str, tmp_path: Path, launches: list[list[str]],
                                                 guard) -> None:
     async def scenario() -> Outcome:

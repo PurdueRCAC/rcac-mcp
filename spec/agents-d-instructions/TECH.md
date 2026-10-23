@@ -6,7 +6,7 @@ appetite: big
 status: in_progress
 branch: feature/agents-d-instructions
 base: develop
-current_phase: P3
+current_phase: P4
 last_updated: '2026-10-23'
 phases:
 - id: P1
@@ -37,7 +37,7 @@ phases:
   verify: sh spec/agents-d-instructions/verify/p2.sh
 - id: P3
   name: cluster_context and the startup-text resource
-  status: pending
+  status: done
   satisfies:
   - R1
   - R5
@@ -211,25 +211,27 @@ small exits 2 naming the minimum.
 **Goal:** `cluster_context` and `rcac://context` return the startup text in every mode and era with
 no executor; the cache is gone; the base instructions are the compact rewrite naming the tool.
 
-- [ ] `src/rcac_mcp/tools/context.py` with `cluster_context()` (PLAN § 2.5), appended to the import
+- [x] `src/rcac_mcp/tools/context.py` with `cluster_context()` (PLAN § 2.5), appended to the import
       list in `tools/__init__.py`.
-- [ ] `resources.py`: the resource returns `site_of(get_server()).text`; the new description;
+- [x] `resources.py`: the resource returns `site_of(get_server()).text`; the new description;
       delete `_cluster_context_cache`, `load_cluster_context`, `get_cached_context`,
       `clear_context_cache`, `LIST_CONTEXT`.
-- [ ] `SERVER_INSTRUCTIONS` rewritten compact per PLAN § 2.4, listing `cluster_context`; a test in
+- [x] `SERVER_INSTRUCTIONS` rewritten compact per PLAN § 2.4, listing `cluster_context`; a test in
       `test_instructions.py` holds `units(SERVER_INSTRUCTIONS) <= 1500`; `NON_TOOL_TERMS` loses
       `findscratch` (§9: same commit as the tool, with the README inventory and the fixture).
-- [ ] `EXPECTED_TOOLS` gains `cluster_context`; `test_tools` and `test_no_executor` take
+- [x] `EXPECTED_TOOLS` gains `cluster_context`; `test_tools` and `test_no_executor` take
       `EXECUTORLESS`; the cache test goes.
-- [ ] `tests/test_context.py` with the functions `verify/p3.sh` names; R9's test stubs
+- [x] `tests/test_context.py` with the functions `verify/p3.sh` names; R9's test stubs
       `middleware.DelegatingExecutor` with instances that all report one hostname, and asserts
       nothing ran and no `sudo` launched; the changed-directory test rewrites and grows a planted
-      directory mid-session; the unmapped-user test pins today's behaviour (PLAN § 5, pending the
-      foreman's ruling on R7/R9).
-- [ ] `fixture_deltas.py apply` (adds `tools.cluster_context` and the resource description); list
+      directory mid-session; the unmapped-user test pins the intended behaviour ruled in GOAL C11
+      (2026-10-19): a mapped user is R7's and R9's "authenticated user" for the tool, `delegate`
+      mode refuses the tool to an identity absent from the map, the instructions and
+      `rcac://context` reach it anyway, and §5/`middleware.py` stay untouched.
+- [x] `fixture_deltas.py apply` (adds `tools.cluster_context` and the resource description); list
       all three deltas in the commit body and `test_surface.py`'s docstring.
-- [ ] `README.md`: tool inventory, the site-context subsection, how to raise both limits.
-- [ ] `AGENTS.md` §8 and §9 per PLAN § 2.7 (the contract lands with its section, § Invariants'
+- [x] `README.md`: tool inventory, the site-context subsection, how to raise both limits.
+- [x] `AGENTS.md` §8 and §9 per PLAN § 2.7 (the contract lands with its section, § Invariants'
       opening rule).
 - **Verify:** `sh spec/agents-d-instructions/verify/p3.sh` (named tests in both eras, then
   `serve_gate.py context`: tool, resource and one read over stdio in both eras and over HTTP in

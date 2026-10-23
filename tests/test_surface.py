@@ -13,7 +13,9 @@ of the named deltas only, in the snapshot's shape, listed in AGENTS.md § Testin
 `run_command.description`, `write_file.description`, `write_file.properties.encoding`,
 `sbatch.description`, `sbatch.properties.args`, and `description` and `properties.extra_args` on
 each of `sbatch`, `squeue`, `scancel`, `sacct` and `sinfo` (`safe-execution`); `instructions`, the
-base composed with the harness's site context (`agents-d-instructions`).
+base composed with the harness's site context, `tools.cluster_context`, the new tool in `myquota`'s
+schema shape with its docstring as the description, and `resources.rcac://context.description`
+(`agents-d-instructions`).
 
 `surface_violations` compares what a client in the selected era is served now (`served_surface`)
 with the snapshot. No tool, argument, required argument, argument type or default, description,

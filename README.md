@@ -29,6 +29,29 @@ failed, or timed out after 15 seconds per step unless your SSH config sets `Conn
 that `--ssh-host` names the SSH host or `~/.ssh/config` alias you use with `ssh`, not the MCP
 server's name.
 
+### The cluster's rules, in the instructions
+
+Cluster administrators can publish rules for agents as Markdown files in `/etc/agents.d`. At
+startup the server reads every `*.md` file directly in that directory except the assembled
+`AGENTS.md` (which repeats the others), once (on the cluster in `ssh` mode, on the server's own host
+in `local` and `delegate` modes), and serves them after its own instructions, so the agent sees the
+site's rules without asking. Files go in whole, each under a
+`<!-- Source: name.md -->` header, in the byte order of their names (`LC_ALL=C sort`): an
+administrator who wants a file first gives it a name that sorts first, such as one starting `00-`.
+An edit takes effect at the next start.
+
+The instructions stay within 4,096 characters by default, because Claude Code cuts server
+instructions there. Whatever does not fit is named, and the `cluster_context` tool (and the
+`rcac://context` resource) returns all of it. To serve everything to Claude Code, raise both
+limits, the server's and Claude Code's:
+
+- add `"--instructions-budget", "16384"` to the server's `args` (or set
+  `RCAC_INSTRUCTIONS_BUDGET=16384`);
+- set `CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH=16384` in the shell that starts Claude Code, or in
+  the `env` block of its `settings.json`. It raises Claude Code's limits on server instructions and
+  on tool descriptions together (the variable needs Claude Code 2.1.280 or later; before 2.1.296 the
+  default cut is 2,048 characters). `/context` shows what was loaded.
+
 ## Execution Modes
 
 The server supports three execution modes:
@@ -116,6 +139,10 @@ This server does not search RCAC documentation. The separate `rcac-docs-mcp` ser
 - `write_file(path, content, append, create_dirs, encoding)` — Write content to a file, byte for byte (`encoding="base64"` for binary)
 - `upload_file(local_path, remote_path)` — Upload a file to the remote system
 - `download_file(remote_path, local_path)` — Download a file from the remote system
+
+### Site context
+
+- `cluster_context()` — The cluster's rules from `/etc/agents.d`, in full, as read at startup
 
 ### RCAC Cluster
 
