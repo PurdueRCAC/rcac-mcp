@@ -3,7 +3,7 @@
 #
 #   sh spec/absence-check-leftover-classification/verify/gate.sh P1       every part below, in order
 #   sh spec/absence-check-leftover-classification/verify/gate.sh <part>   one part: static, tests,
-#                                                                         nogit, mutants
+#                                                                         foreign, nogit, mutants
 #
 # Offline and deterministic: every git-backed test builds its own repository under tmp_path, and the
 # base revision is read with `git show`. Nothing here reaches the network. Each part cleans up its
@@ -18,7 +18,7 @@ export UV_OFFLINE=1
 cd "$(git rev-parse --show-toplevel)"
 V=spec/absence-check-leftover-classification/verify
 BASE=90b0938  # moved base: develop 90b0938 (release 0.1.2) merged in, 2026-10-22; was bfa0595, rebased onto 2026-10-22
-phase=${1:?usage: gate.sh P1 or static|tests|nogit|mutants}
+phase=${1:?usage: gate.sh P1 or static|tests|foreign|nogit|mutants}
 
 fail() { echo "gate[$phase]: $*" >&2; exit 1; }
 py() { uv run -q python "$V/check.py" "$@"; }
@@ -36,6 +36,22 @@ tests() {
             { rm -rf "$tmp"; fail "the suite slice is red in the $era era"; }
         py outcomes "$tmp/$era.xml" all-pass || { rm -rf "$tmp"; fail "an id is missing or not passed ($era)"; }
     done
+    rm -rf "$tmp"
+}
+
+# Inside a git hook's environment (its GIT_INDEX_FILE) and with a HOME whose git configuration is
+# malformed, every listed id still passes with git and CI=true: no control reads the hook's index
+# or the developer's own configuration. The interpreter is found first, so uv never sees that HOME.
+foreign() {
+    python=$(uv run -q python -c 'import sys; print(sys.executable)') || fail 'no interpreter'
+    tmp=$(mktemp -d)
+    mkdir -p "$tmp/home/.config/git"
+    printf '[core\n' >"$tmp/home/.gitconfig"
+    printf '[core\n' >"$tmp/home/.config/git/config"
+    GIT_INDEX_FILE="$tmp/hook-index" HOME="$tmp/home" XDG_CONFIG_HOME="$tmp/home/.config" CI=true \
+        "$python" -m pytest -q -p no:cacheprovider --junitxml="$tmp/foreign.xml" tests/test_registry.py ||
+        { rm -rf "$tmp"; fail 'the slice is red under a hook environment and a malformed HOME'; }
+    py outcomes "$tmp/foreign.xml" all-pass || { rm -rf "$tmp"; fail 'an id is missing or not passed (foreign)'; }
     rm -rf "$tmp"
 }
 
@@ -64,8 +80,8 @@ nogit() {
 mutants() { py mutants || fail 'a mutant survived'; }
 
 case $phase in
-    P1) static; tests; nogit; mutants ;;
-    static | tests | nogit | mutants) "$phase" ;;
+    P1) static; tests; foreign; nogit; mutants ;;
+    static | tests | foreign | nogit | mutants) "$phase" ;;
     *) fail "unknown phase or part $phase" ;;
 esac
 echo "gate[$phase]: ok"

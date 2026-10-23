@@ -78,6 +78,8 @@ W = 'test_absence_message_falls_back_when_git_fails_midway'
 O = 'test_absence_message_for_odd_entries'
 X = 'test_absence_message_follows_developer_excludes'
 N = 'test_absence_message_for_nested_repositories'
+S = 'test_absence_message_for_unfetched_submodules'
+P = 'test_absence_message_for_special_files'
 
 # (name, file, old, new, ids that must fail[, the JUnit tag a kill shows when not `failure`])
 MUTANTS = [
@@ -105,7 +107,7 @@ MUTANTS = [
      [f'{W}[empty-pycache-check-ignore]']),
     ('symlink-followed', MODULE, "if entry.is_symlink() or not entry.is_dir()", "if not entry.is_dir()",
      ['test_absence_message_for_odd_entries[tracked-symlink]']),
-    ('unlisted-file-accepted', MODULE, "    if any(placed[r] != 1 for r in relative):",
+    ('unlisted-file-accepted', MODULE, "    if any(placed[r] != 1 for r in relative if r not in unknown):",
      "    if False:", [f'{W}[mixed-omits-untracked]']),
     ('listed-twice-accepted', MODULE, 'placed[r] != 1', 'placed[r] < 1', [f'{W}[mixed-lists-twice]']),
     ('system-config-skipped', MODULE, "    env['GIT_OPTIONAL_LOCKS'] = '0'\n",
@@ -141,12 +143,26 @@ MUTANTS = [
      ['test_asking_git_runs_nothing_the_configuration_names[repository]',
       'test_asking_git_runs_nothing_the_configuration_names[global]',
       'test_asking_git_runs_nothing_the_configuration_names[environment]']),
-    ('need-git-skips-with-git', CONFTEST, "    if shutil.which('git'):\n        return\n",
-     "    if shutil.which('git'):\n        pytest.skip('git is not on PATH here')\n",
+    ('need-git-skips-with-git', CONFTEST, "            if ran.returncode == 0:\n                return\n",
+     "            if ran.returncode == 0:\n                pytest.skip('git is not on PATH here')\n",
      ['test_a_missing_git_fails_on_ci_and_skips_elsewhere[ci-present]',
       'test_a_missing_git_fails_on_ci_and_skips_elsewhere[local-present]']),
-    ('need-git-skips-on-ci', CONFTEST, "    if os.environ.get('CI', '').lower() == 'true':\n        pytest.fail('git",
-     "    if False:\n        pytest.fail('git", ['test_a_missing_git_fails_on_ci_and_skips_elsewhere[ci]']),
+    ('need-git-skips-on-ci', CONFTEST, "    if os.environ.get('CI', '').lower() == 'true':\n        pytest.fail(f'{reason}",
+     "    if False:\n        pytest.fail(f'{reason}", ['test_a_missing_git_fails_on_ci_and_skips_elsewhere[ci]',
+                                                  'test_a_missing_git_fails_on_ci_and_skips_elsewhere[ci-broken]']),
+    # A git on PATH that does not run is no git.
+    ('need-git-trusts-path', CONFTEST, "            if ran.returncode == 0:\n", "            if True:\n",
+     ['test_a_missing_git_fails_on_ci_and_skips_elsewhere[ci-broken]',
+      'test_a_missing_git_fails_on_ci_and_skips_elsewhere[local-broken]']),
+    # A gitlink git lists is tracked, checked out or not; a FIFO or socket is unknown to git.
+    ('gitlink-asked-again', MODULE, "if r not in nested and r not in named and entry.is_dir()",
+     "if r not in nested and entry.is_dir()", [f'{S}[deinitialised]', f'{S}[not-fetched]']),
+    ('special-not-unknown', MODULE, "and special(entry) and placed[r] == 0]", "and False]",
+     [f'{P}[fifo]', f'{P}[socket]', f'{P}[fifo-beside-ignored]']),
+    ('unknown-not-explained', MODULE, "    if files := classes['unknown']:", "    if files := []:",
+     [f'{P}[fifo]', f'{P}[fifo-beside-tracked]']),
+    # The oracle is the developer's git status outside the hook.
+    ('oracle-in-hook', MODULE, "env=outside_hook, ", "", ['test_absence_message_ignores_git_hook_environment[index-file]']),
 ]
 # Only macOS composes the names it lists, so only there does leaving them as stored lose a file.
 if sys.platform == 'darwin':

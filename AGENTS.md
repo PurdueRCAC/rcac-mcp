@@ -224,7 +224,10 @@ import has no effect.
     is keyed by its path as git prints it (a symlink, the location itself included, is the link git
     records, never its target; on macOS names are compared composed, whatever
     `core.precomposeUnicode` says), and a repository nested there is the one entry git lists it as,
-    in git's class for it, with a line saying git does not look into it. Git runs with the
+    in git's class for it, with a line saying git does not look into it. A submodule git tracks
+    but has not checked out (an empty directory, as a deinitialised submodule or a checkout that
+    fetches no submodules leaves it) is tracked, and a FIFO, socket or device, which git records
+    nowhere, gets its own line as unknown to git. Git runs with the
     developer's HOME and XDG directories handed back inside the sandbox and the rest of the
     environment as it is, so it reads exactly the configuration their `git status` reads (global and
     system config, `[include]` and `includeIf`, `~` in any value, `GIT_CONFIG_*`, every excludes
@@ -238,12 +241,16 @@ import has no effect.
     message is the old suffix rule's: bytecode alone is a stale checkout, anything else a re-added
     module. That is the case without git on PATH, without `bin/sandbox.sh` (an sdist), outside a
     work tree (one above `GIT_CEILING_DIRECTORIES` included), in a `unit` test, which may start no
-    process, when a call fails or lists a file in no class or in two, and when a directory there
-    cannot be read. So `test_docs_modules_absent` is `integration` although it drives no CLI, and
-    `-m unit` no longer runs it; the git-backed controls build their own repository under
-    `tmp_path`, with a scratch HOME and system config so the developer's configuration is never
-    read, and go through `conftest.need_git`, which skips them without git off CI and fails them on
-    CI, where it never skips (its own test catches every outcome, so it cannot skip itself).
+    process, when a call fails or lists a file in no class (a FIFO, socket or device aside) or in
+    two, and when a directory there cannot be read. So `test_docs_modules_absent` is `integration` although it drives no CLI, and
+    `-m unit` no longer runs it. It is the one test that asks the developer's own git, and only
+    when it fails. Every other test that runs git, each git-backed control and
+    `test_git_env_drops_what_points_git_elsewhere`, uses a scratch HOME and system config, so the
+    developer's configuration is never read; the controls build their own repository under
+    `tmp_path` and check each class against `git status --ignored`, run outside any hook
+    environment. They go through `conftest.need_git`, which skips them off CI and fails them on CI
+    unless the git on PATH runs (`git --version` exits 0), and never skips on CI (its own test
+    catches every outcome, so it cannot skip itself).
     `EXPECTED_TOOLS` is hard-coded, so a tool change edits it in the same
     commit as `SERVER_INSTRUCTIONS` and the README (§ Invariants §9).
   - `tests/test_instructions.py` (`unit`): `instruction_violations`, `guidance_violations`,

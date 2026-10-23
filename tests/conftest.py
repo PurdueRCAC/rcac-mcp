@@ -54,18 +54,33 @@ NETWORK_ENTRY_POINTS = [(socket.socket, 'connect'), (socket.socket, 'connect_ex'
                         (socket, 'create_connection'), (socket, 'getaddrinfo')]
 
 
-def need_git() -> None:
-    """Return if git is on PATH; otherwise skip the test, or fail it on CI.
+SANDBOX = Path(__file__).resolve().parents[1] / 'bin' / 'sandbox.sh'
 
-    Every test that builds a git repository goes through here. On CI (`CI=true`, as GitHub Actions
-    sets it) git is always installed, so a missing one fails the test, naming it: a skipped test
-    there would be coverage silently lost. Elsewhere it skips.
+
+def need_git() -> None:
+    """Return if the git on PATH runs; otherwise skip the test, or fail it on CI.
+
+    Every test that builds a git repository goes through here. Git runs when `git --version` exits
+    0 through bin/sandbox.sh; a git on PATH that cannot run (macOS's /usr/bin/git without the
+    Command Line Tools) counts as missing. On CI (`CI=true`, as GitHub Actions sets it) git is
+    always installed, so a missing one fails the test, naming it: a skipped test there would be
+    coverage silently lost. Elsewhere it skips.
     """
-    if shutil.which('git'):
-        return
+    program = shutil.which('git')
+    if program is None:
+        reason = 'git is not on PATH here'
+    else:
+        try:
+            ran = subprocess.run([str(SANDBOX), program, '--version'], capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.SubprocessError) as error:
+            reason = f'git on PATH ({program}) does not run here: {error}'
+        else:
+            if ran.returncode == 0:
+                return
+            reason = f'git on PATH ({program}) does not run here: `git --version` exited {ran.returncode}'
     if os.environ.get('CI', '').lower() == 'true':
-        pytest.fail('git is not on PATH here, and on CI it must be', pytrace=False)
-    pytest.skip('git is not on PATH here')
+        pytest.fail(f'{reason}, and on CI git must run', pytrace=False)
+    pytest.skip(reason)
 
 
 SHIM_MESSAGE = 'refused by the test PATH shim'

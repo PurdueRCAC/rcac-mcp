@@ -12,6 +12,7 @@ import os
 import pwd
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import unicodedata
@@ -165,10 +166,16 @@ def comparable(name: str) -> str:
     return unicodedata.normalize('NFC', name) if sys.platform == 'darwin' else name
 
 
+def special(entry: Path) -> bool:
+    """True when `entry` is neither a file, a directory nor a symlink: a FIFO, a socket or a device."""
+    return not entry.is_symlink() and not entry.is_dir() and not entry.is_file()
+
+
 def git_classes(path: Path) -> dict[str, list[Path]] | None:
     """Sort every leaf entry at or under `path` by what git knows of it, as the developer's git status does.
 
-    Returns the classes, `tracked`, `untracked` and `ignored`, and under `nested` the repositories
+    Returns the classes, `tracked`, `untracked` and `ignored`; under `unknown` the special files
+    there (`special`), which git lists in no class; and under `nested` the repositories
     nested there, each of which git lists as one entry in its class and does not look into. None
     when git cannot be asked or does not answer: no process may start (the unit guard),
     bin/sandbox.sh or git is missing, `path` is not inside a git work tree, a call fails, or a file
@@ -209,8 +216,10 @@ def git_classes(path: Path) -> dict[str, list[Path]] | None:
             if r.startswith(f'{n}/') and os.path.lexists(top / '.git'):
                 nested[n] = top
     relative = {r: e for r, e in relative.items() if not any(r.startswith(f'{n}/') for n in nested)} | nested
-    # Git lists files only: a directory that holds nothing is ignored or untracked by its rules.
-    empty = [r for r, entry in relative.items() if r not in nested and entry.is_dir() and not entry.is_symlink()]
+    # Git lists files only: a directory that holds nothing is ignored or untracked by its rules,
+    # unless git lists it already, as it lists a gitlink whose submodule is not checked out.
+    empty = [r for r, entry in relative.items()
+             if r not in nested and r not in named and entry.is_dir() and not entry.is_symlink()]
     if empty:
         checked = ask_git(program, where, ['check-ignore', '-z', '--stdin'], ''.join(f'{r}\0' for r in empty))
         if checked is None or checked.returncode not in (0, 1):
@@ -219,10 +228,12 @@ def git_classes(path: Path) -> dict[str, list[Path]] | None:
         listings['ignored'] += [r for r in empty if r in ignored]
         listings['untracked'] += [r for r in empty if r not in ignored]
     placed = Counter(n for names in listings.values() for n in set(names))
-    if any(placed[r] != 1 for r in relative):
+    # Git records no FIFO, socket or device and lists one nowhere: it is unknown to git.
+    unknown = [r for r, entry in relative.items() if r not in nested and special(entry) and placed[r] == 0]
+    if any(placed[r] != 1 for r in relative if r not in unknown):
         return None
     classes = {kind: [relative[r] for r in sorted(set(names) & relative.keys())] for kind, names in listings.items()}
-    return classes | {'nested': [nested[n] for n in sorted(nested)]}
+    return classes | {'unknown': [relative[r] for r in sorted(unknown)], 'nested': [nested[n] for n in sorted(nested)]}
 
 
 def covering(path: Path, chosen: Sequence[Path], entries: Sequence[Path]) -> list[Path]:
@@ -263,7 +274,7 @@ def suffix_explanation(name: str, path: Path) -> str:
 
 def git_explanation(name: str, path: Path, classes: dict[str, list[Path]]) -> str:
     """Explain an importable `path` by what git knows of each file there, one line per class present."""
-    entries = [e for kind in ('tracked', 'untracked', 'ignored') for e in classes[kind]]
+    entries = [e for kind in ('tracked', 'untracked', 'ignored', 'unknown') for e in classes[kind]]
 
     def shown(files: list[Path]) -> list[str]:
         return [str(f.relative_to(path.parent)) + ('/' if f.is_dir() and not f.is_symlink() else '')
@@ -285,7 +296,10 @@ def git_explanation(name: str, path: Path, classes: dict[str, list[Path]]) -> st
                      f'behind when a checkout moves past the removal; a directory holding only '
                      f'those imports as an empty namespace package, and a bare .pyc as a module. '
                      f'Delete them with `{removal(files)}` and re-run.')
-    if not classes['tracked'] and classes['untracked'] and classes['ignored']:
+    if files := classes['unknown']:
+        lines.append(f'- unknown {shown(files)}: unknown to git, which records no FIFO, socket or device and '
+                     f'lists none. Once nothing uses them, delete them with `{removal(files)}` and re-run.')
+    if not classes['tracked'] and sum(bool(classes[k]) for k in ('untracked', 'ignored', 'unknown')) > 1:
         lines.append(f'Git tracks nothing there, so `del {shlex.quote(str(path))}` takes it all, and the '
                      f'directory that would otherwise stay behind and still import.')
     if nested := classes['nested']:
@@ -389,18 +403,27 @@ def plant(root: Path, entries: Sequence[str]) -> None:
 
 
 @pytest.fixture
-def scratch_package(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch):
-    """A uniquely named importable package on `sys.path`; its modules leave `sys.modules` afterwards.
+def scratch_home(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A scratch configuration for every git the test asks, returned as its HOME.
 
-    Git asked about it reads a scratch configuration: HOME is an empty scratch directory, the system
-    config an empty scratch file, and no `GIT_CONFIG_*` variable is set, so the developer's own
-    configuration never reaches a control; a control that wants one plants it.
+    HOME is an empty scratch directory, the system config an empty scratch file, and no
+    `GIT_CONFIG_*` variable is set, so the developer's own configuration never reaches a control; a
+    control that wants one plants it.
     """
     home = tmp_path_factory.mktemp('home')
     for variable in [k for k in os.environ if k.startswith('GIT_CONFIG') or k == 'XDG_CONFIG_HOME']:
         monkeypatch.delenv(variable)
     monkeypatch.setenv('HOME', str(home))
     monkeypatch.setenv('GIT_CONFIG_SYSTEM', str(write(home / '.system-gitconfig', '')))
+    return home
+
+
+@pytest.fixture
+def scratch_package(tmp_path: Path, scratch_home: Path, monkeypatch: pytest.MonkeyPatch):
+    """A uniquely named importable package on `sys.path`; its modules leave `sys.modules` afterwards.
+
+    Git asked about it reads `scratch_home`'s configuration.
+    """
     package = f'scratch_{uuid.uuid4().hex}'
     plant(tmp_path, [f'{package}/__init__.py'])
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -483,12 +506,15 @@ def scratch_repo(scratch_package: Path, tmp_path_factory: pytest.TempPathFactory
 def status_classes(top: Path) -> dict[str, str]:
     """What the developer's `git status --ignored` shows in `top`: each path it lists, and its class.
 
-    Run as the developer runs it, outside any hook, with this process's HOME and XDG directories.
+    Run as the developer runs it, outside any hook, with this process's HOME and XDG directories:
+    what a hook exports to point git at its own repository or index (`REDIRECTING`) is dropped.
     """
     unset = [a for k in ('HOME', 'XDG_CONFIG_HOME') if k not in os.environ for a in ('-u', k)]
     home = [*unset, *(f'{k}={os.environ[k]}' for k in ('HOME', 'XDG_CONFIG_HOME') if k in os.environ)]
+    outside_hook = {k: os.environ[k] for k in os.environ.keys() - REDIRECTING}
     shown = subprocess.run([str(SANDBOX), 'env', *home, 'git', '-C', str(top), 'status', '--porcelain', '-z',
-                            '--ignored', '--untracked-files=all'], capture_output=True, text=True, check=True)
+                            '--ignored', '--untracked-files=all'], env=outside_hook, capture_output=True, text=True,
+                           check=True)
     return {comparable(entry[3:]): {'??': 'untracked', '!!': 'ignored'}.get(entry[:2], 'tracked')
             for entry in shown.stdout.split('\0') if entry}
 
@@ -496,8 +522,9 @@ def status_classes(top: Path) -> dict[str, str]:
 def assert_classes_are_status(message: str, package: Path) -> None:
     """Every file the explanation names is in the class the developer's `git status --ignored` gives it.
 
-    A tracked file git status does not list is unchanged; a path it lists with a trailing slash
-    stands for everything under it. Names are relative to `package`, as the explanation shows them.
+    A tracked file git status does not list is unchanged, and an unknown one it never lists; a path
+    it lists with a trailing slash stands for everything under it. Names are relative to `package`,
+    as the explanation shows them.
     """
     status = status_classes(package.parent)
     for kind, line in class_lines(message).items():
@@ -507,7 +534,8 @@ def assert_classes_are_status(message: str, package: Path) -> None:
                 continue
             name = comparable(f'{package.name}/{shown}'.rstrip('/'))
             listed = [c for p, c in status.items() if p.rstrip('/') == name or (p.endswith('/') and name.startswith(p))]
-            assert listed == ([] if kind == 'tracked' and not listed else [kind]), (name, kind, status, message)
+            want = [] if kind == 'unknown' or (kind == 'tracked' and not listed) else [kind]
+            assert listed == want, (name, kind, status, message)
 
 
 def explain(package: Path, entries: list[str], tracked: list[str]) -> str:
@@ -710,27 +738,41 @@ def test_absence_message_falls_back_when_git_fails_midway(scratch_repo: Path, mo
     fallback_message(scratch_repo, entries, located, expected)
 
 
-@pytest.mark.unit
-@pytest.mark.parametrize('ci, present, outcome', [
-    pytest.param('true', False, pytest.fail.Exception, id='ci'),
-    pytest.param(None, False, pytest.skip.Exception, id='local'),
-    pytest.param('false', False, pytest.skip.Exception, id='ci-false'),
-    pytest.param('true', True, None, id='ci-present'),
-    pytest.param(None, True, None, id='local-present'),
+# What bin/sandbox.sh needs on PATH to start; a PATH of these alone holds no git.
+SANDBOX_NEEDS = ('dirname', 'mktemp', 'mkdir', 'rm')
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('ci, git, outcome', [
+    pytest.param('true', None, pytest.fail.Exception, id='ci'),
+    pytest.param(None, None, pytest.skip.Exception, id='local'),
+    pytest.param('false', None, pytest.skip.Exception, id='ci-false'),
+    pytest.param('true', 'echo git version 0', None, id='ci-present'),
+    pytest.param(None, 'echo git version 0', None, id='local-present'),
+    pytest.param('true', 'echo no developer tools >&2; exit 1', pytest.fail.Exception, id='ci-broken'),
+    pytest.param(None, 'echo no developer tools >&2; exit 1', pytest.skip.Exception, id='local-broken'),
 ])
-def test_a_missing_git_fails_on_ci_and_skips_elsewhere(ci: str | None, present: bool,
+def test_a_missing_git_fails_on_ci_and_skips_elsewhere(ci: str | None, git: str | None,
                                                         outcome: type[BaseException] | None,
                                                         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    # need_git never skips on CI: it returns when git is on PATH and fails when it is not. Every
-    # outcome is caught, a skip included, so this test cannot skip itself: a need_git that skips
-    # where it must not fails it.
+    # need_git never skips on CI: it returns when git on PATH runs, and fails when there is none or
+    # it does not run (`git --version` exits nonzero, as macOS's /usr/bin/git does without the
+    # Command Line Tools). Every outcome is caught, a skip included, so this test cannot skip
+    # itself: a need_git that skips where it must not fails it.
     if ci is None:
         monkeypatch.delenv('CI', raising=False)
     else:
         monkeypatch.setenv('CI', ci)
-    plant(tmp_path, ['present/git', 'empty/'])
-    (tmp_path / 'present' / 'git').chmod(0o755)
-    monkeypatch.setenv('PATH', str(tmp_path / ('present' if present else 'empty')))
+    farm = tmp_path / 'farm'
+    farm.mkdir()
+    for program in SANDBOX_NEEDS:
+        found = shutil.which(program)
+        assert found is not None, program
+        (farm / program).symlink_to(found)
+    directories = [str(farm)]
+    if git is not None:
+        directories.insert(0, str(Path(fake_git(tmp_path, git)).parent))
+    monkeypatch.setenv('PATH', os.pathsep.join(directories))
     try:
         need_git()
     except BaseException as raised:
@@ -738,7 +780,8 @@ def test_a_missing_git_fails_on_ci_and_skips_elsewhere(ci: str | None, present: 
     else:
         got = None
     assert (type(got) if got is not None else None) is outcome, got
-    assert got is None or 'git is not on PATH' in str(got), got
+    reason = 'git is not on PATH' if git is None else 'does not run here'
+    assert got is None or reason in str(got), got
 
 
 @pytest.mark.integration
@@ -759,6 +802,8 @@ def test_absence_message_ignores_git_hook_environment(scratch_repo: Path, tmp_pa
         monkeypatch.setenv(variable, str(hook[variable]))
     message = explain(scratch_repo, ['sub/mod.py'], ['sub/mod.py'])
     assert set(class_lines(message)) == {'tracked'}, message
+    # The oracle answers for the module's repository too, as the developer's git status outside the hook.
+    assert_classes_are_status(message, scratch_repo)
 
 
 # `café.txt` with its accent as a combining mark: how macOS has stored the name, and git may print it composed.
@@ -945,6 +990,88 @@ def test_absence_message_for_nested_repositories(scratch_repo: Path, shape: str,
     assert_classes_are_status(message, scratch_repo)
 
 
+IDENTITY = ('-c', 'user.name=t', '-c', 'user.email=t@example.invalid')
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('shape', ['deinitialised', 'not-fetched'])
+def test_absence_message_for_unfetched_submodules(scratch_repo: Path, tmp_path_factory: pytest.TempPathFactory,
+                                                  shape: str) -> None:
+    # A submodule git tracks but has not checked out is an empty directory git lists as tracked, as a
+    # deinitialised submodule or a checkout that fetches no submodules leaves it: re-added, no `del`.
+    top = scratch_repo.parent
+    vendor = scratch_repo / 'sub' / 'vendor'
+    if shape == 'deinitialised':
+        upstream = tmp_path_factory.mktemp('upstream')
+        plant(upstream, ['mod.py'])
+        git_in(upstream, 'init', '-q')
+        git_in(upstream, 'add', '--', 'mod.py')
+        git_in(upstream, *IDENTITY, 'commit', '-q', '-m', 'upstream')
+        git_in(top, *IDENTITY, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', '--', str(upstream),
+               f'{scratch_repo.name}/sub/vendor')
+        git_in(top, *IDENTITY, 'commit', '-q', '-m', 'submodule')
+        git_in(top, 'submodule', 'deinit', '-q', '-f', '--', f'{scratch_repo.name}/sub/vendor')
+    else:
+        plant(vendor, ['mod.py'])
+        git_in(vendor, 'init', '-q')
+        git_in(vendor, *IDENTITY, 'commit', '-q', '--allow-empty', '-m', 'vendor')
+        git_in(top, 'add', '--', f'{scratch_repo.name}/sub/vendor')
+        shutil.rmtree(vendor)
+        vendor.mkdir()
+    assert vendor.is_dir() and not any(vendor.iterdir())
+    importlib.invalidate_caches()
+    name = f'{scratch_repo.name}.sub'
+    assert not module_absent(name)
+    [message] = absence_violations(name)
+    lines = class_lines(message)
+    assert set(lines) == {'tracked'}, message
+    assert lines['tracked'].split(':')[0] == "- tracked ['sub/vendor/']", message
+    assert 're-added' in message and '`del' not in message, message
+    assert_classes_are_status(message, scratch_repo)
+
+
+def make_special(path: Path, kind: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make a FIFO or a Unix socket at `path`, bound by its name alone so a long directory still fits."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if kind == 'fifo':
+        os.mkfifo(path)
+        return
+    with monkeypatch.context() as here:
+        here.chdir(path.parent)
+        with socket.socket(socket.AF_UNIX) as bound:
+            bound.bind(path.name)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('special, entries, tracked, expected', [
+    pytest.param('sub/fifo', [], [], {'unknown': ['sub/fifo']}, id='fifo'),
+    pytest.param('sub/sock', [], [], {'unknown': ['sub/sock']}, id='socket'),
+    pytest.param('sub/stale.pyc', [], [], {'unknown': ['sub/stale.pyc']}, id='fifo-named-ignored'),
+    pytest.param('sub/fifo', ['sub/__pycache__/mod.cpython-314.pyc'], [],
+                 {'ignored': ['sub/__pycache__/mod.cpython-314.pyc'], 'unknown': ['sub/fifo']}, id='fifo-beside-ignored'),
+    pytest.param('sub/sock', ['sub/.DS_Store'], [], {'untracked': ['sub/.DS_Store'], 'unknown': ['sub/sock']},
+                 id='socket-beside-untracked'),
+    pytest.param('sub/fifo', ['sub/mod.py'], ['sub/mod.py'], {'tracked': ['sub/mod.py'], 'unknown': ['sub/fifo']},
+                 id='fifo-beside-tracked'),
+])
+def test_absence_message_for_special_files(scratch_repo: Path, monkeypatch: pytest.MonkeyPatch, special: str,
+                                           entries: list[str], tracked: list[str],
+                                           expected: dict[str, list[str]]) -> None:
+    # Git records no FIFO or socket and lists one nowhere, whatever its name: the explanation names
+    # it as unknown to git, in its own line, and says "re-added" only when git tracks a file there.
+    make_special(scratch_repo / special, 'socket' if special.endswith('sock') else 'fifo', monkeypatch)
+    message = explain(scratch_repo, entries, tracked)
+    lines = class_lines(message)
+    assert {kind: ast.literal_eval(line.split(':')[0].split(' ', 2)[2]) for kind, line in lines.items()} == expected, \
+        message
+    assert ('re-added' in message) == bool(tracked), message
+    # Alone, it is all there is, so its removal is the location's; beside others, only its own.
+    assert removals(lines['unknown']) == [str(scratch_repo / ('sub' if len(expected) == 1 else special))], message
+    for kind in set(expected) - {'tracked', 'unknown'}:
+        assert str(scratch_repo / special) not in removals(lines[kind]), message
+    assert_classes_are_status(message, scratch_repo)
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize('where', ['repository', 'global', 'environment'])
 def test_asking_git_runs_nothing_the_configuration_names(scratch_repo: Path, tmp_path: Path,
@@ -975,11 +1102,12 @@ def test_asking_git_runs_nothing_the_configuration_names(scratch_repo: Path, tmp
 
 
 @pytest.mark.integration
-def test_git_env_drops_what_points_git_elsewhere() -> None:
+def test_git_env_drops_what_points_git_elsewhere(scratch_home: Path) -> None:
     # The variables git itself clears when it moves into another repository are dropped, all but the
-    # configuration they carry, which is the developer's; that configuration stays.
+    # configuration they carry, which is the developer's; that configuration stays. Git is asked
+    # outside any repository with a scratch configuration, so nothing of the developer's is read.
     need_git()
-    shown = ask_git(GIT, Path(__file__).parent, ['rev-parse', '--local-env-vars'])
+    shown = ask_git(GIT, scratch_home, ['rev-parse', '--local-env-vars'])
     assert shown is not None and shown.returncode == 0, shown
     local = set(shown.stdout.split())
     assert 'GIT_DIR' in local and 'GIT_INDEX_FILE' in local, local

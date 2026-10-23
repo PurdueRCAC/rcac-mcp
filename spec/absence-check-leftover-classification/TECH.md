@@ -3,11 +3,11 @@ slug: absence-check-leftover-classification
 title: Explain an importable leftover by git status, not file suffix
 kind: test
 appetite: small
-status: blocked
+status: in_review
 branch: test/absence-check-leftover-classification
 base: develop
 current_phase: done
-last_updated: '2026-10-22'
+last_updated: '2026-10-23'
 phases:
 - id: P1
   name: Classify each leftover by git status, with the suffix rule as the fallback
@@ -26,7 +26,7 @@ phases:
   parallel: false
   hammerable: false
   hill: uphill
-  attempts: 1
+  attempts: 2
   verify: sh spec/absence-check-leftover-classification/verify/gate.sh P1
 review:
   last_reviewed_commit: 07b8fe052028472c9ba4b9e73a4434c408f35493
@@ -220,3 +220,31 @@ their fake there.
 3. *`need_git` never skips on CI.* Its test catches every outcome, a skip included, and gains
    `ci-present` and `local-present`, so a `need_git` that skips with git on PATH fails it
    (mutant `need-git-skips-with-git`, killed under `CI=true`).
+
+**Review cycle 3 remediation (2026-10-23).** Geoffrey's ruling (GOAL.md, newest Clarification):
+a fix scoped to review cycle 3's five items, verified by the foreman, then landed. P1 is reopened.
+`verify/` only grows or follows moved code: `ids.txt` lists 114 ids; `check.py` moves three anchors
+(`unlisted-file-accepted`, both `need-git-*`) and adds five mutants (33 on macOS, 32 elsewhere);
+`gate.sh` adds the `foreign` part, run in P1 after `tests`.
+
+1. *A gitlink git lists is tracked, checked out or not.* The empty-directory `check-ignore` step
+   skips every path the listings already name. Control:
+   `test_absence_message_for_unfetched_submodules` (`deinitialised`, a real `submodule deinit`;
+   `not-fetched`). Mutant `gitlink-asked-again`.
+2. *The oracle runs outside the hook.* `status_classes` drops `REDIRECTING`, as the classifier does.
+   `…_ignores_git_hook_environment` now checks the oracle too; the gate's `foreign` part runs the
+   module under a hook-like `GIT_INDEX_FILE`. Mutant `oracle-in-hook`.
+3. *A FIFO, socket or device is unknown to git.* Git lists one nowhere, whatever its name; it is
+   its own class, `unknown`, with its own line and `del`, and never sends the message to the
+   suffix rule. Control: `test_absence_message_for_special_files` (6 rows). Mutants
+   `special-not-unknown`, `unknown-not-explained`.
+4. *`need_git` probes that git runs:* `git --version` through bin/sandbox.sh must exit 0. Its test
+   moves to `integration` (it now launches), on a PATH of fakes plus what the sandbox needs, and
+   gains `ci-broken` and `local-broken`. Mutant `need-git-trusts-path`.
+5. *Only `test_docs_modules_absent` reads the developer's configuration.*
+   `test_git_env_drops_what_points_git_elsewhere` takes the new `scratch_home` fixture (split out
+   of `scratch_package`) and asks git outside any repository; § Testing says which test asks the
+   developer's git. The gate's `foreign` part runs the module with a malformed global config.
+
+The first gate run was red (attempt 2): the oracle's environment filter repeated the anchor of
+`hook-environment-kept`; it was reworded and the re-run is green (33 mutants killed).

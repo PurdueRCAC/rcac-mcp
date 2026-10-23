@@ -70,6 +70,8 @@ test_a_missing_git_fails_on_ci_and_skips_elsewhere[local] plain
 test_a_missing_git_fails_on_ci_and_skips_elsewhere[ci-false] plain
 test_a_missing_git_fails_on_ci_and_skips_elsewhere[ci-present] plain
 test_a_missing_git_fails_on_ci_and_skips_elsewhere[local-present] plain
+test_a_missing_git_fails_on_ci_and_skips_elsewhere[ci-broken] plain
+test_a_missing_git_fails_on_ci_and_skips_elsewhere[local-broken] plain
 test_absence_message_ignores_git_hook_environment[git-dir] git
 test_absence_message_ignores_git_hook_environment[work-tree] git
 test_absence_message_ignores_git_hook_environment[index-file] git
@@ -101,6 +103,14 @@ test_absence_message_for_nested_repositories[untracked-bytecode] git
 test_absence_message_for_nested_repositories[ignored] git
 test_absence_message_for_nested_repositories[beside-tracked] git
 test_absence_message_for_nested_repositories[gitlink] git
+test_absence_message_for_unfetched_submodules[deinitialised] git
+test_absence_message_for_unfetched_submodules[not-fetched] git
+test_absence_message_for_special_files[fifo] git
+test_absence_message_for_special_files[socket] git
+test_absence_message_for_special_files[fifo-named-ignored] git
+test_absence_message_for_special_files[fifo-beside-ignored] git
+test_absence_message_for_special_files[socket-beside-untracked] git
+test_absence_message_for_special_files[fifo-beside-tracked] git
 test_asking_git_runs_nothing_the_configuration_names[repository] git
 test_asking_git_runs_nothing_the_configuration_names[global] git
 test_asking_git_runs_nothing_the_configuration_names[environment] git
