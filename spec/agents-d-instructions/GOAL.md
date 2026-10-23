@@ -176,6 +176,10 @@ part of the instructions.
   cannot read is unreadable for R8 (its one line, no site text), so no user receives text an
   ordinary account could not read. `local` and `ssh` read as the user and keep the file system's
   own answer.
+  *Amended 2026-10-23 (foreman, review cycle 2):* "others" means every account, as the purpose
+  clause says: each class (owner, group, other) has the needed bit on the resolved file, the
+  directory and every ancestor to `/`, and none carries extended ACL entries; anything else is
+  unreadable for R8.
 
 ## Related materials
 
