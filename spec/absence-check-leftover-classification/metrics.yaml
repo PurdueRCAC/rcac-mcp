@@ -1,0 +1,33 @@
+# Written only by $KB/bin/factory/metrics.py. Observation, never state: nothing routes on it.
+slug: absence-check-leftover-classification
+escaped_from: null
+planned: {date: '2026-10-22', phases: 1}
+landed: {date: '2026-10-23', phases: 1, failed_verifies: 2}
+open: null
+runs:
+- {step: feature, start: '2026-10-19T05:01:34-04:00', stop: '2026-10-19T05:03:16-04:00', seconds: 102, end: gate, agent: claude-opus-5-5}
+- {step: plan, start: '2026-10-19T05:03:28-04:00', stop: '2026-10-22T16:14:51-04:00', seconds: 299483, end: error, agent: claude-opus-5-5}
+- {step: 'build:P1', start: '2026-10-22T18:42:40-04:00', stop: '2026-10-22T18:48:16-04:00', seconds: 336, end: gate, agent: claude-opus-5-5}
+- {step: review, start: '2026-10-22T18:50:44-04:00', stop: '2026-10-22T19:07:48-04:00', seconds: 1024, end: gate, agent: claude-opus-5-5}
+- {step: 'build:P1', start: '2026-10-22T19:07:55-04:00', stop: '2026-10-22T19:45:11-04:00', seconds: 2236, end: gate, agent: claude-opus-5-5}
+- {step: review, start: '2026-10-22T19:45:11-04:00', stop: '2026-10-22T20:04:56-04:00', seconds: 1185, end: gate, agent: claude-opus-5-5}
+- {step: 'build:P1', start: '2026-10-22T22:35:00-04:00', stop: '2026-10-22T23:08:23-04:00', seconds: 2003, end: gate, agent: claude-opus-5-5}
+- {step: review, start: '2026-10-22T23:08:24-04:00', stop: '2026-10-22T23:30:57-04:00', seconds: 1353, end: question, agent: claude-opus-5-5}
+- {step: 'build:P1', start: '2026-10-23T12:45:14-04:00', stop: '2026-10-23T13:16:08-04:00', seconds: 1854, end: gate, agent: claude-opus-5-5}
+- {step: publish, start: '2026-10-23T13:38:31-04:00', stop: '2026-10-23T13:38:31-04:00', seconds: 0, end: done, agent: claude-opus-5-5}
+reviews:
+- cycle: 1
+  date: '2026-10-22'
+  verdict: changes-requested
+  confirmed: {critical: 0, high: 0, medium: 2, low: 0}
+  plausible: 0
+- cycle: 2
+  date: '2026-10-22'
+  verdict: changes-requested
+  confirmed: {critical: 0, high: 0, medium: 1, low: 1}
+  plausible: 0
+- cycle: 3
+  date: '2026-10-22'
+  verdict: changes-requested
+  confirmed: {critical: 0, high: 0, medium: 1, low: 4}
+  plausible: 0

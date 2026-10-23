@@ -3,7 +3,7 @@ slug: absence-check-leftover-classification
 title: Explain an importable leftover by git status, not file suffix
 kind: test
 appetite: small
-status: in_review
+status: done
 branch: test/absence-check-leftover-classification
 base: develop
 current_phase: done
