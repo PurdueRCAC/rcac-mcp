@@ -86,7 +86,7 @@ clients of one server, an agent submitting a sweep in a loop) and can clobber ea
 now; the fix is small, and waiting for Part I would leave it in place until 0.2.0.
 
 *Horizon: near-term · Depends on: safe-execution (the byte-exact script write; cleared: landed on `develop` 2026-10-23) · Refs: [`spec/safe-execution/`](spec/safe-execution/) research 04 §7, PLAN risk 7; [`issues/slurm-capability.md`](issues/slurm-capability.md), whose `job_submit` inherits the fixed naming*
-**Seed:** [`issues/sbatch-script-name-collision.md`](issues/sbatch-script-name-collision.md) · *status: unshaped*
+**Seed:** [`issues/sbatch-script-name-collision.md`](issues/sbatch-script-name-collision.md) · *status: adopted:sbatch-script-name-collision*
 
 ## The site's own rules should reach the model unasked
 

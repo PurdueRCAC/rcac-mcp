@@ -1,5 +1,5 @@
 ---
-status: unshaped
+status: adopted:sbatch-script-name-collision
 kind: fix
 appetite: small
 lane: public
