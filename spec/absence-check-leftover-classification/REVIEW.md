@@ -127,3 +127,36 @@
 ## Human-gate triggers — cycle 2
 
 - None.
+
+## Review cycle 3 — changes-requested; bound reached, escalated (2026-10-22)
+
+- **Reviewed commit:** 07b8fe052028472c9ba4b9e73a4434c408f35493 · a fresh blind pass; CI 39892959557 green
+  (789 per era). The redesign held where cycle 2 failed: 22 configuration shapes (includes,
+  `includeIf` gitdir/onbranch/hasconfig, `~`, `GIT_CONFIG_*`, system and worktree config,
+  `info/exclude`, negations, six nested-repository shapes, symlinks, NFD) all matched `git status
+  --ignored`; with the overrides nothing configured ran (fsmonitor ran 8 times without them).
+
+### [MEDIUM/CONFIRMED] A tracked gitlink with an empty directory gets a `del` remedy
+
+- **Where:** `tests/test_registry.py:213-223`.
+- **Failure scenario:** a deinit'ed submodule, or CI's checkout that does not fetch submodules: the
+  empty-directory `check-ignore` step adds the gitlink to `untracked` though `ls-files --cached`
+  lists it; the placement check sees it twice and falls back to the suffix rule — "only bytecode …
+  Delete the leftover with `del`" for a tracked path (R3). Cause confirmed: excluding already-named
+  paths from that step gives `{'tracked': ['pkg/sub']}`.
+
+### [LOW/CONFIRMED] Four smaller items
+
+- The test oracle `status_classes` (`:483-493`) inherits `GIT_INDEX_FILE`: inside a real `git
+  commit -a` pre-commit hook, 10 of 104 rows fail on the oracle, not on the classification.
+- A FIFO or socket in the location falls back and the message says "re-added" while git's only
+  entry there is ignored bytecode (R2).
+- `need_git` checks only that `git` is on PATH; a macOS `/usr/bin/git` shim without Command Line
+  Tools errors about 61 controls off CI (simulated with `DEVELOPER_DIR=/nonexistent`).
+- AGENTS.md says git-backed controls never read the developer's configuration, but
+  `test_git_env_drops_what_points_git_elsewhere` does (a malformed `~/.gitconfig` fails it alone).
+
+## Escalation — cycle 3
+
+- Three cycles without convergence (2 MEDIUM; 1 MEDIUM + 1 LOW; 1 MEDIUM + 4 LOW), on a test's
+  diagnostic text. The cycle stops for Geoffrey.

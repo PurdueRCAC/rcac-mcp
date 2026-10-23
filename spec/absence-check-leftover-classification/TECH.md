@@ -3,7 +3,7 @@ slug: absence-check-leftover-classification
 title: Explain an importable leftover by git status, not file suffix
 kind: test
 appetite: small
-status: in_review
+status: blocked
 branch: test/absence-check-leftover-classification
 base: develop
 current_phase: done
@@ -29,10 +29,10 @@ phases:
   attempts: 1
   verify: sh spec/absence-check-leftover-classification/verify/gate.sh P1
 review:
-  last_reviewed_commit: b5b25dcea9b20e299b53ca4d850f4106b925f088
+  last_reviewed_commit: 07b8fe052028472c9ba4b9e73a4434c408f35493
   verdict: changes-requested
-  blocked_reason: 'MEDIUM: hand-rebuilt git config diverges; LOW nested repo says re-added'
-  cycle: 2
+  blocked_reason: 'Bound reached: MEDIUM gitlink del remedy + 4 LOW; escalated'
+  cycle: 3
 ---
 
 # TECH.md — Explain an importable leftover by git status, not file suffix
