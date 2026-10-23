@@ -102,7 +102,8 @@ def sbatch(
     Either script_path (existing file on cluster) or script_content
     (script text to write) must be provided. If script_content is given,
     the script is written byte for byte (no newline added) to
-    ~/jobs/<job_name>_<timestamp>.sh and made executable before submission.
+    ~/jobs/<name>_<YYYYmmdd_HHMMSS>_<token>.sh (<name>: the sanitised job_name;
+    <token>: 16 random hex digits, new per call) and made executable before submission.
     Every value reaches sbatch, or the job script, as exactly one argument.
 
     Args:

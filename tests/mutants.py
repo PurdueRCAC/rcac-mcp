@@ -1170,6 +1170,11 @@ CASES: tuple[Case, ...] = (
           ('    token = secrets.token_hex(8)\n', "    token = f'{next(_SCRIPT_COUNTER):016x}'\n")),
          ('test_sbatch.py::test_separate_server_processes_name_scripts_apart',),
          'share a script path'),
+    # The sbatch docstring states the token's width, so a narrower token is a served falsehood.
+    Case('script-token-short', 'tools/slurm.py',
+         (('    token = secrets.token_hex(8)\n', '    token = secrets.token_hex(4)\n'),),
+         ('test_sbatch.py::test_the_docstring_states_the_script_path_the_tool_writes',),
+         'does not match the docstring'),
     Case('empty-optional-passed-literally', 'tools/slurm.py',
          (('        if value:\n            argv += [option, value]\n',
            '        if value is not None:\n            argv += [option, value]\n'),),

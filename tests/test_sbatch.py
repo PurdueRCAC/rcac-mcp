@@ -26,6 +26,7 @@ id and host name.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 import subprocess
 import sys
@@ -211,6 +212,45 @@ def test_script_content_is_written_then_submitted(job_name: str | None, stem: st
     violations += sbatch_violations(submit[1], path, ['a b'], ['--exclusive'])
     assert violations == [], '\n'.join(violations)
     assert guard.refused == []
+
+
+# The docstring names each part of the path; its clock part is spelled in these letters.
+STAMP_FIELDS = {'YYYY': '%Y', 'mm': '%m', 'dd': '%d', 'HH': '%H', 'MM': '%M', 'SS': '%S'}
+
+
+def _docstring_pattern(doc: str, stem: str) -> str:
+    """The path the `sbatch` docstring states, as a pattern for a script named from `stem`."""
+    template = re.search(r'~/jobs/\S*<token>\S*\.sh', doc)
+    width = re.search(r'(\d+) random hex digits', ' '.join(doc.split()))
+    if template is None or width is None:
+        raise AssertionError('the sbatch docstring states no ~/jobs/...<token>...sh path with its token width')
+    pattern = ''
+    for literal, field in re.findall(r'([^<]*)(?:<([^>]*)>)?', template.group()):
+        pattern += re.escape(literal)
+        if field == 'name':
+            pattern += re.escape(stem)
+        elif field == 'token':
+            pattern += f'[0-9a-f]{{{width.group(1)}}}'
+        elif field:
+            stamp = re.sub('|'.join(STAMP_FIELDS), lambda m: STAMP_FIELDS[m.group()], field)
+            if '%' not in stamp:
+                raise AssertionError(f'the sbatch docstring names an unknown part <{field}>')
+            pattern += re.escape(FROZEN.strftime(stamp))
+    return pattern
+
+
+@pytest.mark.unit
+def test_the_docstring_states_the_script_path_the_tool_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+    freeze_clock(monkeypatch)
+    doc = inspect.getdoc(slurm.sbatch.fn) or ''
+    violations = []
+    for job_name, stem in [('train', 'train'), ('../up/a b;c', '_up_a_b_c'), ('-x', 'x'), ('...', 'job'),
+                           (None, 'job')]:
+        path = str(slurm._job_script_path(job_name))
+        pattern = _docstring_pattern(doc, stem)
+        if not re.fullmatch(pattern, path):
+            violations.append(f'job_name {job_name!r}: {path!r} does not match the docstring ({pattern!r})')
+    assert violations == [], '\n'.join(violations)
 
 
 # Integration rows: the argv sbatch really receives.

@@ -3,10 +3,10 @@ slug: sbatch-script-name-collision
 title: Give every sbatch job script written from content its own file
 kind: fix
 appetite: small
-status: in_progress
+status: in_review
 branch: fix/sbatch-script-name-collision
 base: develop
-current_phase: P2
+current_phase: done
 last_updated: '2026-10-23'
 phases:
 - id: P1
@@ -24,7 +24,7 @@ phases:
   verify: sh spec/sbatch-script-name-collision/verify/gate.sh P1
 - id: P2
   name: The sbatch docstring states the new name, as one named served-surface delta
-  status: pending
+  status: done
   satisfies:
   - R5
   depends_on:
@@ -163,22 +163,22 @@ tests that go red on the old name and on a per-process counter.
 is named, exactly as P1 names it, landed as the one named delta `sbatch.description`; and the
 cycle's deferral ledger is closed.
 
-- [ ] `src/rcac_mcp/tools/slurm.py`: replace the `sbatch` docstring's `script_content` sentence with
+- [x] `src/rcac_mcp/tools/slurm.py`: replace the `sbatch` docstring's `script_content` sentence with
       PLAN §2's text: the path form, `<name>` as the sanitised job name (the rule not restated),
       `<token>` as 16 random hex digits new per call. `Args:`, `Returns:` and `Examples:` stay as
       they are. The served description goes from 1,872 to 1,960 characters; it must stay at most
       2,000, under Claude Code's 2,048-character cut (gate ruling, 2026-10-23).
-- [ ] `tests/fixtures/served_surface.json`: §9's scripted hand-edit of the one delta: load it, set
+- [x] `tests/fixtures/served_surface.json`: §9's scripted hand-edit of the one delta: load it, set
       `tools.sbatch.description` to `inspect.getdoc(sbatch.fn)`, dump with `indent=1,
       ensure_ascii=False` and the trailing newline. The diff is the one description line.
-- [ ] `tests/test_sbatch.py`: `test_the_docstring_states_the_script_path_the_tool_writes` (`unit`;
+- [x] `tests/test_sbatch.py`: `test_the_docstring_states_the_script_path_the_tool_writes` (`unit`;
       PLAN §2), whose mismatch carries "does not match the docstring". `tests/mutants.py`: Case
       `script-token-short` (`secrets.token_hex(4)`), targeting it.
-- [ ] `AGENTS.md`: §9's sentence on surface deltas and § Testing's `tests/test_surface.py` delta list
+- [x] `AGENTS.md`: §9's sentence on surface deltas and § Testing's `tests/test_surface.py` delta list
       each add that `` `sbatch-script-name-collision` `` changed `` `sbatch.description` ``; § Testing's
       `tests/test_sbatch.py` entry names the docstring test.
-- [ ] Commit body lists the served-surface delta: `sbatch.description`.
-- [ ] **Deferral ledger.** Walk P1, this phase and PLAN §5 for "defer", "follow-up", "known
+- [x] Commit body lists the served-surface delta: `sbatch.description`.
+- [x] **Deferral ledger.** Walk P1, this phase and PLAN §5 for "defer", "follow-up", "known
       limitation", "not fixed here", "out of scope" and "left as". Each deferral has an
       `issues/{slug}.md` (`status: unshaped`, from the KB's `ISSUE.md` template) and a `ROADMAP.md`
       entry, or `.security/` when the security lane says so. PLAN §5's name-length headroom was

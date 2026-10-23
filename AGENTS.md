@@ -354,9 +354,11 @@ import has no effect.
     holds two calls together, through one server or two over one home, so both writes land before
     either submission, and each submission runs its own call's bytes;
     `test_separate_server_processes_name_scripts_apart` draws the path in two sandboxed child
-    interpreters alike in clock, process id and host name, and the two differ. The `integration`
-    rows run `local` and `delegate` (through `executes`) against an argv-echo `sbatch` and read the
-    arguments it received.
+    interpreters alike in clock, process id and host name, and the two differ.
+    `test_the_docstring_states_the_script_path_the_tool_writes` (`unit`) reads the path form and
+    the token's width from the `sbatch` docstring and requires every drawn path to match it. The
+    `integration` rows run `local` and `delegate` (through `executes`) against an argv-echo
+    `sbatch` and read the arguments it received.
   - `tests/test_extra_args.py` (`unit`, `integration`): `extra_violations`. `extra_args` on
     `squeue`, `scancel`, `sacct` and `sinfo` is a list, each element one argument after the tool's
     own options (before `scancel`'s `-- <job ids>`), received exactly by an argv-echo stand-in in
@@ -478,7 +480,7 @@ import has no effect.
     listed in its commit body and here. Deltas so far (`safe-execution`): `run_command.description`,
     `write_file.description`, `write_file.properties.encoding`, `sbatch.properties.args`, and
     `description` and `properties.extra_args` on each of `sbatch`, `squeue`, `scancel`, `sacct`
-    and `sinfo`.
+    and `sinfo`; `sbatch-script-name-collision` changed `sbatch.description`.
     `TOLERATED` names the four differences FastMCP 4 introduces, each with its cause and accepted
     only in its own shape: an argument `description` where there was none, `additionalProperties`
     added as exactly `false`, output `$defs` inlined, and a `description` on an inlined output node
@@ -1504,7 +1506,7 @@ What each mode means:
   (`tests/test_surface.py`); `safe-execution` changed `run_command.description`,
   `write_file.description`, `write_file.properties.encoding`, `sbatch.properties.args`, and the
   `description` and `properties.extra_args` of `sbatch`, `squeue`, `scancel`, `sacct` and `sinfo`
-  this way.
+  this way, and `sbatch-script-name-collision` changed `sbatch.description`.
 
 ### Conventions (same-commit rules)
 
