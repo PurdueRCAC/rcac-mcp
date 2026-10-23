@@ -98,6 +98,11 @@ today's. Whether the test fails never changes.
   forbids starting git? — **A:** Yes. R6's "pass/fail unchanged" is read against the unfiltered
   suite, which `verify` and CI run; the test's ids, body and verdict stay as they are, and only a
   `-m unit` selection stops running it. (Foreman, PLAN/TECH gate, 2026-10-22.)
+- **Q:** After review cycle 3 reached the bound (one MEDIUM, four LOW)? — **A (Geoffrey,
+  2026-10-23):** a fix scoped to those five items: a tracked gitlink with an empty directory, the
+  oracle's inherited `GIT_INDEX_FILE`, a FIFO or socket in the location, `need_git` probing that git
+  runs, and the AGENTS.md line. The foreman verifies them with the reviewer's probes plus the gates
+  and CI, and the cycle lands; no further review cycle.
 
 ## Related materials
 
