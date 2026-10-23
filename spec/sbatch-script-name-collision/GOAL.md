@@ -65,7 +65,7 @@ that job was given.
   call SHALL be byte-identical afterwards.
 - **R4** — WHEN a submission from `script_content` succeeds, `sbatch` SHALL return the job id, as
   it does today, and the script SHALL be an executable file in `~/jobs` whose name begins with the
-  sanitised job name (or `job`) [NEEDS CLARIFICATION: Q2, the name's form].
+  sanitised job name (or `job`) (Q2).
 - **R5** — The `sbatch` docstring SHALL describe where a script written from content goes and how
   it is named, matching what the tool does.
 
@@ -82,23 +82,23 @@ that job was given.
 
 ## Clarifications
 
-- **Q1:** [NEEDS CLARIFICATION: how strong is R3? (a) a per-call name that cannot in practice
-  coincide with another call's, across processes and hosts sharing a home, so that a leaf-only
-  change in `tools/slurm.py` meets R1–R3; or (b) a hard guarantee that a write from content never
-  replaces any existing file, even one planted at the exact name the tool is about to use. Option (b)
-  probably reaches the executor's write contract, which is coupled core, with `executor/base.py`,
-  `ssh.py` and `launch.py` human-gated, and is unlikely to fit `small`.] — *Proposed:* (a). R3 is
-  graded on files present before the call. A plan that finds (a) cannot meet R2 brings the
-  executor question back to the gate and does not take it on silently.
-- **Q2:** [NEEDS CLARIFICATION: may the file name change form? The docstring promises
-  `~/jobs/<job_name>_<timestamp>.sh`.] — *Proposed:* keep `~/jobs/`, the `<name>_<YYYYmmdd_HHMMSS>`
-  prefix and the `.sh` suffix, so scripts stay findable by job name and sort by time, and allow
-  a distinguishing part to be added between the prefix and the suffix. If the docstring's wording changes,
-  it lands as a named `sbatch.description` delta to `tests/fixtures/served_surface.json`
-  (§9's scripted hand-edit), listed in the commit body.
-- **Q3:** [NEEDS CLARIFICATION: does R2 cover two separate server processes, possibly on different
-  login nodes, whose `~` is one shared home?] — *Proposed:* yes. A shared home across login nodes
-  is the normal cluster case, and two stdio sessions for the same user are two servers.
+Ruled by the foreman at the GOAL gate, 2026-10-23.
+
+- **Q1** How strong is R3? — **A:** (a): a per-call name that cannot in practice coincide with
+  another call's, across processes and hosts sharing a home, so that a leaf-only change in
+  `tools/slurm.py` meets R1–R3. R3 is graded on files present before the call that another call
+  wrote or a user placed under a name the tool did not just choose; a hard no-clobber guarantee
+  against a file planted at the exact chosen name (option (b)) is out of scope, since it reaches
+  the executor's write contract (coupled core, human-gated). A plan that finds (a) cannot meet R2
+  brings the executor question back to the gate and does not take it on silently.
+- **Q2** May the file name change form? — **A:** yes, within limits: keep `~/jobs/`, the
+  `<name>_<YYYYmmdd_HHMMSS>` prefix and the `.sh` suffix, so scripts stay findable by job name and
+  sort by time; a distinguishing part may go between the prefix and the suffix. A docstring change
+  lands as a named `sbatch.description` delta to `tests/fixtures/served_surface.json` (§9's
+  scripted hand-edit), listed in the commit body.
+- **Q3** Does R2 cover two separate server processes, possibly on different login nodes, whose `~`
+  is one shared home? — **A:** yes. A shared home across login nodes is the normal cluster case,
+  and two stdio sessions for the same user are two servers.
 
 ## Related materials
 
