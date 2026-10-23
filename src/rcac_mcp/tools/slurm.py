@@ -15,6 +15,7 @@ program as exactly one literal argument, and a positional value follows `--`.
 from __future__ import annotations
 from typing import Optional, List
 import re
+import secrets
 from datetime import datetime
 
 # Internal libs
@@ -60,10 +61,19 @@ def _extra(extra_args: Optional[List[str]]) -> List[str]:
 
 
 def _job_script_path(job_name: Optional[str]) -> UserPath:
-    """Where a job script written from content goes: ~/jobs/<name>_<timestamp>.sh."""
+    """Where a job script written from content goes: ~/jobs/<name>_<YYYYmmdd_HHMMSS>_<token>.sh.
+
+    The name and the second keep scripts findable by job name and sorted by time. The token is 16
+    hex digits drawn from the operating system's entropy source on every call, so no other call
+    draws the same path: not one in the same second, not one in another server process, and not
+    one on another host sharing this home. A counter, a seeded generator, the clock, the process
+    id or the host name could each repeat across processes or hosts, and two calls on one path
+    would overwrite each other's script.
+    """
     name = UNSAFE_NAME.sub('_', job_name or '').lstrip('.-') or 'job'
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    return UserPath(f'{DEFAULT_JOBS_DIR}/{name}_{timestamp}.sh')
+    token = secrets.token_hex(8)
+    return UserPath(f'{DEFAULT_JOBS_DIR}/{name}_{timestamp}_{token}.sh')
 
 
 @mcp_tool

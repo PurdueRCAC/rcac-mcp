@@ -326,7 +326,9 @@ import has no effect.
     an absent one, and its parent, absent. The `unit` rows record the executor calls: the content
     reaches one `write` exactly and no argv element, and a refused write reaches no executor. `sbatch` writes `script_content` the same way: in all three modes the job
     script it submits holds exactly the bytes sent and is executable
-    (`test_job_scripts_are_byte_exact[<mode>]`, against an argv-echo `sbatch`). A write refuses
+    (`test_job_scripts_are_byte_exact[<mode>]`, against an argv-echo `sbatch`), and six calls in
+    one second, two per job name, each submit their own file holding their own bytes while every
+    file already in `~/jobs` stays byte-identical (`test_same_second_scripts_keep_their_own_bytes[<mode>]`). A write refuses
     what `cat >` refuses and leaves what it leaves, alike in every mode and over ssh with OpenSSH's
     own `sftp-server` (`test_a_write_refuses_what_cat_refuses[local|delegate|ssh|ssh-openssh]`): a
     read-only target is refused with `Permission denied` and unchanged, a link whose target's
@@ -343,9 +345,18 @@ import has no effect.
     extra option that takes a value (`-J`) consumes the `--`; an `extra_args` element `--` is
     refused before anything runs; a string `extra_args` or `args` is refused by schema validation
     naming the parameter and the list type, each era on its own row; a job script from content is
-    `~/jobs/<name>_<timestamp>.sh`, its name keeping only `[A-Za-z0-9._-]` while `-J` gets the name
-    literally. The `integration` rows run `local` and `delegate` (through `executes`) against an
-    argv-echo `sbatch` and read the arguments it received.
+    `~/jobs/<name>_<YYYYmmdd_HHMMSS>_<token>.sh`, the token 16 hex digits new for each call, its
+    name keeping only `[A-Za-z0-9._-]` while `-J` gets the name literally. Calls in one second
+    (the clock held by patching `slurm.datetime`) never share a script:
+    `test_same_second_scripts_get_their_own_paths[same-name|no-name|sanitised-alike]` (`unit`) gives
+    two calls with one name, no name, or names alike once sanitised (`a/b`, `a_b`) two paths;
+    `test_overlapping_submissions_each_submit_their_own_script[<mode>-one-server|<mode>-two-servers]`
+    holds two calls together, through one server or two over one home, so both writes land before
+    either submission, and each submission runs its own call's bytes;
+    `test_separate_server_processes_name_scripts_apart` draws the path in two sandboxed child
+    interpreters alike in clock, process id and host name, and the two differ. The `integration`
+    rows run `local` and `delegate` (through `executes`) against an argv-echo `sbatch` and read the
+    arguments it received.
   - `tests/test_extra_args.py` (`unit`, `integration`): `extra_violations`. `extra_args` on
     `squeue`, `scancel`, `sacct` and `sinfo` is a list, each element one argument after the tool's
     own options (before `scancel`'s `-- <job ids>`), received exactly by an argv-echo stand-in in

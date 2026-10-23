@@ -6,12 +6,12 @@ appetite: small
 status: in_progress
 branch: fix/sbatch-script-name-collision
 base: develop
-current_phase: P1
+current_phase: P2
 last_updated: '2026-10-23'
 phases:
 - id: P1
   name: A per-call token in the job script's name, proven sequential, overlapping and across processes
-  status: pending
+  status: done
   satisfies:
   - R1
   - R2
@@ -113,13 +113,13 @@ checklists below are the work. `code-build` executes the next actionable phase, 
 one after the other, overlap through one server or two, or come from separate processes; proven by
 tests that go red on the old name and on a per-process counter.
 
-- [ ] `src/rcac_mcp/tools/slurm.py`: `import secrets`; in `_job_script_path`, keep `name` and
+- [x] `src/rcac_mcp/tools/slurm.py`: `import secrets`; in `_job_script_path`, keep `name` and
       `timestamp` exactly as they are (the clock still read as `datetime.now()` through the module's
       `datetime`), add `token = secrets.token_hex(8)` and return
       `UserPath(f'{DEFAULT_JOBS_DIR}/{name}_{timestamp}_{token}.sh')`. Its docstring states the form
       and, declaratively, why the token comes from the entropy source on every call (PLAN §2). No
       other line of `sbatch` changes; the `sbatch` docstring waits for P2.
-- [ ] `tests/test_sbatch.py`: a frozen-clock helper (a `datetime` subclass whose `now()` returns one
+- [x] `tests/test_sbatch.py`: a frozen-clock helper (a `datetime` subclass whose `now()` returns one
       fixed instant, patched over `slurm.datetime`); the path regex in
       `test_script_content_is_written_then_submitted` gains `_[0-9a-f]{16}`; add
       `test_same_second_scripts_get_their_own_paths` (`unit`; rows `same-name`, `no-name`,
@@ -133,18 +133,18 @@ tests that go red on the old name and on a per-process counter.
       of `rcac_mcp`, which must be the parent's). Each violation for two calls on one path carries
       "calls share a script path"; a run that sees another call's bytes carries "ran another call's
       script". PLAN §2 lists each test's assertions.
-- [ ] `tests/test_writes.py`: `test_same_second_scripts_keep_their_own_bytes` (`integration`,
+- [x] `tests/test_writes.py`: `test_same_second_scripts_keep_their_own_bytes` (`integration`,
       `_modes()`: `local`, `delegate`, `ssh`), seeding `~/jobs` with old-form files at the frozen
       second, a new-form file and an unrelated file, then six same-second calls (`sweep`×2, no
       name ×2, `a/b` and `a_b`): job id returned, distinct submitted paths, each an executable
       `~/jobs` file beginning with its sanitised stem and holding its own bytes, every seeded file
       byte-identical ("changed a file already in ~/jobs").
-- [ ] `tests/mutants.py`: Cases `script-name-per-second` and `script-name-process-counter`, with the
+- [x] `tests/mutants.py`: Cases `script-name-per-second` and `script-name-process-counter`, with the
       targets and `why` in PLAN §2's table, beside the other `tools/slurm.py` cases.
-- [ ] `AGENTS.md` § Testing: the `tests/test_sbatch.py` entry states the new form
+- [x] `AGENTS.md` § Testing: the `tests/test_sbatch.py` entry states the new form
       (`~/jobs/<name>_<YYYYmmdd_HHMMSS>_<token>.sh`, the token new for each call) and the three new
       tests; the `tests/test_writes.py` entry names the same-second row.
-- [ ] Confirm with `--collect-only` that the collected ids match `verify/ids-P1.txt`; if
+- [x] Confirm with `--collect-only` that the collected ids match `verify/ids-P1.txt`; if
       parametrization yields a different spelling for the same rows, fix the list in this commit and
       say so in the body.
 - **Verify:** `sh spec/sbatch-script-name-collision/verify/gate.sh P1`: `static` (only

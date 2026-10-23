@@ -14,25 +14,72 @@ error naming the parameter and the list type, before anything runs.
 The `unit` rows read the argv the tool hands a `RecordingExecutor`. The `integration` rows run the
 tool through the served schema in `local` and `delegate` mode (the `executes` fixture) against an
 argv-echo `sbatch` (`tests/argv_echo.py`), so they see each argument exactly as sbatch received it.
+
+A job script written from content is `~/jobs/<name>_<YYYYmmdd_HHMMSS>_<token>.sh`, and no two calls
+share one: not two calls in the same second (the clock is held inside one second by patching
+`slurm.datetime`), whether they have the same job name, none, or names alike once sanitised; not
+two calls that overlap, through one server or two servers over one home, with both writes landing
+before either submission; and not two calls in separate server processes alike in clock, process
+id and host name.
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
+import subprocess
+import sys
+import threading
+from datetime import datetime, tzinfo
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import pytest
 
 import argv_echo
-from harness import ERAS, Outcome, RecordingExecutor, call, drive, in_memory, shared_server
-from rcac_mcp.executor import UserPath
+import rcac_mcp
+from harness import ERAS, SANDBOX, Outcome, RecordingExecutor, Rendezvous, call, drive, in_memory, shared_server
+from rcac_mcp.executor import CommandResult, Executor, UserPath
+from rcac_mcp.tools import slurm
 from rcac_mcp.executor.delegate import DelegatingExecutor
 from rcac_mcp.executor.shell import LocalShellExecutor
 
 # Values that a shell would split, expand or read as an option.
 HOSTILE_ARGS = ['two words', '-v', '--', '$HOME', '*', 'line\nbreak', "it's", '']
 EXTRA = ['--exclusive', '--mail-type', 'END,FAIL']
+
+# One instant, and the timestamp every job script named while the clock is held at it carries.
+FROZEN = datetime(2026, 10, 23, 12, 0, 0, 1)
+FROZEN_STAMP = '20261023_120000'
+
+# The token that ends a job script's name: 16 lowercase hex digits.
+TOKEN = '[0-9a-f]{16}'
+
+# Two calls on one script path: the second write replaces the first call's script.
+SHARED = 'calls share a script path'
+
+
+class FrozenClock(datetime):
+    """A `datetime` whose `now()` is always `FROZEN`: every call reads the same second."""
+
+    @classmethod
+    def now(cls, tz: tzinfo | None = None) -> datetime:  # type: ignore[override]
+        return FROZEN
+
+
+def freeze_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Hold the clock `_job_script_path` reads at `FROZEN` for the rest of the test."""
+    monkeypatch.setattr(slurm, 'datetime', FrozenClock)
+
+
+def script_name(stem: str) -> str:
+    """The pattern of a job script path named from `stem` while the clock is frozen."""
+    return rf'~/jobs/{re.escape(stem)}_{FROZEN_STAMP}_{TOKEN}\.sh'
+
+
+def shared_violations(paths: Sequence[str]) -> list[str]:
+    """One violation for every script path more than one call used."""
+    return [f'{paths.count(p)} {SHARED}: {p!r}' for p in sorted(set(paths)) if paths.count(p) > 1]
 
 
 def submitted(command: Sequence[str] | str) -> str:
@@ -154,7 +201,7 @@ def test_script_content_is_written_then_submitted(job_name: str | None, stem: st
     write, submit = executor.calls
     path = write[1]
     violations = []
-    if not re.fullmatch(rf'~/jobs/{re.escape(stem)}_\d{{8}}_\d{{6}}\.sh', path) or not isinstance(path, UserPath):
+    if not re.fullmatch(rf'~/jobs/{re.escape(stem)}_\d{{8}}_\d{{6}}_{TOKEN}\.sh', path) or not isinstance(path, UserPath):
         violations.append(f'the script path is not a ~/jobs UserPath named from {stem!r}: {path!r}')
     if write != ('write', path, content.encode(), False, '~/jobs', True):
         violations.append(f'the script is not written through the executor\'s write, exactly and executable: '
@@ -202,4 +249,214 @@ def test_sbatch_receives_each_value_as_one_argument(mode: tuple[Any, Path]) -> N
         violations.append(f'sbatch ran {len(received)} times, expected {len(cases)}: {received!r:.300}')
     for (args, script, job_args, extra), (program, argv) in zip(cases, received):
         violations += sbatch_violations([program, *argv], script, job_args, extra)
+    assert violations == [], '\n'.join(violations)
+
+
+# Calls in one second: each gets its own script path, whatever the job names have in common.
+
+SAME_SECOND = [
+    pytest.param('sweep', 'sweep', 'sweep', id='same-name'),
+    pytest.param(None, None, 'job', id='no-name'),
+    pytest.param('a/b', 'a_b', 'a_b', id='sanitised-alike'),
+]
+
+
+def _content_call(content: str, job_name: str | None) -> dict[str, Any]:
+    args: dict[str, Any] = {'script_content': content}
+    if job_name is not None:
+        args['job_name'] = job_name
+    return args
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(('first', 'second', 'stem'), SAME_SECOND)
+def test_same_second_scripts_get_their_own_paths(first: str | None, second: str | None, stem: str,
+                                                 monkeypatch: pytest.MonkeyPatch, guard) -> None:
+    freeze_clock(monkeypatch)
+    contents = ['#!/bin/bash\necho first call\n', '#!/bin/bash\necho second call\n']
+    calls = [_content_call(content, name) for content, name in zip(contents, (first, second))]
+    executor = RecordingExecutor('sbatch', responder=submitted)
+
+    async def scenario() -> list[Outcome]:
+        async with in_memory(shared_server(executor)) as client:
+            return [await call(client, 'sbatch', args) for args in calls]
+
+    outcomes = drive(scenario())
+    violations = [f'call {i}: {o.text[:200]}' for i, o in enumerate(outcomes) if o.is_error or o.text != argv_echo.JOB_ID]
+    writes = [c for c in executor.calls if c[0] == 'write']
+    runs = [c for c in executor.calls if c[0] == 'run']
+    if len(writes) != 2 or len(runs) != 2:
+        violations.append(f'expected two writes and two submissions: {executor.calls!r:.300}')
+    violations += shared_violations([write[1] for write in writes])
+    for i, (write, run, content) in enumerate(zip(writes, runs, contents)):
+        if not re.fullmatch(script_name(stem), write[1]):
+            violations.append(f'call {i}: {write[1]!r} is not ~/jobs/{stem}_{FROZEN_STAMP}_<16 hex digits>.sh')
+        if write[2] != content.encode():
+            violations.append(f'call {i}: wrote {write[2]!r:.100}, not its own content')
+        if run[1][run[1].index('--') + 1:][:1] != [write[1]]:
+            violations.append(f'call {i}: submitted {run[1]!r:.200}, not the path it wrote, {write[1]!r}')
+    assert violations == [], '\n'.join(violations)
+    assert guard.refused == []
+
+
+# Overlapping calls: both writes land before either submission, so a shared path would run one
+# call's job with the other call's script.
+
+class HoldAfterWrite:
+    """An executor that hands every call to `inner`, and holds each write at `barrier`.
+
+    Each write waits there until every party has written, so the order is write, write, run, run.
+    It records, under the thread the tool body runs on (one per call), the path and bytes each
+    write sent and, at each `sbatch`, the bytes of the script being submitted as they are then.
+    The submissions themselves take turns under `lock`: the argv-echo stand-in numbers its records
+    by counting those already there, so two at once could write one record.
+    """
+
+    def __init__(self, inner: Executor, home: Path, barrier: threading.Barrier,
+                 log: list[tuple[str, int, str, bytes | None]], lock: threading.Lock) -> None:
+        self.inner, self.home, self.barrier, self.log, self.lock = inner, home, barrier, log, lock
+
+    @property
+    def hostname(self) -> str:
+        return self.inner.hostname
+
+    def run(self, command: Sequence[str] | str, cwd: str | None = None, timeout: float | None = None) -> CommandResult:
+        if not isinstance(command, str) and list(command)[:1] == ['sbatch'] and '--' in command:
+            script = str(list(command)[list(command).index('--') + 1])
+            on_disk = self.home / script.removeprefix('~/')
+            with self.lock:
+                self.log.append(('run', threading.get_ident(), script,
+                                 on_disk.read_bytes() if on_disk.is_file() else None))
+                return self.inner.run(command, cwd=cwd, timeout=timeout)
+        return self.inner.run(command, cwd=cwd, timeout=timeout)
+
+    def write(self, path: str, data: bytes, append: bool = False, parent: str | None = None,
+              executable: bool = False) -> CommandResult:
+        result = self.inner.write(path, data, append=append, parent=parent, executable=executable)
+        with self.lock:
+            self.log.append(('write', threading.get_ident(), str(path), data))
+        self.barrier.wait()
+        return result
+
+    def put(self, local_path: str, remote_path: str) -> str:
+        return self.inner.put(local_path, remote_path)
+
+    def get(self, remote_path: str, local_path: str) -> str:
+        return self.inner.get(remote_path, local_path)
+
+    def open(self) -> None:
+        self.inner.open()
+
+    def close(self) -> None:
+        self.inner.close()
+
+    def __enter__(self) -> HoldAfterWrite:
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        pass
+
+
+# A second executor of each mode, over the same home as the `mode` fixture's: a second server.
+SECOND_EXECUTOR: dict[str, Callable[[Any], Executor]] = {
+    'local': lambda executes: LocalShellExecutor(),
+    'delegate': lambda executes: DelegatingExecutor('submitter', {'submitter': executes.user}),
+}
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('servers', ['one-server', 'two-servers'])
+def test_overlapping_submissions_each_submit_their_own_script(mode: tuple[Any, Path], servers: str,
+                                                              request: pytest.FixtureRequest, executes: Any,
+                                                              monkeypatch: pytest.MonkeyPatch) -> None:
+    freeze_clock(monkeypatch)
+    executor, home = mode
+    contents = ['#!/bin/bash\necho first job\n', '#!/bin/bash\necho second job, a longer script\n']
+    barrier, lock = threading.Barrier(2, timeout=60), threading.Lock()
+    log: list[tuple[str, int, str, bytes | None]] = []
+    first = HoldAfterWrite(executor, home, barrier, log, lock)
+    second = first if servers == 'one-server' else \
+        HoldAfterWrite(SECOND_EXECUTOR[request.node.callspec.params['mode']](executes), home, barrier, log, lock)
+
+    async def scenario() -> list[Outcome]:
+        rendezvous = Rendezvous(2, timeout=60)
+        server_a = shared_server(first, rendezvous)
+        server_b = server_a if servers == 'one-server' else shared_server(second, rendezvous)
+        async with in_memory(server_a) as a, in_memory(server_b) as b:
+            return list(await asyncio.gather(*(call(client, 'sbatch', _content_call(content, 'sweep'))
+                                               for client, content in zip((a, b), contents))))
+
+    outcomes = drive(scenario(), timeout=120)
+    violations = [f'call {i}: {o.text[:200]}' for i, o in enumerate(outcomes) if o.is_error or o.text != argv_echo.JOB_ID]
+    writes = {ident: (path, data) for kind, ident, path, data in log if kind == 'write'}
+    runs = {ident: (path, data) for kind, ident, path, data in log if kind == 'run'}
+    if len(writes) != 2 or len(runs) != 2 or set(writes) != set(runs):
+        violations.append(f'expected two calls, each writing and submitting once: {log!r:.400}')
+    if [kind for kind, *_ in log] != ['write', 'write', 'run', 'run']:
+        violations.append(f'the calls did not overlap as write, write, run, run: {log!r:.400}')
+    violations += shared_violations([path for path, _ in writes.values()])
+    received = [argv[argv.index('--') + 1] for _, argv in argv_echo.calls(home)]
+    if len(received) != 2:
+        violations.append(f'sbatch ran {len(received)} times, expected 2: {received!r:.300}')
+    violations += shared_violations(received)
+    for ident, (path, sent) in writes.items():
+        if not re.fullmatch(script_name('sweep'), path):
+            violations.append(f'{path!r} is not ~/jobs/sweep_{FROZEN_STAMP}_<16 hex digits>.sh')
+        submitted_path, ran = runs.get(ident, (None, None))
+        if submitted_path != path:
+            violations.append(f'a call wrote {path!r} and submitted {submitted_path!r}')
+        if ran != sent:
+            violations.append(f'a call ran another call\'s script: it sent {sent!r:.80}, its job was given {ran!r:.80}')
+        after = home / path.removeprefix('~/')
+        if not after.is_file() or after.read_bytes() != sent:
+            violations.append(f'{path!r} no longer holds its own call\'s bytes {sent!r:.80}')
+    assert violations == [], '\n'.join(violations)
+
+
+# Separate server processes: each draws its path alone, alike in clock, process id and host name,
+# so a per-process counter or a generator seeded from any of them would repeat.
+
+PROCESS_CHILD = '''\
+import os, platform, socket, sys
+from datetime import datetime
+
+os.getpid = lambda: 4242
+os.getppid = lambda: 1
+socket.gethostname = lambda: 'login-node'
+platform.node = lambda: 'login-node'
+
+import rcac_mcp
+from rcac_mcp.tools import slurm
+
+
+class Frozen(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return datetime.fromisoformat(sys.argv[1])
+
+
+slurm.datetime = Frozen
+print(os.path.dirname(os.path.realpath(rcac_mcp.__file__)))
+print(slurm._job_script_path('sweep'))
+'''
+
+
+@pytest.mark.integration
+def test_separate_server_processes_name_scripts_apart() -> None:
+    package = str(Path(rcac_mcp.__file__).resolve().parent)
+    paths, violations = [], []
+    for i in range(2):
+        child = subprocess.run([str(SANDBOX), sys.executable, '-c', PROCESS_CHILD, FROZEN.isoformat()],
+                               capture_output=True, text=True, timeout=120)
+        lines = child.stdout.splitlines()
+        if child.returncode != 0 or len(lines) != 2:
+            violations.append(f'process {i} exited {child.returncode}: {child.stdout[-200:]!r} {child.stderr[-400:]!r}')
+            continue
+        origin, path = lines
+        if origin != package:
+            violations.append(f'process {i} imported rcac_mcp from {origin!r}, not {package!r}')
+        if not re.fullmatch(script_name('sweep'), path):
+            violations.append(f'process {i}: {path!r} is not ~/jobs/sweep_{FROZEN_STAMP}_<16 hex digits>.sh')
+        paths.append(path)
+    violations += shared_violations(paths)
     assert violations == [], '\n'.join(violations)

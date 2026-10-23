@@ -22,8 +22,9 @@ NUL, 1 MiB, and binary sent as base64 (plain, with whitespace, and GNU-wrapped).
 creates a parent with spaces in its name, or one ending in a newline. A refused write leaves an
 existing target byte-identical and an absent one absent. `sbatch` writes `script_content` the same
 way: the job script it submits (to an argv-echo `sbatch`, `tests/argv_echo.py`) holds exactly the
-bytes sent, in all three modes, and is executable. The `unit` rows record the executor
-calls: the content reaches one `write` exactly and no argv element, and a refused write reaches no
+bytes sent, in all three modes, and is executable; six calls in one second, two per job name,
+each submit their own script holding their own bytes, and every file already in `~/jobs` stays
+byte-identical. The `unit` rows record the executor calls: the content reaches one `write` exactly and no argv element, and a refused write reaches no
 executor at all.
 """
 
@@ -32,6 +33,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,6 +50,7 @@ from rcac_mcp.executor.shell import LocalShellExecutor
 from rcac_mcp.scripts import script_argv
 from rcac_mcp.tools.filesystem import LIST
 from ssh_server import LoopbackSSH
+from test_sbatch import FROZEN_STAMP, TOKEN, freeze_clock, shared_violations
 
 MODES = ('local', 'delegate', 'ssh')
 
@@ -339,6 +342,50 @@ def test_job_scripts_are_byte_exact(target: Target) -> None:
             violations.append(f'{c.name}: the script is not executable')
         if str(scripts[0]) not in submitted:
             violations.append(f'{c.name}: sbatch was not handed {scripts[0]}: {sorted(submitted)!r:.300}')
+    assert violations == [], '\n'.join(violations)
+
+
+# Six calls in one second: two with one job name, two with none, and two whose names are alike
+# once sanitised. Each pair would share a script under a name drawn from the second alone.
+SAME_SECOND_CALLS = (('sweep', 'sweep'), ('sweep', 'sweep'), (None, 'job'), (None, 'job'), ('a/b', 'a_b'), ('a_b', 'a_b'))
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('target', _modes(), indirect=True)
+def test_same_second_scripts_keep_their_own_bytes(target: Target, monkeypatch: pytest.MonkeyPatch) -> None:
+    freeze_clock(monkeypatch)
+    argv_echo.install(target.home, 'sbatch')
+    jobs = target.home / 'jobs'
+    jobs.mkdir()
+    # Files already in ~/jobs: scripts named at the same second without a token, one with a token,
+    # and a file the tool never names. Each keeps its bytes and its mode.
+    seeded = {name: (f'#!/bin/bash\necho seeded {name}\n'.encode(), mode) for name, mode in (
+        (f'sweep_{FROZEN_STAMP}.sh', 0o755), (f'job_{FROZEN_STAMP}.sh', 0o700), (f'a_b_{FROZEN_STAMP}.sh', 0o755),
+        (f'sweep_{FROZEN_STAMP}_0123456789abcdef.sh', 0o755), ('notes.txt', 0o644))}
+    for name, (data, mode) in seeded.items():
+        (jobs / name).write_bytes(data)
+        (jobs / name).chmod(mode)
+    contents = [f'#!/bin/bash\necho call {i} of {name!r}\n' for i, (name, _) in enumerate(SAME_SECOND_CALLS)]
+    calls = [{'script_content': content, **({'job_name': name} if name is not None else {})}
+             for content, (name, _) in zip(contents, SAME_SECOND_CALLS)]
+    outcomes = target.write(calls, tool='sbatch')
+    violations = [f'call {i}: {o.text[:200]}' for i, o in enumerate(outcomes) if o.is_error or o.text != argv_echo.JOB_ID]
+    submitted = [argv[argv.index('--') + 1] for _, argv in argv_echo.calls(target.home)]
+    if len(submitted) != len(calls):
+        violations.append(f'sbatch ran {len(submitted)} times, expected {len(calls)}: {submitted!r:.300}')
+    violations += shared_violations(submitted)
+    for i, (path, content, (_, stem)) in enumerate(zip(submitted, contents, SAME_SECOND_CALLS)):
+        script = Path(path)
+        if script.parent != jobs or not re.fullmatch(rf'{re.escape(stem)}_{FROZEN_STAMP}_{TOKEN}\.sh', script.name):
+            violations.append(f'call {i}: {path!r} is not ~/jobs/{stem}_{FROZEN_STAMP}_<16 hex digits>.sh')
+            continue
+        violations += exact_violations(f'call {i}', outcomes[i], script, content.encode())
+        if not os.access(script, os.X_OK):
+            violations.append(f'call {i}: {script.name} is not executable')
+    for name, (data, mode) in seeded.items():
+        kept = jobs / name
+        if not kept.is_file() or kept.read_bytes() != data or stat.S_IMODE(kept.stat().st_mode) != mode:
+            violations.append(f'a call changed a file already in ~/jobs: {name}')
     assert violations == [], '\n'.join(violations)
 
 
