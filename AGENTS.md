@@ -294,7 +294,12 @@ import has no effect.
     an absent one, and its parent, absent. The `unit` rows record the executor calls: the content
     reaches one `write` exactly and no argv element, and a refused write reaches no executor. `sbatch` writes `script_content` the same way: in all three modes the job
     script it submits holds exactly the bytes sent and is executable
-    (`test_job_scripts_are_byte_exact[<mode>]`, against an argv-echo `sbatch`). A profile that
+    (`test_job_scripts_are_byte_exact[<mode>]`, against an argv-echo `sbatch`). A write refuses
+    what `cat >` refuses and leaves what it leaves, alike in every mode and over ssh with OpenSSH's
+    own `sftp-server` (`test_a_write_refuses_what_cat_refuses[local|delegate|ssh|ssh-openssh]`): a
+    read-only target is refused with `Permission denied` and unchanged, a link whose target's
+    directory is missing is refused and stays a link (over ssh the error names the target), a link
+    to a missing file creates it, and a setuid or setgid target comes back mode 755. A profile that
     exports functions over `cat`, `mkdir` and `chmod` and exports `noclobber` and `pipefail` in
     `SHELLOPTS` changes no write, `create_dirs` or job script (`test_a_profile_cannot_change_a_fixed_script`;
     bash 3.2 refuses an exported `SHELLOPTS`, so locally only the functions half can fail).
@@ -396,7 +401,10 @@ import has no effect.
     id in a mutated copy fails it). A row that needs a login shell calls `conftest.need_shell`, the
     suite's only skip: off CI a missing shell skips the row; on CI (`CI=true`) it fails it, naming
     the shell (`test_a_missing_shell_fails_on_ci_and_skips_elsewhere`), and no other skip, `skipif`,
-    `importorskip` or `xfail` exists in `tests/*.py` (`test_only_need_shell_skips`, static).
+    `importorskip` or `xfail` exists in `tests/*.py` (`test_only_need_shell_skips`, static). A row
+    that drives OpenSSH's own `sftp-server` calls `conftest.need_sftp_server`, which never skips:
+    macOS ships it, the GitHub runner's `ssh` package installs it, and a host without it fails the
+    row, naming it.
   - `tests/test_protocol.py` (`unit`): `boundary_violations`, `cancellation_violations`,
     `era_violations`. A `PermissionError` (in memory and over HTTP), a `RuntimeError` and an
     `MCPError` raised by middleware around a tool call each arrive as a tool error result whose
@@ -464,7 +472,11 @@ import has no effect.
     records while a background job still writes (`test_the_call_ends_at_its_records`), a command
     killed by a signal, or exiting 128+N for a terminating one, is reported `-N` while the launch
     itself dies of that signal (`test_a_signal_death_is_reported_and_reraised`, the launch's status
-    read by a parent outside the sandbox's shell), and output shaped like a record comes back whole;
+    read by a parent outside the sandbox's shell, under the `delegate` wire too, whose `sudo`
+    stand-in dies of the signal as `sudo` does, SIGKILL included), and output shaped like a record
+    comes back whole; an end record split across reads (its nonce, then its status without the full
+    stop, then the stop) ends the call at its status while the launch still holds its streams
+    (`test_a_local_end_record_split_across_reads_is_found`);
     a command that traps SIGTERM keeps what it prints as it stops, and one that ignores it is ended
     by SIGKILL.
     **Profile state:** a profile's `IFS` (`:` or empty), every glob option with a function named
@@ -502,7 +514,11 @@ import has no effect.
     before stdin, as sshd does, so a command that starts later meets a broken pipe; its environment
     carries `SSH_CLIENT` and `SSH_CONNECTION`, as sshd's does; it records the bytes each exec received
     on stdin, and its SFTP creates, changes and removes files and directories with the permissions
-    asked for and resolves links in `normalize`, as OpenSSH's does). `ThrottledSSH` is the same
+    asked for, reads links and resolves them in `normalize`, as OpenSSH's does; it can fail a write
+    at a size with ENOSPC or EDQUOT, report a short write as done, change a staged byte, or fail a
+    staged file's close; with `sftp_server` it relays SFTP to OpenSSH's own `sftp-server` instead).
+    `DroppingSSH` runs a command to its end and drops the connection with its output unsent, after
+    the exec request is answered or before. `ThrottledSSH` is the same
     server on a slow link: it reads the output as fast as a 2 MiB window allows, sends both streams
     over one link at a fixed rate a packet at a time, sends the exit status ahead of the queued
     output, and can stall after the exit status or once some bytes have gone. Under bash, zsh, sh
@@ -515,8 +531,19 @@ import has no effect.
     place: the target is replaced whole (a reader of the old file still reads it) and keeps its
     mode, a new file gets the mode `cat >` gives, the content is staged as a 0600 file in a fresh
     0700 directory beside the target, a link is followed, a file in a directory closed to new
-    entries is written through, and a write to a directory, a broken transfer or a placing program
-    that never starts changes nothing and leaves no staging behind. A `.bash_profile` or `.zshenv`
+    entries is written through, and a write to a directory or a placing program that never starts
+    changes nothing and leaves no staging behind. A write that runs out of room fails with its cause
+    and changes nothing: on macOS a 4 MB HFS+ image the test attaches, filled to 8 KiB and 32 KiB
+    free and served by OpenSSH's `sftp-server` (`No space left on device`), on Linux the same rows
+    with ENOSPC injected at that size (the runner cannot attach a filesystem without root), and
+    EDQUOT injected at 32 KiB everywhere; a 36,027-byte write and an `sbatch` job script leave the
+    old file byte-identical and submit nothing
+    (`test_a_write_that_runs_out_of_room_keeps_the_file[8k-free|32k-free|edquot]`). A staged file
+    that falls short with no error, changes on its way to disk, or whose close fails is never
+    placed (`test_a_staged_file_that_is_not_what_was_sent_is_never_placed[short|changed|close-fails]`),
+    and `ssh.cksum` matches POSIX `cksum` and the host's. A connection lost after the command ran,
+    or before the exec request was answered, returns `-1003` with its note, never `-1002`, and
+    `sbatch` says the job may have been submitted (`test_a_lost_connection_is_never_did_not_start`). A `.bash_profile` or `.zshenv`
     that `cd`s elsewhere does not move the start from the login home; a remote rc file (`.zshenv`,
     or the `.bashrc` bash reads under sshd) that reads stdin in the foreground and from a
     background job (`head -c 1 &`) reads none of a write's content: a 160,000-byte `write_file` and
@@ -620,7 +647,8 @@ import has no effect.
     argv or one starting exactly `sudo -n -H -u <mapped user>` (anything else is refused before it
     launches), and runs each inside `bin/sandbox.sh` under `env -i` with a sudo-like environment.
     The `sudo` prefix is replaced by a relaying stand-in that starts the command in its own session,
-    relays only TERM, INT and HUP, and gives it a mapped home apart from the server's, from a cwd
+    relays only TERM, INT and HUP, dies of the signal that killed the command (SIGKILL included, which
+    it cannot catch), and gives it a mapped home apart from the server's, from a cwd
     that is not that home. A `local` launch starts in the sandbox's directory, or in
     `executes.local_cwd` when a test sets it (the matrix sets the server's home, where a server
     process started from a login would be). No launched argv names `sudo`. Everywhere else `subprocess.Popen` refuses
@@ -1035,11 +1063,15 @@ The two leaf files at the end of this list are footguns, not human-gated paths.
   send no stdin and its EOF at once; wait without spinning; read to both end records, never stopping
   at the exit status (sshd sends it ahead of output still queued on the link); and at the deadline
   return the timeout marker rather than raise, naming an exit status that had arrived
-  (`launch.LATE_NOTE`) or reading for `launch.GRACE` after the TERM; `write`, which stages content
-  by SFTP as a 0600 file in a fresh 0700 directory beside the target, has a fixed program move it
-  into place (keeping the target's mode, following a link, writing through a target that is not a
-  regular file or sits in a directory closed to new entries) and removes the staging on every
-  path; `run`, which starts every program in `$HOME`
+  (`launch.LATE_NOTE`) or reading for `launch.GRACE` after the TERM, and report a channel that closed
+  without its end of output as a lost connection (`CONNECTION_LOST_EXIT_CODE`), never as a command
+  that did not start; `write`, which stages content by SFTP as a 0600 file in a fresh 0700
+  directory beside the target, with no pipelined writes and a checked close (`_upload`, `_close`:
+  Paramiko 5 drops both reports otherwise), checks its size and `cksum`, has a fixed program
+  refuse an unwritable target and move the file into place (keeping the target's mode but setuid
+  and setgid, following a link, refusing one whose target's directory is missing, writing through
+  a target that is not a regular file or sits in a directory closed to new entries), and removes
+  the staging on every path; `run`, which starts every program in `$HOME`
   and builds the exec string (refusing an oversize one) before connecting; the SFTP `~` mapping
   (`_remote`).
 - **`__init__.py`** — `_resolve_exec_mode()`, the posture ladder.
@@ -1107,15 +1139,33 @@ The two leaf files at the end of this list are footguns, not human-gated paths.
   `append`). In `local` and `delegate` the bytes reach a fixed script (`launch.write_argv`) on the
   stdin the launch keeps parked while the login shell initialises, so no startup file can read
   them, and the file is written in place. Over `ssh` they go by SFTP to a private temporary file
-  (mode 0600, in a fresh directory of mode 0700 beside the target, so on its filesystem), which a
-  fixed program moves into place: an overwrite is a rename, so the target is replaced whole and
-  keeps its permission bits (a new file gets the mode `cat >` gives); an append adds the staged
-  bytes; a symbolic link is followed; a target that is not a regular file, or a regular file in a
-  directory closed to new entries, is written through instead, staged in the login home; the
-  staging directory is removed on every path. A target that is a directory, a missing directory,
-  or a failed transfer raises `OSError` over `ssh` before anything is written (the tools report it
-  as a failed write). Recorded limits of the move: hard links to the old file keep the old content,
-  and the new file is owned by the user who wrote it, with no ACL the old one had.
+  (mode 0600, in a fresh directory of mode 0700 beside the target, so on its filesystem). Every
+  SFTP write waits for its reply (Paramiko files a pipelined write's reply where nothing reads
+  it), the close's reply is checked (Paramiko's own close discards it), then the staged size; the
+  bytes' POSIX `cksum` is staged beside them, never in an argv. A fixed program checks the staged
+  file's `cksum` against it, and only then puts the file in place: an overwrite is a rename, so
+  the target is replaced whole and keeps its permission bits but setuid and setgid, which a write
+  by its user clears (a new file gets the mode `cat >` gives); an append adds the staged bytes; a
+  symbolic link is followed; a target that is not a regular file, or a regular file in a directory
+  closed to new entries, is written through instead, staged in the login home; the staging
+  directory is removed on every path. A write refuses what `cat >` refuses: an existing target the
+  user may not write (`[ -w ]`: a read-only file, another user's file in a group-writable
+  directory) fails with `Permission denied`, and a symbolic link whose target's directory does not
+  exist fails naming that target, the link kept (one to a missing file in an existing directory
+  creates the file, as `cat >` does). A target that is a directory, a missing directory, or a
+  transfer that failed or fell short (a full filesystem, a spent quota, a failed close) raises
+  `OSError` over `ssh` and leaves the target untouched (the tools report it as a failed write); as
+  OpenSSH's SFTP reports only `Failure`, the remote filesystem is then asked the cause, by
+  appending up to 64 KiB of zeros to the staged file (`ssh.PROBE`), so the error names `No space
+  left on device` or `Disk quota exceeded` when that is the cause. A staged file whose `cksum`
+  differs leaves the target untouched too, with exit 1 and a note. Pinned by
+  `test_a_write_that_runs_out_of_room_keeps_the_file` (a real full filesystem on macOS, injected
+  failures on Linux), `test_a_staged_file_that_is_not_what_was_sent_is_never_placed` and
+  `test_a_write_refuses_what_cat_refuses` (every mode, and over ssh with OpenSSH's own
+  `sftp-server`). Recorded limits of the move: hard links to the old file keep the old content;
+  the new file is owned by the user who wrote it, with no ACL the old one had; setgid is cleared
+  even on a file without group execute, which a Linux `cat >` keeps; and the checks and the move
+  are not one step, so a target changed between them (by the same user) is still replaced.
 - **Every backend runs every command under the pinned interpreter**, `/bin/bash -l`, through the
   launcher (`executor/launch.py`): never the server's `$SHELL`, never the user's login shell. The
   login initialisation runs (so `module` and the site's tools behave the same for every user), and
@@ -1164,6 +1214,16 @@ The two leaf files at the end of this list are footguns, not human-gated paths.
     initialisation took a descriptor its streams were parked on, so it was not run; the server log
     has the details` (`launch.TAKEN_NOTE`). A command that ran is never reported as not started on
     that account, and its output is never lost there unnoted.
+  - **`CONNECTION_LOST_EXIT_CODE = -1003`** (`ssh` only): the connection was lost before both end
+    records arrived, so the command may have run, and may have finished: the channel closed without
+    its end of output (as the transport closes it when the link goes), or the link went once the
+    exec request was sent. stdout and stderr keep whatever arrived, and stderr ends with
+    `cluster-mcp: the connection was lost; the command may have run` (`launch.LOST_NOTE`). It is
+    never `-1002`: a command whose start sentinel had not arrived when the link went may still have
+    run. `sbatch` reports it as a submission that may have happened, never as a failure, so an
+    agent checks `squeue` before submitting again. Pinned by `tests/ssh_server.py`'s `DroppingSSH`,
+    which runs the command to its end and drops the connection with its output unsent, after the
+    exec request is answered or before (`test_a_lost_connection_is_never_did_not_start`).
 - **Nothing the login initialisation prints reaches a result, with one exception.** The launch
   parks the command's streams while the login shell initialises, and every program prints a
   per-call sentinel first; each backend's `run` passes its streams through `launch.separate`, which
@@ -1207,7 +1267,9 @@ The two leaf files at the end of this list are footguns, not human-gated paths.
   as soon as the command exits, ahead of output still queued on the link, so the status decides
   nothing, and a command whose sentinel arrives after it (behind a chatty rc file on a slow link)
   still started: a submission that ran is never reported as not started. There is no timing
-  rule; only the timeout bounds a call whose records do not come. A local or delegated launch that
+  rule; only the timeout bounds a call whose records do not come. A record split across reads is
+  found, at its full stop, while something holds the streams open
+  (`test_an_end_record_split_across_reads_is_found`, `test_a_local_end_record_split_across_reads_is_found`). A local or delegated launch that
   exits without them is complete at its exit (an exited process has nothing more to write), and a
   stream that ends without one has ended; a started result without a record says so
   (`cluster-mcp: the launch ended before it reported the command's end, so its output may be

@@ -32,6 +32,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator, Sequence
@@ -39,6 +40,7 @@ from typing import Any, Iterator, Sequence
 import pytest
 
 import argv_echo
+from conftest import need_sftp_server
 from harness import Outcome, RecordingExecutor, call, drive, in_memory, shared_server
 from rcac_mcp.executor import Executor
 from rcac_mcp.executor.delegate import DelegatingExecutor
@@ -274,7 +276,8 @@ class Target:
 
 @pytest.fixture
 def target(request: pytest.FixtureRequest, executes: Any, tmp_path: Path) -> Iterator[Target]:
-    """The mode named by the test's `mode` parameter, writing into its own home."""
+    """The mode named by the test's `mode` parameter, writing into its own home (`ssh-openssh`:
+    over ssh, with OpenSSH's own sftp-server serving SFTP)."""
     mode = request.param
     if mode == 'local':
         yield Target(LocalShellExecutor(), executes.server_home)
@@ -283,7 +286,8 @@ def target(request: pytest.FixtureRequest, executes: Any, tmp_path: Path) -> Ite
     else:
         home = (tmp_path / 'ssh-home').resolve()
         home.mkdir()
-        with LoopbackSSH(home, '/bin/bash', tmp_path) as server:
+        sftp_server = need_sftp_server() if mode == 'ssh-openssh' else None
+        with LoopbackSSH(home, '/bin/bash', tmp_path, sftp_server=sftp_server) as server:
             executor = server.executor()
             try:
                 yield Target(executor, home)
@@ -407,3 +411,55 @@ def test_a_profile_cannot_change_a_fixed_script(target: Target) -> None:
         if not os.access(scripts[0], os.X_OK):
             violations.append('job script: not executable')
     assert violations == [], 'a profile changed what a fixed script does:\n' + '\n'.join(violations)
+
+
+# Over ssh a write refuses what `cat >` refuses, and leaves what it leaves; each row runs in every
+# mode, and over ssh with OpenSSH's own sftp-server too, so the modes agree.
+#   (the target's setup, the write's path, whether it fails, the file it checks, the bytes and mode it must hold)
+REFUSES = ('local', 'delegate', 'ssh', 'ssh-openssh')
+
+
+def _plant(home: Path) -> None:
+    (home / 'read-only').write_bytes(OLD)
+    (home / 'read-only').chmod(0o444)
+    (home / 'dangling-dir').symlink_to(home / 'no such dir' / 'file')
+    (home / 'dangling-file').symlink_to(home / 'missing-target')
+    for name, mode in (('setuid', 0o4755), ('setgid', 0o2755)):
+        (home / name).write_bytes(OLD)
+        (home / name).chmod(mode)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('target', [pytest.param(mode, id=mode) for mode in REFUSES], indirect=True)
+def test_a_write_refuses_what_cat_refuses(target: Target) -> None:
+    home = target.home
+    _plant(home)
+    try:
+        outcomes = target.write([{'path': f'~/{name}', 'content': PAYLOAD} for name in
+                                 ('read-only', 'dangling-dir', 'dangling-file', 'setuid', 'setgid')])
+        held = {name: ((home / name).read_bytes() if (home / name).exists() else None,
+                       stat.S_IMODE((home / name).stat().st_mode) if (home / name).exists() else None)
+                for name in ('read-only', 'setuid', 'setgid', 'missing-target')}
+    finally:
+        (home / 'read-only').chmod(0o644)
+    refused_read_only, refused_dangling, dangling_file, setuid, setgid = outcomes
+    violations = []
+    if not refused_read_only.is_error or 'Permission denied' not in refused_read_only.text:
+        violations.append(f'a read-only target was not refused as `cat >` refuses it: {refused_read_only!r:.300}')
+    if held['read-only'] != (OLD, 0o444):
+        violations.append(f'a read-only target changed: {held["read-only"]!r:.120}')
+    if not refused_dangling.is_error or 'No such file or directory' not in refused_dangling.text:
+        violations.append(f'a link whose target directory is missing was not refused: {refused_dangling!r:.300}')
+    if target.executor.__class__.__name__ == 'SSHExecutor' and 'no such dir' not in refused_dangling.text:
+        violations.append(f'the refusal does not name the missing target: {refused_dangling.text!r:.300}')
+    if not (home / 'dangling-dir').is_symlink() or (home / 'no such dir').exists():
+        violations.append('a link whose target directory is missing did not stay a link')
+    if dangling_file.is_error or held['missing-target'] is None or held['missing-target'][0] != PAYLOAD.encode() \
+            or not (home / 'dangling-file').is_symlink():
+        violations.append(f'a link to a missing file was not written through, as `cat >` writes it: '
+                          f'{dangling_file!r:.200}, the target holds {held["missing-target"]!r:.80}')
+    for name, outcome in (('setuid', setuid), ('setgid', setgid)):
+        if outcome.is_error or held[name] != (PAYLOAD.encode(), 0o755):
+            violations.append(f'a {name} target kept or lost the wrong bits: {outcome!r:.200}, it holds '
+                              f'{held[name][0]!r:.40} with mode {held[name][1]:o}, not 755 as `cat >` leaves it')
+    assert violations == [], '\n'.join(violations)

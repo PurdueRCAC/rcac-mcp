@@ -38,8 +38,9 @@ def run_command(
     Returns:
         CommandResult containing stdout, stderr, exit_code, and hostname. On timeout, exit_code is
         -1001 and stdout and stderr hold what was captured before the deadline; -1002 means the
-        command never started. A command killed by signal N, or exiting 128+N for such a signal,
-        has exit_code -N.
+        command never started; -1003 means the connection was lost before the command's end was
+        reported, so it may have run. A command killed by signal N, or exiting 128+N for such a
+        signal, has exit_code -N.
 
     Examples:
         run_command("ls -la")

@@ -3,7 +3,7 @@ slug: safe-execution
 title: Every tool passes exactly what it was given, under one interpreter
 kind: fix
 appetite: big
-status: blocked
+status: in_review
 branch: fix/safe-execution
 base: develop
 current_phase: done
@@ -241,6 +241,9 @@ by execution under every local login shell; nothing calls it yet.
 - **Remediation amendment 4 (2026-10-22, Geoffrey's ruling after review cycle 3).** Reopened with
   P2, P4, P5, P6 and P7 and landed in one commit with them; the end record, the SFTP route, the pins, the
   measurements and the mutants are in P2's fourth note.
+- **Remediation amendment 5 (2026-10-22, Geoffrey's ruling after review cycle 4).** Reopened with
+  P2, P4, P5 and P7 and landed in one commit with them; the classes, the pins, the decisions and the
+  mutants are in P2's fifth note.
 - **Verify:** frontmatter `P1.verify`.
 - **Touches:** `src/rcac_mcp/executor/{base,launch,__init__}.py`, `tests/{test_launch,conftest,test_hygiene,mutants,test_mutations}.py`, `AGENTS.md` (§3, § Testing, high-blast-radius list: add `src/rcac_mcp/executor/launch.py`).
 
@@ -796,6 +799,130 @@ land in `base.py` and in **all three** backends in one commit (§2); every comma
     13 min 56 s. P6's stored gate: the matrix `162 passed` in each era, the suite `1538 passed` in
     each, its 13 named mutants killed, both controls correct, `--help` exit 0; 8 min 15 s. Linux,
     bash 5: CI on the pushed head (below).
+- **Remediation amendment 5 (2026-10-22, Geoffrey's ruling after review cycle 4).** `REVIEW.md`
+  cycle 4, the named exception, came back not clean; Geoffrey ruled (`GOAL.md`, newest
+  Clarification): a fix scoped to the failure paths it found, then a review scoped to verifying
+  them. P1, P2, P4, P5 and P7 reopen and land in one commit, since the code, its pins, the
+  mutants and every text that describes them move together (R10): the launcher's record tests and
+  the `sudo` stand-in (P1), the ssh backend, the protocol texts, the loopback server and
+  `run_command`'s description (P2), the write rows in every mode (P4), `sbatch` (P5), and the
+  sweep's mutants (P7). P3 and P6 are untouched. No gate is retuned: P1, P2, P4, P5 and P7 run the
+  stored P7 gate, and P6's stored gate is run as well; the review fields are left as cycle 4 wrote
+  them.
+  - **Class 1: no failed transfer is reported as a write.** `ssh._upload` turns pipelining off
+    (Paramiko 5.0.0 files a pipelined write's reply under `type(None)`, where nothing raises it), so
+    every 32 KiB write waits for its reply; closes the file through `_close`, which sends the
+    close itself (`sftp._request(CMD_CLOSE, …)`) and so raises on a failed close, which
+    Paramiko's own close swallows; then checks the staged size by `stat`. Any failure raises
+    `ssh.Short`. The bytes' POSIX `cksum` (CRC and size; `ssh.cksum`, zlib's reflected CRC-32 on
+    the bit-reversed bytes, checked against the host's `cksum`) is staged as `expected` in the
+    same 0700 directory, and every placing program starts with `ssh.VERIFY`, which compares the
+    staged file's `cksum` with it and otherwise exits 1 with a note, the target untouched. On a
+    failed transfer, `_reason` runs `ssh.PROBE` (64 KiB of zeros appended to the staged file) and
+    takes the cause from its error, since OpenSSH's SFTP (version 3) says only `Failure`; the
+    write raises `OSError` "the transfer of N bytes to 'path' failed: <cause>; the file is
+    unchanged", and the staging (both files) is removed. **Pins:** `tests/ssh_server.py` gains
+    `sftp_server` (relaying SFTP to OpenSSH's own `sftp-server`, `_RealSFTP`), `write_limit`
+    (fail a write past a size with an errno, or drop the rest and report success), `write_flip`
+    and `close_failure` (`_Subsystem`). `test_a_write_that_runs_out_of_room_keeps_the_file`: on
+    macOS a 4 MB HFS+ image attached and detached by the test, filled to 8 KiB and 32 KiB free,
+    served by OpenSSH 10's `sftp-server`; EDQUOT injected at 32 KiB; each with a 36,027-byte
+    `write` over a 416-byte file and an `sbatch` of a 36,027-byte job script.
+    `test_a_staged_file_that_is_not_what_was_sent_is_never_placed[short|changed|close-fails]`;
+    `test_cksum_is_posix_cksum`, `test_cksum_matches_the_hosts_cksum`. The suite's
+    `test_a_failed_ssh_write_leaves_nothing_behind` lost its row that patched `_upload` to raise
+    (the real stack never did); the rows above replace it. **Red → green** (the new tests run
+    against this commit's parent, with only the new names added so they import): `8k-free`: the
+    416-byte file became 0 bytes, `exit 0`, and the job script was submitted → the file keeps its
+    416 bytes, "failed: No space left on device", nothing submitted or left; `32k-free`: 416 → 0
+    bytes, exit 0, submitted → 416 kept, the same cause; `edquot`: 416 → 32,768 bytes, exit 0,
+    submitted → 416 kept, "failed: Failure"; `short` and `changed` were placed with exit 0 → refused
+    ("32768 of 36027 bytes arrived", "is not what was sent"). **Decision (CI), in the ruling's
+    spirit:** the runner has OpenSSH's `sftp-server` (its `ssh` package), but no filesystem can be
+    attached without root, so on Linux the `8k-free` and `32k-free` rows inject ENOSPC at that size
+    through the in-process subsystem and expect the SFTP server's `Failure` as the cause; macOS
+    runs them on the real full volume. No row skips anywhere (`conftest.need_sftp_server` fails a
+    host without the server). **Decision:** pipelining off, not every reply collected: collecting
+    them needs Paramiko's request table, which a reply read for another request empties; the cost
+    is a round trip per 32 KiB (about 1 s per MiB at 30 ms).
+  - **Class 2: over ssh, a write refuses where `cat >` would.** An overwrite of an existing
+    regular file runs `ssh.WRITABLE` first (`[ -w "$2" ]`, the access check `cat >`'s open makes:
+    a read-only file, another user's file in a group-writable directory), failing with
+    `<path>: Permission denied`, the target untouched; an append and a write-through already fail
+    in `cat` itself. `_staging` refuses a symbolic link whose target's directory does not exist
+    (OpenSSH's `realpath` fails there; the loopback's never does, so `_staging` also checks the
+    directory), naming the link's target, the link kept. The mode a replaced file keeps drops
+    setuid and setgid (`ssh.SET_ID`). **Decision, in the ruling's spirit:** "refuse a dangling
+    symlink" is read as `cat >` reads it, which the parity pin requires: a link to a missing file
+    in an existing directory creates that file through the link in every mode, as `cat >` does
+    (measured on macOS bash 3.2; the parity rows run on Linux CI too), and only a link whose
+    target's directory is missing is
+    refused. **Pin:** `test_a_write_refuses_what_cat_refuses[local|delegate|ssh|ssh-openssh]` (the
+    last with OpenSSH's `sftp-server`): a 0444 file refused with `Permission denied` and unchanged;
+    a link into a missing directory refused, the error naming its target over ssh, the link kept;
+    a link to a missing file written through; 4755 and 2755 files left 755. Another user's file
+    needs root to plant, so the 0444 row stands for the same check. Red: over ssh the 0444 file was
+    replaced (mode 444 kept, content new), the 4755 and 2755 files kept their bits, and with
+    OpenSSH's server the link into a missing directory was replaced by a regular file. **Recorded
+    limits** (AGENTS §2): setgid is cleared even without group execute, which a Linux `cat >` keeps;
+    and the checks and the move are two steps, so a target the same user changes between them is
+    still replaced.
+  - **Class 3: a lost link is never "did not start".** New reserved code
+    `CONNECTION_LOST_EXIT_CODE = -1003` (`base.py`, exported), with
+    `launch.LOST_NOTE` = "cluster-mcp: the connection was lost; the command may have run". `_collect`
+    reads a channel that closed without its end of output (`_lost`: sshd sends that end before it
+    closes a channel; the transport closes it without one when the link goes), before both records
+    arrived, as lost; `_exec` returns the same when the exec request fails on a connection that is
+    no longer active (a live server's refusal still raises). `separate` keeps a lost result lost
+    whatever arrived, as it keeps a timeout, and never turns it into `-1002`. `sbatch` raises "The
+    connection was lost during the submission, so the job may have been submitted: check squeue
+    before submitting it again", never "Failed". **Decision, in the ruling's spirit:** a result
+    lost after its start sentinel or one record arrived is `-1003` too, its output kept: the status
+    is not known, as at a timeout. **Pin:** `tests/ssh_server.py`'s `DroppingSSH`, the block
+    reviewer's drop shape (the command runs to its end, its output, sentinel and records included,
+    never sent, then the connection is cut), dropping after the exec request is answered or before:
+    `test_a_lost_connection_is_never_did_not_start[after-the-command|before-the-reply]` (`~/ran`
+    exists, `-1003` with the note, `sbatch` called once and reported as "may have been
+    submitted"); the unit `test_a_channel_closed_without_its_end_is_a_lost_connection`. Red: both
+    rows returned `-1002` "did not start (exit -1)" and `sbatch` "Failed to submit job". §3,
+    `base.py`'s `run` docstring and the `run_command` description state it; the served surface's
+    `run_command.description` (already a named delta) follows by the scripted hand-edit of that
+    one string.
+  - **Class 4: coverage.** `test_an_end_record_split_across_reads_is_found` (the ssh loop, a fake
+    channel whose output never ends and whose exit status never comes) and
+    `test_a_local_end_record_split_across_reads_is_found` (a local launch that `exec`s a sleep
+    after its records): the nonce, then the status without its full stop, then the stop. The
+    `sudo` stand-in (`conftest.RELAY`) no longer crashes setting SIGKILL's action, so it dies of
+    a SIGKILL as `sudo` does: `test_a_signal_death_is_reported_and_reraised` gains a `delegate`
+    wire, whose `kill` row was red (the stand-in exited 1).
+  - **Mutants.** New (15): `sftp-writes-pipelined`, `sftp-close-unchecked`,
+    `staged-size-unchecked`, `staged-checksum-unchecked`, `transfer-cause-unnamed` (killed on the
+    macOS full-volume row only), `unwritable-target-replaced`, `dangling-link-replaced`,
+    `set-id-bits-kept`, `lost-link-read-as-ended`, `lost-link-at-exec-raised`,
+    `lost-link-not-started`, `lost-submission-failed`, `ssh-record-scan-from-end`,
+    `local-record-scan-from-end`, `record-without-full-stop`. Re-planted where the anchor moved:
+    `content-on-stdin-over-ssh`, `ssh-stdin-not-closed`, `content-route-unstated`,
+    `staging-not-cleaned`, `staged-file-not-private`, `link-replaced`. Each layer of class 1 is
+    killed by the row only it catches: pipelining by the injected EDQUOT row's cause (with it, the
+    size check still refuses, but with "bytes arrived" in place of the server's `Failure`), the
+    size check by the silent short write's message, the checksum by the changed byte. Left
+    unplanted as equivalent: dropping `_staging`'s own directory check, which only the loopback
+    needs (its `realpath` never fails; the staging `mkdir` then fails in the missing directory, so
+    the link still stays); with OpenSSH's server `dangling-link-replaced` covers the path. The
+    sweep goes from 168 to 183 cases.
+  - **Texts (R10, same commit).** AGENTS §2 (the checked transfer, the checksum, the refusals, the
+    cause, the recorded limits), §3 (`-1003`, the split-record pins), the `ssh.py` footgun, §
+    Testing's entries for the write, launcher, executor fixture and ssh tests and the skip rule;
+    the README's execution paragraph; `base.py` (`CONNECTION_LOST_EXIT_CODE`, the `run` and `write`
+    docstrings); the `launch.separate` and `ssh.py` module, `_collect`, `_exec`, `_staging`,
+    `_upload` and `write` docstrings; the `run_command` description and its fixture string.
+  - **Gates.** Local, macOS (bash 3.2, OpenSSH 10 `sftp-server`), on the tree of this commit but
+    this note. The stored P7 gate (shared by P1, P2, P4, P5 and P7), first run: `1615 passed` in
+    each era, 0 skipped; the sweep green, 183 of 183 cases killed and both controls reporting
+    correctly; sandboxed `--help` exit 0; 15 min 5 s. P6's stored gate: the matrix `162 passed` in
+    each era, the suite `1615 passed` in each, its 13 named mutants killed, both controls correct,
+    `--help` exit 0; 8 min 44 s. Every image the full-volume rows attached was detached. Linux,
+    bash 5: CI on the pushed head.
 - **Verify:** frontmatter `P2.verify`.
 - **Touches:** `src/rcac_mcp/executor/*`, `src/rcac_mcp/tools/shell.py` (docstring), `src/rcac_mcp/__init__.py` (`APP_HELP` only), `tests/{harness,conftest,ssh_server,test_ssh_exec,test_ssh_smoke,test_executors,test_hygiene,mutants,test_mutations}.py`, `tests/fixtures/served_surface.json`, `AGENTS.md`, `README.md`, `SECURITY.md`, `issues/`, `ROADMAP.md`.
 
@@ -911,6 +1038,9 @@ answers every stdio request with that message as a −32603 error until EOF, and
 - **Remediation amendment 4 (2026-10-22, Geoffrey's ruling after review cycle 3).** Reopened with
   P1, P2, P5, P6 and P7 and landed in one commit with them; the end record, the SFTP route, the pins, the
   measurements and the mutants are in P2's fourth note.
+- **Remediation amendment 5 (2026-10-22, Geoffrey's ruling after review cycle 4).** Reopened with
+  P1, P2, P5 and P7 and landed in one commit with them; the classes, the pins, the decisions and the
+  mutants are in P2's fifth note.
 - **Verify:** frontmatter `P4.verify`.
 - **Touches:** `src/rcac_mcp/tools/{filesystem,transfer}.py`, `src/rcac_mcp/resources.py`, `src/rcac_mcp/scripts.py` (new), `tests/{test_tools,test_writes,mutants,test_mutations,conftest,harness,test_hygiene,test_surface}.py`, `tests/fixtures/served_surface.json`, `README.md`, `AGENTS.md` (§ Testing, §9 deltas), `issues/`, `ROADMAP.md`.
 
@@ -991,6 +1121,9 @@ answers every stdio request with that message as a −32603 error until EOF, and
 - **Remediation amendment 4 (2026-10-22, Geoffrey's ruling after review cycle 3).** Reopened with
   P1, P2, P4, P6 and P7 and landed in one commit with them; the end record, the SFTP route, the pins, the
   measurements and the mutants are in P2's fourth note.
+- **Remediation amendment 5 (2026-10-22, Geoffrey's ruling after review cycle 4).** Reopened with
+  P1, P2, P4 and P7 and landed in one commit with them; the classes, the pins, the decisions and the
+  mutants are in P2's fifth note.
 - **Verify:** frontmatter `P5.verify`.
 - **Touches:** `src/rcac_mcp/tools/{slurm,rcac}.py`, `tests/{test_tools,test_writes,test_sbatch,test_extra_args,argv_echo,test_surface,mutants}.py`, `tests/fixtures/served_surface.json`, `README.md`, `AGENTS.md`, `issues/`, `ROADMAP.md`.
 
@@ -1310,6 +1443,9 @@ contract or the heredoc writes; every planted violation is killed; every deferra
   needs); `pyproject.toml` is unchanged. Not this cycle's code: `develop` carries the same lock, so
   it goes in a commit of its own, which landing can keep or leave to `develop`. Locally after it:
   `uv lock --check`, the audit clean, `1538 passed` in each era, sandboxed `--help` exit 0.
+- **Remediation amendment 5 (2026-10-22, Geoffrey's ruling after review cycle 4).** Reopened with
+  P1, P2, P4 and P5 and landed in one commit with them; the classes, the pins, the decisions and the
+  mutants are in P2's fifth note.
 - **Verify:** frontmatter `P7.verify`.
 - **Touches:** `AGENTS.md`, `issues/`, `ROADMAP.md`, any straggler text the sweep names.
 

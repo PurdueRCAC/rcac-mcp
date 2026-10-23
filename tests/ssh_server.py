@@ -30,11 +30,17 @@ none of a write's content travelled there.
 
 An SFTP subsystem serves the same filesystem, starting in the home, as OpenSSH's does: a file or
 directory is created with the permissions the client asks for (the process umask narrowing them),
-a client can change them, remove a file or an empty directory, and `normalize` resolves symbolic
-links. It refuses any path outside `jail` (the test's own temporary tree), so a transfer that
+a client can change them, remove a file or an empty directory, read a symbolic link, and
+`normalize` resolves symbolic links. It refuses any path outside `jail` (the test's own temporary tree), so a transfer that
 resolves somewhere else fails loudly instead of touching the real filesystem. Authentication is one generated client key; the client
 side is isolated from the developer's SSH setup (`executor()` builds an `SSHExecutor` with no key
-lookup, no agent and an empty SSH config).
+lookup, no agent and an empty SSH config). It can fail a write at a size, as a full filesystem
+or a quota does, report a short write as done, or change a staged byte (`write_limit`,
+`write_flip`), or fail the close of one (`close_failure`). With `sftp_server`, OpenSSH's own `sftp-server` serves SFTP instead, with no jail.
+
+`DroppingSSH` is the same server on a link that is lost once a command has run: the command runs to
+its end and none of its output reaches the client, the connection dropping either after the exec
+request was answered or before.
 """
 
 from __future__ import annotations
@@ -84,20 +90,39 @@ def _key(name: str) -> paramiko.PKey:
 
 
 class _Handle(paramiko.SFTPHandle):
+    # The bytes a file may take before a write fails, and the error it then fails with (a quota or a
+    # full filesystem), or None to drop the rest and report success; None writes everything.
+    limit: tuple[int, int | None] | None = None
+    # Whether the first byte of a staged content file is changed on its way to disk.
+    flip = False
+
     def stat(self) -> Any:
         try:
             return paramiko.SFTPAttributes.from_stat(os.fstat(self.readfile.fileno()))
         except OSError as exc:
             return paramiko.SFTPServer.convert_errno(exc.errno)
 
+    def write(self, offset: int, data: bytes) -> int:
+        if self.flip and offset == 0 and data and os.path.basename(self.filename) == 'content':
+            data = bytes([data[0] ^ 1]) + data[1:]
+        # As a filesystem that runs out: the bytes that fit land, and the write fails (or, with no
+        # error, is reported done).
+        if self.limit is not None and offset + len(data) > self.limit[0]:
+            fits = max(0, self.limit[0] - offset)
+            if fits:
+                super().write(offset, data[:fits])
+            return paramiko.SFTP_OK if self.limit[1] is None else paramiko.SFTPServer.convert_errno(self.limit[1])
+        return super().write(offset, data)
+
 
 class _SFTP(paramiko.SFTPServerInterface):
     """A filesystem view starting in `home` that refuses every path outside `jail`."""
 
-    def __init__(self, server: Any, home: str, jail: str, *args: Any, **kwargs: Any) -> None:
+    def __init__(self, server: Any, home: str, jail: str, owner: Any, *args: Any, **kwargs: Any) -> None:
         super().__init__(server, *args, **kwargs)
         self.home = home
         self.jail = jail
+        self.owner = owner
 
     def _real(self, path: str) -> str | None:
         real = os.path.normpath(path if os.path.isabs(path) else os.path.join(self.home, path))
@@ -141,6 +166,7 @@ class _SFTP(paramiko.SFTPServerInterface):
         else:
             mode = 'rb'
         handle = _Handle(flags)
+        handle.limit, handle.flip = self.owner.write_limit, self.owner.write_flip
         handle.filename = real
         handle.readfile = handle.writefile = os.fdopen(fd, mode)
         return handle
@@ -169,6 +195,34 @@ class _SFTP(paramiko.SFTPServerInterface):
     def remove(self, path: str) -> int:
         return self._do(path, os.remove)
 
+    def readlink(self, path: str) -> Any:
+        real = self._real(path)
+        if real is None:
+            return paramiko.SFTP_PERMISSION_DENIED
+        try:
+            return os.readlink(real)
+        except OSError as exc:
+            return paramiko.SFTPServer.convert_errno(exc.errno)
+
+
+class _Subsystem(paramiko.SFTPServer):
+    """Paramiko's SFTP server, but for one fault: with `close_failure`, the close of a staged content
+    file is answered with a failure once the file is closed, as a filesystem that defers its writes
+    (NFS, a quota checked at close) reports one that did not land."""
+
+    def _process(self, t: int, request_number: int, msg: paramiko.Message) -> None:
+        if t == paramiko.sftp.CMD_CLOSE and self.server.owner.close_failure:
+            at = msg.packet.tell()
+            key = msg.get_binary()
+            msg.packet.seek(at)
+            handle = self.file_table.get(key)
+            if handle is not None and os.path.basename(handle.filename) == 'content':
+                handle.close()
+                del self.file_table[key]
+                self._send_status(request_number, paramiko.SFTP_FAILURE)
+                return
+        super()._process(t, request_number, msg)
+
 
 def _mode(attr: Any, default: int) -> int:
     """The permissions a client asked for in `attr`, or `default` when it asked for none."""
@@ -192,6 +246,8 @@ class _Server(paramiko.ServerInterface):
 
     def check_channel_exec_request(self, channel: paramiko.Channel, command: bytes) -> bool:
         self.owner.received.append(command.decode())
+        if self.owner.before_the_reply(channel, command.decode()):
+            return True
         threading.Thread(target=self.owner.execute, args=(channel, command.decode()), daemon=True).start()
         return True
 
@@ -242,13 +298,65 @@ def _feed(channel: paramiko.Channel, sink: Any, stop: threading.Event, pumps: li
             pass
 
 
-class LoopbackSSH:
-    """The server, serving `home` with `shell` as the login shell; a context manager."""
+class _RealSFTP(paramiko.SubsystemHandler):
+    """The SFTP subsystem served by OpenSSH's own `sftp-server`, started in the home inside
+    `bin/sandbox.sh`: the channel is relayed to its stdin, its stdout to the channel."""
 
-    def __init__(self, home: Path, shell: str, jail: Path) -> None:
+    def __init__(self, channel: paramiko.Channel, name: str, server: Any, owner: LoopbackSSH) -> None:
+        super().__init__(channel, name, server)
+        self.owner = owner
+
+    def start_subsystem(self, name: str, transport: Any, channel: paramiko.Channel) -> None:
+        proc = subprocess.Popen([str(SANDBOX), str(self.owner.sftp_server), '-d', self.owner.home],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                start_new_session=True)
+        self.owner.processes.append(proc)
+        relay = threading.Thread(target=_pump, args=(proc.stdout, channel.sendall, threading.Event()), daemon=True)
+        relay.start()
+        try:
+            while data := channel.recv(65536):
+                proc.stdin.write(data)
+                proc.stdin.flush()
+        except (OSError, EOFError, paramiko.SSHException):
+            pass
+        finally:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+            relay.join()
+            proc.wait()
+
+
+# Where OpenSSH's `sftp-server` is installed: macOS, then Debian and Ubuntu, then RHEL and Fedora.
+SFTP_SERVERS = ('/usr/libexec/sftp-server', '/usr/lib/openssh/sftp-server', '/usr/libexec/openssh/sftp-server')
+
+
+def openssh_sftp_server() -> str | None:
+    """The path of OpenSSH's `sftp-server` on this host, or None."""
+    return next((path for path in SFTP_SERVERS if os.access(path, os.X_OK)), None)
+
+
+class LoopbackSSH:
+    """The server, serving `home` with `shell` as the login shell; a context manager.
+
+    With `sftp_server` (the path of OpenSSH's `sftp-server`), that program serves SFTP instead of
+    the in-process subsystem, with no jail. `write_limit` (bytes, errno), when set, makes the
+    in-process subsystem fail a write past that many bytes of a file with that error, as a quota or
+    a full filesystem does, after the bytes that fit have landed; with no errno it drops the rest
+    and reports success. `write_flip` changes the first byte of a staged content file on its way to
+    disk, as a faulty disk would. `close_failure` fails the close of a staged content file once it
+    is closed, as NFS reports a deferred write error.
+    """
+
+    def __init__(self, home: Path, shell: str, jail: Path, sftp_server: str | None = None) -> None:
         self.home = str(Path(home).resolve())
         self.shell = shell
         self.jail = str(Path(jail).resolve())
+        self.sftp_server = sftp_server
+        self.write_limit: tuple[int, int | None] | None = None
+        self.write_flip = False
+        self.close_failure = False
         self.received: list[str] = []
         self.stdin_bytes: list[list[int]] = []
         self.processes: list[subprocess.Popen[bytes]] = []
@@ -269,7 +377,10 @@ class LoopbackSSH:
             transport = paramiko.Transport(conn)
             self._transports.append(transport)
             transport.add_server_key(_key('host'))
-            transport.set_subsystem_handler('sftp', paramiko.SFTPServer, _SFTP, self.home, self.jail)
+            if self.sftp_server is None:
+                transport.set_subsystem_handler('sftp', _Subsystem, _SFTP, self.home, self.jail, self)
+            else:
+                transport.set_subsystem_handler('sftp', _RealSFTP, self)
             transport.start_server(server=_Server(self))
 
     def environment(self) -> list[str]:
@@ -307,6 +418,10 @@ class LoopbackSSH:
             channel.close()
         except (OSError, EOFError, paramiko.SSHException):
             pass
+
+    def before_the_reply(self, channel: paramiko.Channel, wire: str) -> bool:
+        """Handle the exec request before it is answered; True when it is handled (none here)."""
+        return False
 
     def _stdin_count(self) -> list[int]:
         self.stdin_bytes.append([0])
@@ -463,3 +578,53 @@ class ThrottledSSH(LoopbackSSH):
             channel.close()
         except (OSError, EOFError, paramiko.SSHException):
             pass
+
+
+def _drop(transport: paramiko.Transport) -> None:
+    """Cut the connection as a lost link does: no end of output, no close, nothing more sent."""
+    try:
+        transport.sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    transport.sock.close()
+
+
+class DroppingSSH(LoopbackSSH):
+    """The loopback server on a link that is lost once a command has run: the command runs to its
+    end, but none of its output reaches the client before the connection goes.
+
+    `when` is `'after-the-command'` (the exec request is answered, the command runs and exits, and
+    the connection drops with its output, start sentinel and end records included, still unsent) or
+    `'before-the-reply'` (the command runs and exits before the exec request is answered, and the
+    connection drops before that answer). Only the first `drops` exec requests are dropped; later
+    ones, on a new connection, run as on the plain server.
+    """
+
+    def __init__(self, home: Path, shell: str, jail: Path, when: str, drops: int = 1) -> None:
+        if when not in ('after-the-command', 'before-the-reply'):
+            raise ValueError(f'unknown drop point {when!r}')
+        self.when, self.drops = when, drops
+        super().__init__(home, shell, jail)
+
+    def _run_unsent(self, wire: str) -> None:
+        proc = self._launch(wire)
+        proc.stdin.close()
+        # The output is read and kept back, as a link that is lost leaves it unsent.
+        proc.communicate()
+
+    def before_the_reply(self, channel: paramiko.Channel, wire: str) -> bool:
+        if self.when != 'before-the-reply' or self.drops <= 0:
+            return False
+        self.drops -= 1
+        self._run_unsent(wire)
+        _drop(channel.get_transport())
+        return True
+
+    def execute(self, channel: paramiko.Channel, wire: str) -> None:
+        if self.when != 'after-the-command' or self.drops <= 0:
+            super().execute(channel, wire)
+            return
+        self.drops -= 1
+        time.sleep(CONFIRM)
+        self._run_unsent(wire)
+        _drop(channel.get_transport())

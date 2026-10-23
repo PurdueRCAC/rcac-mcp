@@ -39,7 +39,7 @@ import pytest
 from rcac_mcp.executor import NOT_STARTED_EXIT_CODE, TIMEOUT_EXIT_CODE, UserPath
 from rcac_mcp.executor import launch
 
-from conftest import need_shell
+from conftest import RELAY, need_shell
 
 TAKEN_MARK = b'cluster-mcp:parked-descriptor-taken'
 TAKEN_NOTE = (b'cluster-mcp: the command did not start: the login initialisation took a descriptor its streams '
@@ -849,6 +849,9 @@ def _environment(home: Path | str, *extra: str, path: str | None = None) -> list
 def _wire_argv(wire: str, prog: str) -> list[str]:
     if wire == 'local':
         return launch.bash_argv(prog)
+    if wire == 'delegate':
+        # The launch a delegated backend makes, under the `executes` fixture's stand-in for sudo.
+        return [sys.executable, '-I', '-c', RELAY, *launch.bash_argv(prog)]
     shell = f'/bin/{wire.removeprefix("ssh-")}'
     need_shell(shell)
     return [shell, '-c', launch.ssh_command(prog)]
@@ -1116,7 +1119,7 @@ STATUSES = {
 
 @pytest.mark.integration
 @pytest.mark.parametrize('status', STATUSES)
-@pytest.mark.parametrize('wire', ['local', 'ssh-sh', 'ssh-bash', 'ssh-zsh', 'ssh-tcsh'])
+@pytest.mark.parametrize('wire', ['local', 'delegate', 'ssh-sh', 'ssh-bash', 'ssh-zsh', 'ssh-tcsh'])
 def test_a_signal_death_is_reported_and_reraised(wire: str, status: str, home: Path, tmp_path: Path) -> None:
     command, want, own = STATUSES[status]
     prog, marks = launch.program(command, None, 'home')
@@ -1411,3 +1414,21 @@ def test_a_command_printing_record_lookalikes_keeps_them(wire: str, home: Path) 
     result = run_on(wire, script, home, stdin=RECORD_LOOKALIKES)
     assert result == (RECORD_LOOKALIKES, RECORD_LOOKALIKES, 4), \
         f'{wire}: output shaped like an end record cut the result: {result!r}'
+
+
+# An end record split across reads, while the launch itself holds its streams open (it `exec`s a
+# sleep after the records): the nonce in one read, the status without its full stop in the next,
+# the stop last. Only the record, found across the reads, ends the call.
+SPLIT_WRITER = ('printf %s "$1"; sleep 0.3; printf %s "$2"; sleep 0.3; printf %s "$3"; printf %s "$4" >&2; '
+                'exec sleep 8')
+
+
+@pytest.mark.integration
+def test_a_local_end_record_split_across_reads_is_found(home: Path) -> None:
+    marks = launch.Marks(b'a' * 32, b'0123456789abcdeffedcba9876543210')
+    pieces = [marks.start + b'out' + marks.end[:10], marks.end[10:] + b'x1', b'3.', marks.start + marks.end + b'x13.']
+    argv = _environment(home) + ['/bin/bash', '--norc', '-c', SPLIT_WRITER, 'split', *(p.decode() for p in pieces)]
+    # A record never found runs the call to its deadline: a timeout, not exit 13.
+    out, err, code, note = _sandboxed(argv, None, 3, marks.end)
+    result = launch.separate(out, err, code, marks, note)
+    assert result == (b'out', b'', 13), f'a record split across reads was misread: {result!r}, not exit 13'

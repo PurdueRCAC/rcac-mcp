@@ -78,6 +78,20 @@ def need_shell(shell: str) -> None:
     pytest.skip(f'{shell} is not installed here')
 
 
+def need_sftp_server() -> str:
+    """The path of OpenSSH's `sftp-server`, or a failed test naming what is missing (never a skip).
+
+    macOS ships it and the GitHub runner has it (its `ssh` package installs it); elsewhere it comes
+    with OpenSSH's server package (`openssh-sftp-server` on Debian and Ubuntu).
+    """
+    from ssh_server import openssh_sftp_server
+
+    found = openssh_sftp_server()
+    if not found:
+        pytest.fail("OpenSSH's sftp-server is not installed here, and the suite drives it", pytrace=False)
+    return found
+
+
 SHIM_MESSAGE = 'refused by the test PATH shim'
 SHIM_SCRIPT = f"""#!/bin/sh
 echo '{SHIM_MESSAGE}' >&2
@@ -255,7 +269,11 @@ for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
     signal.signal(signum, relay)
 code = child.wait()
 if code < 0:
-    signal.signal(-code, signal.SIG_DFL)
+    # SIGKILL cannot be caught, so its action is already the default and cannot be set.
+    try:
+        signal.signal(-code, signal.SIG_DFL)
+    except (OSError, ValueError):
+        pass
     os.kill(os.getpid(), -code)
 sys.exit(code)
 """

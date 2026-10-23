@@ -12,7 +12,8 @@ from typing import Final, Protocol, runtime_checkable
 from dataclasses import dataclass
 
 # Public interface
-__all__ = ['Executor', 'CommandResult', 'UserPath', 'TIMEOUT_EXIT_CODE', 'NOT_STARTED_EXIT_CODE']
+__all__ = ['Executor', 'CommandResult', 'UserPath', 'TIMEOUT_EXIT_CODE', 'NOT_STARTED_EXIT_CODE',
+           'CONNECTION_LOST_EXIT_CODE']
 
 # The exit code of a command stopped at its timeout. Below -1000, so no completed command (0..255)
 # and no signal death (-1..-64) can report it (AGENTS.md § Invariants §3).
@@ -21,6 +22,11 @@ TIMEOUT_EXIT_CODE: Final = -1001
 # The exit code of a command that never began: the login initialisation ended (or the launch
 # failed) before the command's first line ran. Below -1000 for the same reason.
 NOT_STARTED_EXIT_CODE: Final = -1002
+
+# The exit code of a command whose connection was lost before both of its end records arrived: the
+# command may have run, and may have finished, so it is never reported as not started. Below -1000
+# for the same reason.
+CONNECTION_LOST_EXIT_CODE: Final = -1003
 
 
 class UserPath(str):
@@ -100,7 +106,11 @@ class Executor(Protocol):
             stderr. No backend raises on a timeout. A command that never began (the login
             initialisation ended first, or took a descriptor the command's streams were parked on,
             so the program ran nothing) returns `NOT_STARTED_EXIT_CODE` (−1002); one whose start is
-            announced late, behind a chatty rc file on a slow link, has begun. A command killed by
+            announced late, behind a chatty rc file on a slow link, has begun. Over `ssh`, a
+            connection lost before both end records arrived returns `CONNECTION_LOST_EXIT_CODE`
+            (−1003), whatever arrived, with the note `cluster-mcp: the connection was lost; the
+            command may have run` ending stderr: the command may have run, so it is never reported
+            as not started. A command killed by
             signal N reports −N in every mode, and so does one that exits 128+N for a terminating
             signal N, which bash reports alike; the launch then dies of that signal itself.
 
@@ -128,10 +138,15 @@ class Executor(Protocol):
         startup file reads the bytes: in `local` and `delegate` they reach a fixed script on the
         stdin the launch keeps parked while the login shell initialises, and the file is written
         in place; over `ssh` they never ride a command's stdin, but go by SFTP to a private
-        temporary file (mode 0600, in a fresh directory of mode 0700) beside the target, which a
-        fixed program then moves into place, so the target is replaced whole and keeps its
-        permission bits (`ssh.write` states the cases written through instead). A symbolic link is
-        followed to the file it names. The temporary file is removed on every path.
+        temporary file (mode 0600, in a fresh directory of mode 0700) beside the target, every
+        write's reply and the close checked; a fixed program then checks that file's size and
+        checksum against the bytes sent and moves it into place, so the target is replaced whole
+        and keeps its permission bits but setuid and setgid, as `cat >` leaves them (`ssh.write`
+        states the cases written through instead). A failed or short transfer, or a mismatch,
+        leaves the target untouched. Over `ssh`, too, a write refuses what `cat >` refuses: an
+        existing target the user may not write, and a symbolic link whose target's directory does
+        not exist (the link stays). A symbolic link is followed to the file it names. The temporary
+        file is removed on every path.
 
         Args:
             path: The file to write.
@@ -142,12 +157,15 @@ class Executor(Protocol):
             executable: Make the file executable afterwards (`chmod +x`).
 
         Returns:
-            The CommandResult of the write: exit code 0 when it is done.
+            The CommandResult of the write: exit code 0 when it is done; otherwise its stderr says
+            why (over `ssh`, a staged file that is not what was sent, or a target the user may not
+            write, leaves the target untouched).
 
         Raises:
-            OSError: Over `ssh`, the content could not be staged (the target is a directory, or its
-                directory is missing or closed to the user, or the transfer failed); nothing was
-                written.
+            OSError: Over `ssh`, the content could not be staged (the target is a directory, a
+                symbolic link whose target's directory does not exist, or its directory is missing
+                or closed to the user, or the transfer failed or fell short, with the reason, such
+                as `No space left on device`); nothing was written.
         """
         ...
 

@@ -49,9 +49,13 @@ streams, and the call returns there, so a background job the command or a startu
 running never holds it, and what such a job prints afterwards is not returned. A command killed by
 signal N (or exiting 128+N) has exit code `-N`. `write_file` and `sbatch`'s job script are written
 byte for byte; over ssh their content never rides a command's stdin but goes by SFTP to a private
-temporary file beside the target, which is then moved into place, so the file is replaced whole and
-keeps its permissions. A command that exceeds its `timeout` returns what it printed so far with
-exit code `-1001`.
+temporary file beside the target, which is checked against the bytes sent (its size and checksum)
+and then moved into place, so the file is replaced whole and keeps its permissions (but setuid and
+setgid, as `cat >` leaves them). A transfer that fails or falls short (a full filesystem, a spent
+quota) leaves the file untouched and says why, and a write refuses what `cat >` refuses (a file you
+may not write, a link whose target's directory is missing). A command that exceeds its `timeout`
+returns what it printed so far with exit code `-1001`; over ssh, a connection lost before the
+command's end was reported gives `-1003`: the command may have run.
 
 See [SECURITY.md](SECURITY.md) for detailed architecture and configuration.
 

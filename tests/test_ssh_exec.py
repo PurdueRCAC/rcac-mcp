@@ -32,8 +32,11 @@ over the per-argument limit is refused before connecting.
 from __future__ import annotations
 
 import base64
+import contextlib
+import errno
 import os
 import stat
+import sys
 import time
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -41,13 +44,13 @@ from typing import Any, Callable, Iterator
 import pytest
 
 import argv_echo
-from conftest import need_shell
+from conftest import REAL_POPEN, need_sftp_server, need_shell
 from harness import Outcome, call, drive, in_memory, shared_server
-from rcac_mcp.executor import TIMEOUT_EXIT_CODE, CommandResult, Executor, UserPath
+from rcac_mcp.executor import CONNECTION_LOST_EXIT_CODE, NOT_STARTED_EXIT_CODE, TIMEOUT_EXIT_CODE, CommandResult, Executor, UserPath
 from rcac_mcp.executor import launch, ssh
 from rcac_mcp.executor.ssh import SSHExecutor
 from rcac_mcp.tools.shell import run_command
-from ssh_server import LoopbackSSH, ThrottledSSH
+from ssh_server import DroppingSSH, LoopbackSSH, ThrottledSSH
 from test_executors import (LOGIN_MARKER, PROBE, WRITER, held_violations, timed, timeout_violations,
                             writer_violations)
 from test_launch import HOSTILE, LEAVES_A_WRITER, SEPARATION_CASES, chatty_home
@@ -632,7 +635,8 @@ def test_an_ssh_write_stages_its_content_privately(serve: Callable[..., Loopback
     monkeypatch.setattr(ssh, '_upload', watched)
     first, second = _write(server, '~/sub/a', b'one'), _write(server, '~/sub/a', b'two')
     assert (first.exit_code, second.exit_code, (home / 'sub' / 'a').read_bytes()) == (0, 0, b'two'), (first, second)
-    assert [(where, d, f) for where, d, f, _ in seen] == [(str(home / 'sub'), 0o700, 0o600)] * 2, \
+    # Each write stages its content and its checksum, both private, in one directory of its own.
+    assert [(where, d, f) for where, d, f, _ in seen] == [(str(home / 'sub'), 0o700, 0o600)] * 4, \
         f'the content was not staged privately beside the target: {seen!r}'
     assert len({name for *_, name in seen}) == 2, f'two writes shared a staging name: {seen!r}'
 
@@ -678,8 +682,10 @@ def test_an_ssh_write_into_a_closed_directory_writes_through(serve: Callable[...
 
 
 @pytest.mark.integration
-def test_a_failed_ssh_write_leaves_nothing_behind(serve: Callable[..., LoopbackSSH],
-                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_failed_ssh_write_leaves_nothing_behind(serve: Callable[..., LoopbackSSH]) -> None:
+    # A transfer that fails is pinned against a real one: OpenSSH's sftp-server on a full volume, and
+    # injected faults (`test_a_write_that_runs_out_of_room_keeps_the_file`,
+    # `test_a_staged_file_that_is_not_what_was_sent_is_never_placed`).
     server = serve('/bin/bash')
     home = Path(server.home)
     (home / 'a dir').mkdir()
@@ -691,19 +697,6 @@ def test_a_failed_ssh_write_leaves_nothing_behind(serve: Callable[..., LoopbackS
         violations.append('a write to a directory was not refused')
     except IsADirectoryError:
         pass
-    # The transfer fails part way.
-    upload = ssh._upload
-
-    def broken(sftp: Any, staged: str, data: bytes) -> None:
-        upload(sftp, staged, data[:3])
-        raise OSError('the link dropped')
-    monkeypatch.setattr(ssh, '_upload', broken)
-    try:
-        _write(server, '~/file', b'replacement')
-        violations.append('a failed transfer was not reported')
-    except OSError:
-        pass
-    monkeypatch.setattr(ssh, '_upload', upload)
     # The placing program does not start (a profile that exits).
     (home / '.bash_profile').write_text('exit 0\n')
     result = _write(server, '~/file', b'replacement')
@@ -714,6 +707,201 @@ def test_a_failed_ssh_write_leaves_nothing_behind(serve: Callable[..., LoopbackS
     if _staging_left(home, home / 'a dir'):
         violations.append(f'a failed write left its staging behind: {_staging_left(home, home / "a dir")!r}')
     assert violations == [], '\n'.join(violations)
+
+
+# ---------------------------------------------------------------------------------------------
+# A transfer that fails: on a full filesystem, at a quota, short or changed on its way to disk.
+
+# A job script longer than the room left: 32 KiB and a little, as a write of it reaches the disk.
+SCRIPT_BYTES = 36_027
+
+# What the target held before: a write that fails must leave exactly this.
+KEPT = b'the file before the write\n' * 16
+
+
+def _host(*argv: str) -> None:
+    """Run a host tool the fixture needs (not a command under test), and check it succeeded."""
+    proc = REAL_POPEN(list(argv), stdout=-1, stderr=-1)
+    out, err = proc.communicate(timeout=120)
+    assert proc.returncode == 0, f'{argv[:2]!r} failed: {err.decode(errors="replace")[-400:]}'
+
+
+@contextlib.contextmanager
+def full_volume(where: Path, free: int) -> Iterator[Path]:
+    """A 4 MB HFS+ volume attached at `where` (macOS), filled until `free` bytes are left; detached
+    and its image removed afterwards."""
+    image = where.parent / f'{where.name}.dmg'
+    _host('hdiutil', 'create', '-size', '4m', '-fs', 'HFS+', '-volname', 'cluster-mcp-full', str(image))
+    where.mkdir()
+    _host('hdiutil', 'attach', '-nobrowse', '-noautoopen', '-mountpoint', str(where), str(image))
+    try:
+        room = os.statvfs(where)
+        with open(where / 'filler', 'wb') as filler:
+            filler.write(b'\0' * (room.f_bavail * room.f_frsize - free))
+        room = os.statvfs(where)
+        assert room.f_bavail * room.f_frsize == free, f'the volume has {room.f_bavail * room.f_frsize} bytes free'
+        yield where
+    finally:
+        _host('hdiutil', 'detach', '-force', str(where))
+        image.unlink()
+
+
+ROOM = {
+    # (the failure, the room before it, in bytes)
+    '8k-free': (errno.ENOSPC, 8 * 1024),
+    '32k-free': (errno.ENOSPC, 32 * 1024),
+    'edquot': (errno.EDQUOT, 32 * 1024),
+}
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('room', list(ROOM))
+def test_a_write_that_runs_out_of_room_keeps_the_file(room: str, tmp_path: Path, executes: Any) -> None:
+    """A full filesystem or a spent quota fails the write with its reason, and touches nothing.
+
+    On macOS a full filesystem is real: a 4 MB HFS+ image, attached by the test and filled to 8 KiB
+    or 32 KiB free, served by OpenSSH's own sftp-server, which reports only `Failure`; the remote
+    filesystem then names the cause. The Linux runner cannot attach a filesystem without root, so
+    there the in-process subsystem fails the write at that many bytes with ENOSPC instead, as a
+    full filesystem does. EDQUOT is injected that way everywhere.
+    """
+    failure, free = ROOM[room]
+    home = (tmp_path / 'home').resolve()
+    home.mkdir()
+    real = failure == errno.ENOSPC and sys.platform == 'darwin'
+    with contextlib.ExitStack() as stack:
+        volume = stack.enter_context(full_volume(home / 'vol', free)) if real else home / 'vol'
+        volume.mkdir(exist_ok=True)
+        (volume / 'jobs').mkdir()
+        (home / 'jobs').symlink_to(volume / 'jobs')
+        (volume / 'job.sh').write_bytes(KEPT)
+        argv_echo.install(home, 'sbatch')
+        server = stack.enter_context(LoopbackSSH(home, '/bin/bash', tmp_path,
+                                                 sftp_server=need_sftp_server() if real else None))
+        if not real:
+            server.write_limit = (free, failure)
+        executor = server.executor()
+        stack.callback(executor.close)
+        violations = []
+        try:
+            result = executor.write('~/vol/job.sh', b'#' * SCRIPT_BYTES)
+            violations.append(f'a write that ran out of room returned {result!r}')
+        except OSError as exc:
+            message = str(exc)
+            if f'the transfer of {SCRIPT_BYTES} bytes' not in message or 'the file is unchanged' not in message:
+                violations.append(f'the failure does not say what failed: {message!r}')
+            # The remote filesystem names a real cause; an injected one reaches only the SFTP server's word.
+            cause = 'No space left on device' if real else 'Failure'
+            if cause not in message:
+                violations.append(f'the failure does not name its cause ({cause!r}): {message!r}')
+        held = (volume / 'job.sh').read_bytes()
+        if held != KEPT:
+            violations.append(f'a write that ran out of room changed the file: it holds {len(held)} bytes, '
+                              f'not the {len(KEPT)} it held')
+        submitted = _tool(executor, 'sbatch', {'script_content': '#' * SCRIPT_BYTES, 'job_name': 'full'})
+        if not submitted.is_error or 'Failed to write job script' not in submitted.text:
+            violations.append(f'sbatch of a job script that did not fit: {submitted!r:.300}')
+        if argv_echo.calls(home):
+            violations.append(f'a job script that did not fit was submitted: {argv_echo.calls(home)!r:.300}')
+        if list((volume / 'jobs').iterdir()):
+            violations.append(f'a job script that did not fit was left: {sorted(p.name for p in (volume / "jobs").iterdir())}')
+        if _staging_left(home, volume, volume / 'jobs'):
+            violations.append(f'a write left its staging behind: {_staging_left(home, volume, volume / "jobs")!r}')
+    assert violations == [], f'{room}:\n' + '\n'.join(violations)
+
+
+FAULTS = {
+    # (how the staged file goes wrong, what the failure says)
+    'short': ('short', f'32768 of {SCRIPT_BYTES} bytes arrived'),
+    'changed': ('flip', 'is not what was sent'),
+    'close-fails': ('close', 'failed: Failure;'),
+}
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('fault', list(FAULTS))
+def test_a_staged_file_that_is_not_what_was_sent_is_never_placed(fault: str, serve: Callable[..., LoopbackSSH]) -> None:
+    """A staged file that fell short with no error reported, or whose bytes changed on the way to
+    disk, is caught by its size or its checksum before the move, and a close the server fails is a
+    failed transfer: the target keeps its bytes."""
+    how, says = FAULTS[fault]
+    server = serve('/bin/bash')
+    home = Path(server.home)
+    (home / 'job.sh').write_bytes(KEPT)
+    if how == 'short':
+        server.write_limit = (32 * 1024, None)
+    elif how == 'flip':
+        server.write_flip = True
+    else:
+        server.close_failure = True
+    text = ''
+    try:
+        result = _write(server, '~/job.sh', b'#' * SCRIPT_BYTES)
+        text = result.stderr if result.exit_code != 0 else ''
+    except OSError as exc:
+        text = str(exc)
+    assert says in text, f'{fault}: the write was not refused for its staged file: {text!r}'
+    assert (home / 'job.sh').read_bytes() == KEPT, f'{fault}: the target changed'
+    assert _staging_left(home) == [], f'{fault}: a write left its staging behind'
+
+
+@pytest.mark.unit
+def test_cksum_is_posix_cksum() -> None:
+    # Values from POSIX cksum (GNU coreutils and BSD agree): the empty input, and one known string.
+    assert ssh.cksum(b'') == '4294967295 0'
+    assert ssh.cksum(b'abc') == '1219131554 3'
+    assert ssh.cksum(b'123456789') == '930766865 9'
+
+
+@pytest.mark.integration
+def test_cksum_matches_the_hosts_cksum(serve: Callable[..., LoopbackSSH]) -> None:
+    server = serve('/bin/bash')
+    home = Path(server.home)
+    for size in (1, 255, 256, 65_537, 1_048_576):
+        data = os.urandom(size)
+        (home / 'sample').write_bytes(data)
+        got = _run(server, 'cksum <sample', timeout=20)
+        assert got.stdout.strip() == ssh.cksum(data), f'{size} bytes: the host says {got!r}, not {ssh.cksum(data)}'
+
+
+# ---------------------------------------------------------------------------------------------
+# A lost connection: the command may have run, so it is never reported as not started.
+
+LOST_NOTE = launch.LOST_NOTE.decode()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('when', ['after-the-command', 'before-the-reply'])
+def test_a_lost_connection_is_never_did_not_start(when: str, tmp_path: Path, executes: Any) -> None:
+    home = (tmp_path / 'home').resolve()
+    home.mkdir()
+    argv_echo.install(home, 'sbatch')
+    (home / 'job.sh').write_text('#!/bin/bash\necho hi\n')
+    with DroppingSSH(home, '/bin/bash', tmp_path, when, drops=2) as server:
+        executor = server.executor()
+        violations = []
+        try:
+            try:
+                result = executor.run(['touch', '--', 'ran'], timeout=30)
+            except Exception as exc:
+                violations.append(f'a command whose connection was lost raised {exc!r} instead of returning')
+                result = CommandResult('', '', 0, '')
+            submitted = _tool(executor, 'sbatch', {'script_path': '~/job.sh'})
+        finally:
+            executor.close()
+    if not (home / 'ran').exists():
+        violations.append('the command did not run, so the drop proves nothing')
+    if (result.stdout, result.stderr, result.exit_code) != ('', LOST_NOTE, CONNECTION_LOST_EXIT_CODE):
+        violations.append(f'a command whose connection was lost after it ran returned {result!r}, not '
+                          f'{CONNECTION_LOST_EXIT_CODE} with {LOST_NOTE!r}')
+    if result.exit_code == NOT_STARTED_EXIT_CODE or 'did not start' in result.stderr:
+        violations.append('a command that ran was reported as not started')
+    if len(argv_echo.calls(home)) != 1:
+        violations.append(f'sbatch ran {len(argv_echo.calls(home))} times, not once')
+    if not submitted.is_error or 'may have been submitted' not in submitted.text or 'Failed' in submitted.text:
+        violations.append(f'a submission whose connection was lost read as {submitted!r:.300}: it must say the job '
+                          'may have been submitted, never that it failed')
+    assert violations == [], f'{when}:\n' + '\n'.join(violations)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -919,3 +1107,64 @@ def test_an_oversize_program_is_refused_before_connecting(monkeypatch: pytest.Mo
     with pytest.raises(ValueError, match='131072-byte per-argument limit'):
         executor.run(script)
     assert reached == []
+
+
+class ClosedChannel(FakeChannel):
+    """A channel the transport closed: its output so far is in, and no end of output came."""
+
+    def __init__(self, data: bytes, err: bytes = b'') -> None:
+        super().__init__(-1, 0.0, None, data, err)
+        self.closed = True
+
+
+@pytest.mark.unit
+def test_a_channel_closed_without_its_end_is_a_lost_connection() -> None:
+    # Nothing arrived, so the start sentinel was not seen: the command may have run all the same.
+    marks = launch.Marks(b'a' * 32, END)
+    out, err, code, note = ssh._collect(ClosedChannel(b''), 5, END)
+    assert (code, note) == (CONNECTION_LOST_EXIT_CODE, launch.LOST_NOTE), (code, note)
+    assert launch.separate(out, err, code, marks, note) == (b'', launch.LOST_NOTE, CONNECTION_LOST_EXIT_CODE)
+    # The sentinel arrived and part of the output, but no records: lost, with what arrived.
+    started = ClosedChannel(marks.start + b'part', marks.start)
+    out, err, code, note = ssh._collect(started, 5, END)
+    assert launch.separate(out, err, code, marks, note) == (b'part', launch.LOST_NOTE, CONNECTION_LOST_EXIT_CODE)
+    # Both records arrived before the close: complete, at the record's status.
+    whole = ClosedChannel(marks.start + b'all' + END + b'x3.', marks.start + END + b'x3.')
+    out, err, code, note = ssh._collect(whole, 5, END)
+    assert launch.separate(out, err, code, marks, note) == (b'all', b'', 3)
+
+
+class PiecesChannel(FakeChannel):
+    """A channel that delivers stdout in `pieces`, one each `every` seconds, whose output never ends
+    and whose exit status never comes: a background job holds it open."""
+
+    def __init__(self, pieces: list[bytes], err: bytes, every: float = 0.15) -> None:
+        super().__init__(0, 1e9, None, b'', err)
+        self.pieces, self.every, self.released = pieces, every, 0
+
+    def recv_ready(self) -> bool:
+        self.polls += 1
+        due = min(len(self.pieces), int(self._now() / self.every) + 1)
+        self.data += b''.join(self.pieces[self.released:due])
+        self.released = max(self.released, due)
+        return bool(self.data)
+
+    def fileno(self) -> int:
+        return _NEVER_READY
+
+
+_NEVER_READY = os.open(os.devnull, os.O_RDONLY)
+
+# An end record split across reads: its nonce, then its status without the full stop, then the stop.
+SPLIT = [b'out' + END[:10], END[10:] + b'x1', b'3.']
+
+
+@pytest.mark.unit
+def test_an_end_record_split_across_reads_is_found() -> None:
+    marks = launch.Marks(b'a' * 32, END)
+    channel = PiecesChannel([marks.start + SPLIT[0], *SPLIT[1:]], marks.start + END + b'x13.')
+    start = time.monotonic()
+    out, err, code, note = ssh._collect(channel, 5, END)
+    result = launch.separate(out, err, code, marks, note)
+    assert time.monotonic() - start < 3, 'a record split across reads was not found: the read ran to the deadline'
+    assert result == (b'out', b'', 13), f'a record split across reads was misread: {result!r}, not exit 13'

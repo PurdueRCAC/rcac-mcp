@@ -66,10 +66,10 @@ import subprocess
 import time
 
 # Internal libs
-from rcac_mcp.executor.base import NOT_STARTED_EXIT_CODE, TIMEOUT_EXIT_CODE, UserPath
+from rcac_mcp.executor.base import CONNECTION_LOST_EXIT_CODE, NOT_STARTED_EXIT_CODE, TIMEOUT_EXIT_CODE, UserPath
 
 # Public interface
-__all__ = ['BASH', 'BASH_ARGS', 'GRACE', 'MAX_ARGUMENT', 'FIXED_RESET', 'LATE_NOTE', 'UNFINISHED_NOTE', 'Marks',
+__all__ = ['BASH', 'BASH_ARGS', 'GRACE', 'MAX_ARGUMENT', 'FIXED_RESET', 'LATE_NOTE', 'LOST_NOTE', 'UNFINISHED_NOTE', 'Marks',
            'program', 'record', 'separate', 'bash_argv', 'ssh_command', 'fixed_argv', 'write_argv', 'check_timeout',
            'run_process', 'decode', 'expand_local', 'word']
 
@@ -202,7 +202,7 @@ BOOTSTRAP: Final = (f"exec {' '.join(POSIX_STAGE)} -c 'p=$(printf %s \"$1\" | ba
 # run, and options it exported in SHELLOPTS (`noclobber` would refuse an overwrite, `pipefail` would
 # change a pipeline's status). `unset` and `set` are POSIX special builtins, which no function can
 # replace in a POSIX-mode bash.
-FIXED_RESET: Final = 'unset -f cat cd chmod cp find mkdir mv printf sort; set +C +o pipefail\n'
+FIXED_RESET: Final = 'unset -f cat cd chmod cksum cp find head mkdir mv printf sort; set +C +o pipefail\n'
 
 # Write stdin to "$1" exactly, overwriting or appending, after creating the directory "$2" when
 # asked; then, when asked, make it executable. `--` comes before a mode: BSD chmod stops reading
@@ -222,6 +222,7 @@ UNFINISHED_NOTE: Final = ("cluster-mcp: the launch ended before it reported the 
                           'may be incomplete\n').encode()
 LATE_NOTE: Final = ('cluster-mcp: the command exited {code}, but not all of its output had arrived at the '
                     'timeout\n')
+LOST_NOTE: Final = b'cluster-mcp: the connection was lost; the command may have run\n'
 
 
 class Marks(NamedTuple):
@@ -353,14 +354,16 @@ def separate(out: bytes, err: bytes, code: int, marks: Marks, note: bytes = b'')
     empty and a note naming it is appended to stderr. A timeout (`code` is `TIMEOUT_EXIT_CODE`) stays
     a timeout whatever arrived, with the output read so far. A call that ended without a record (the
     launch died before its command's end) keeps `code`, the launch's own status, and says so
-    (`UNFINISHED_NOTE`). `note`, the wire's own word on how the read ended (`LATE_NOTE`), always
-    ends stderr.
+    (`UNFINISHED_NOTE`). A lost connection (`code` is `CONNECTION_LOST_EXIT_CODE`) stays lost
+    whatever arrived, as a timeout does, and is never read as not started: the command may have
+    run. `note`, the wire's own word on how the read ended (`LATE_NOTE`, `LOST_NOTE`), always ends
+    stderr.
     """
     if not marks.start or not marks.end:
         raise ValueError('a nonce is empty')
     kept_out, kept_err = _after(out, marks.start), _after(err, marks.start)
     if kept_out is None and kept_err is None:
-        if code == TIMEOUT_EXIT_CODE:
+        if code in (TIMEOUT_EXIT_CODE, CONNECTION_LOST_EXIT_CODE):
             return b'', note, code
         log.warning('command did not start (exit %s); its stderr ended: %r', code, err[-4096:])
         if TAKEN_MARK in err:
@@ -382,7 +385,7 @@ def separate(out: bytes, err: bytes, code: int, marks: Marks, note: bytes = b'')
         else:
             streams.append(kept[:tail.start() - len(marks.end)])
             statuses.append(_status(tail))
-    if code != TIMEOUT_EXIT_CODE:
+    if code not in (TIMEOUT_EXIT_CODE, CONNECTION_LOST_EXIT_CODE):
         if None in statuses:
             log.warning('the launch ended before it reported the command\'s end (exit %s)', code)
             notes += UNFINISHED_NOTE
